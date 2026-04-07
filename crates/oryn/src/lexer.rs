@@ -50,6 +50,14 @@ pub enum Token {
     #[token("not")]
     Not,
 
+    // Control flow.
+    #[token("if")]
+    If,
+    #[token("elif")]
+    Elif,
+    #[token("else")]
+    Else,
+
     // Punctuation.
     #[token(",")]
     Comma,
@@ -57,6 +65,10 @@ pub enum Token {
     LeftParen,
     #[token(")")]
     RightParen,
+    #[token("{")]
+    LeftCurly,
+    #[token("}")]
+    RightCurly,
     #[token("\n")]
     Newline,
 
@@ -88,9 +100,14 @@ impl Display for Token {
             Token::And => write!(f, "and"),
             Token::Or => write!(f, "or"),
             Token::Not => write!(f, "not"),
+            Token::If => write!(f, "if"),
+            Token::Else => write!(f, "else"),
+            Token::Elif => write!(f, "elif"),
             Token::Comma => write!(f, ","),
             Token::LeftParen => write!(f, "("),
             Token::RightParen => write!(f, ")"),
+            Token::LeftCurly => write!(f, "{{"),
+            Token::RightCurly => write!(f, "}}"),
             Token::Newline => write!(f, "newline"),
             Token::Ident(name) => write!(f, "{name}"),
         }

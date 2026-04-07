@@ -41,6 +41,11 @@ pub enum Statement {
         name: String,
         value: Spanned<Expression>,
     },
+    If {
+        condition: Spanned<Expression>,
+        body: Spanned<Expression>,
+        else_body: Option<Box<Spanned<Statement>>>,
+    },
     Expression(Spanned<Expression>),
 }
 
@@ -136,10 +141,14 @@ pub fn parse(
 // parser as a parameter so atoms can contain nested expressions (e.g. in
 // call args or parens).
 fn atom<'src>(
-    expr: impl Parser<'src, TokenInput<'src>, Spanned<Expression>, extra::Err<Rich<'src, Token, SimpleSpan>>>
-        + Clone,
+    expr: impl Parser<
+        'src,
+        TokenInput<'src>,
+        Spanned<Expression>,
+        extra::Err<Rich<'src, Token, SimpleSpan>>,
+    > + Clone,
 ) -> impl Parser<'src, TokenInput<'src>, Spanned<Expression>, extra::Err<Rich<'src, Token, SimpleSpan>>>
-       + Clone {
++ Clone {
     // select! matches a single token and extracts data from it.
     let bool_lit = select! { Token::True => Expression::True, Token::False => Expression::False };
 
@@ -174,9 +183,12 @@ fn atom<'src>(
         .labelled("expression")
 }
 
-fn program<'src>(
-) -> impl Parser<'src, TokenInput<'src>, Vec<Spanned<Statement>>, extra::Err<Rich<'src, Token, SimpleSpan>>>
-{
+fn program<'src>() -> impl Parser<
+    'src,
+    TokenInput<'src>,
+    Vec<Spanned<Statement>>,
+    extra::Err<Rich<'src, Token, SimpleSpan>>,
+> {
     // recursive() lets the expression parser refer to itself, which is needed
     // because atoms can contain sub-expressions (parens, call args).
     let expr = recursive(|expr| {
@@ -302,17 +314,13 @@ fn program<'src>(
         or.labelled("expression")
     });
 
-    // "let x = <expr>"
     let let_stmt = just(Token::Let)
         .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
         .then_ignore(just(Token::Equals))
         .then(expr.clone())
-        .map_with(|(name, value), extra| {
-            Spanned::new(Statement::Let { name, value }, extra.span())
-        })
+        .map_with(|(name, value), extra| Spanned::new(Statement::Let { name, value }, extra.span()))
         .labelled("let statement");
 
-    // "x = <expr>"
     let assign_stmt = select! { Token::Ident(name) => name }
         .then_ignore(just(Token::Equals))
         .then(expr.clone())
@@ -321,11 +329,49 @@ fn program<'src>(
         })
         .labelled("assign statement");
 
-    // A bare expression as a statement (e.g. a function call).
-    let expr_stmt = expr
-        .map_with(|expr, extra| Spanned::new(Statement::Expression(expr), extra.span()));
+    // "if <expr> { <block> } [elif <expr> { <block> }]* [else { <block> }]"
+    //
+    // The recursive handle wraps the *body* of an if (condition + block +
+    // optional else/elif) so that `elif` can reuse it without a leading
+    // `if` keyword.
+    let if_stmt = just(Token::If).ignore_then(recursive(|if_body| {
+        let newlines = just(Token::Newline).repeated();
 
-    let stmt = let_stmt.or(assign_stmt).or(expr_stmt).labelled("statement");
+        let block = just(Token::LeftCurly)
+            .then(newlines.clone())
+            .ignore_then(expr.clone())
+            .then_ignore(newlines)
+            .then_ignore(just(Token::RightCurly));
+
+        let else_branch = just(Token::Else)
+            .ignore_then(block.clone())
+            .map_with(|body, extra| Spanned::new(Statement::Expression(body), extra.span()))
+            .or(just(Token::Elif).ignore_then(if_body));
+
+        expr.clone()
+            .then(block)
+            .then(else_branch.or_not())
+            .map_with(|((condition, body), else_body), extra| {
+                Spanned::new(
+                    Statement::If {
+                        condition,
+                        body,
+                        else_body: else_body.map(Box::new),
+                    },
+                    extra.span(),
+                )
+            })
+    }));
+
+    // A bare expression as a statement (e.g. a function call).
+    let expr_stmt =
+        expr.map_with(|expr, extra| Spanned::new(Statement::Expression(expr), extra.span()));
+
+    let stmt = let_stmt
+        .or(assign_stmt)
+        .or(if_stmt)
+        .or(expr_stmt)
+        .labelled("statement");
 
     // Statements are separated by one or more newlines (blank lines are fine).
     // Leading newlines are skipped so files can start with blank lines.

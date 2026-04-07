@@ -1,6 +1,8 @@
 use std::fmt;
 use std::ops::Range;
 
+use crate::vm::Value;
+
 /// An error from any phase of the pipeline: lexing, parsing, or runtime.
 ///
 /// `Lexer` and `Parser` variants carry byte-offset spans for diagnostics.
@@ -26,13 +28,8 @@ use std::ops::Range;
 /// ```
 #[derive(Debug)]
 pub enum OrynError {
-    Lexer {
-        span: Range<usize>,
-    },
-    Parser {
-        span: Range<usize>,
-        message: String,
-    },
+    Lexer { span: Range<usize> },
+    Parser { span: Range<usize>, message: String },
     Runtime(RuntimeError),
 }
 
@@ -53,6 +50,36 @@ pub enum RuntimeError {
     },
     StackUnderflow,
     IoError(std::io::Error),
+    TypeError {
+        expected: ValueType,
+        actual: ValueType,
+        span: Option<Range<usize>>,
+    },
+}
+
+/// The type of a value.
+#[derive(Debug)]
+pub enum ValueType {
+    Bool,
+    Int,
+}
+
+impl From<&Value> for ValueType {
+    fn from(value: &Value) -> Self {
+        match value {
+            Value::Bool(_) => ValueType::Bool,
+            Value::Int(_) => ValueType::Int,
+        }
+    }
+}
+
+impl fmt::Display for ValueType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueType::Bool => write!(f, "bool"),
+            ValueType::Int => write!(f, "int"),
+        }
+    }
 }
 
 impl fmt::Display for OrynError {
@@ -78,6 +105,11 @@ impl fmt::Display for RuntimeError {
             }
             RuntimeError::StackUnderflow => write!(f, "stack underflow"),
             RuntimeError::IoError(e) => write!(f, "{e}"),
+            RuntimeError::TypeError {
+                expected, actual, ..
+            } => {
+                write!(f, "type error: expected {expected}, got {actual}")
+            }
         }
     }
 }
@@ -88,7 +120,9 @@ impl RuntimeError {
         match self {
             RuntimeError::UndefinedVariable { span, .. } => span.as_ref(),
             RuntimeError::UndefinedFunction { span, .. } => span.as_ref(),
-            _ => None,
+            RuntimeError::StackUnderflow => None,
+            RuntimeError::IoError(_) => None,
+            RuntimeError::TypeError { span, .. } => span.as_ref(),
         }
     }
 }

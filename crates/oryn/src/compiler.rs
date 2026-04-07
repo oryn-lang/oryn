@@ -26,7 +26,12 @@ pub(crate) enum Instruction {
     Mul,
     Div,
     Call(String, usize),
+    // Pop the top of the stack.
     Pop,
+    // Jump to a label if the top of the stack is false.
+    JumpIfFalse(usize),
+    // Jump to a label unconditionally.
+    Jump(usize),
 }
 
 /// Compiled output: instructions paired with a parallel span table.
@@ -66,6 +71,44 @@ fn compile_statement(output: &mut CompilerOutput, stmt: Spanned<Statement>) {
             // Evaluate the right-hand side, then store the result.
             compile_expression(output, value);
             emit(output, Instruction::SetLocal(name), &stmt_span);
+        }
+        Statement::If {
+            condition,
+            body,
+            else_body,
+        } => {
+            // Compile the condition, leaving a bool on the stack.
+            compile_expression(output, condition);
+
+            // Emit JumpIfFalse with a placeholder target.
+            let jump_if_false_idx = output.instructions.len();
+            emit(output, Instruction::JumpIfFalse(0), &stmt_span);
+
+            // Compile the then-body expression and pop its result.
+            let body_span = body.span.clone();
+            compile_expression(output, body);
+            emit(output, Instruction::Pop, &body_span);
+
+            if let Some(else_body) = else_body {
+                // Emit unconditional Jump to skip the else branch.
+                let jump_idx = output.instructions.len();
+                emit(output, Instruction::Jump(0), &stmt_span);
+
+                // Patch JumpIfFalse to point here (start of else).
+                let else_start = output.instructions.len();
+                output.instructions[jump_if_false_idx] = Instruction::JumpIfFalse(else_start);
+
+                // Compile the else body statement.
+                compile_statement(output, *else_body);
+
+                // Patch Jump to point here (end of if/else).
+                let end = output.instructions.len();
+                output.instructions[jump_idx] = Instruction::Jump(end);
+            } else {
+                // No else branch — patch JumpIfFalse to skip the body.
+                let end = output.instructions.len();
+                output.instructions[jump_if_false_idx] = Instruction::JumpIfFalse(end);
+            }
         }
         Statement::Expression(expr) => {
             // Expression statements (like `print(x)`) still leave a value
@@ -149,10 +192,7 @@ mod tests {
     /// Helper to create an unspanned expression (for unit tests that
     /// don't care about spans).
     fn spanned<T>(node: T) -> Spanned<T> {
-        Spanned {
-            node,
-            span: 0..0,
-        }
+        Spanned { node, span: 0..0 }
     }
 
     #[test]

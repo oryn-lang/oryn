@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use crate::compiler;
 use crate::compiler::Instruction;
-use crate::errors::{OrynError, RuntimeError};
+use crate::errors::{OrynError, RuntimeError, ValueType};
 use crate::lexer;
 use crate::parser;
 
@@ -82,6 +82,7 @@ impl Chunk {
 /// vm.run(&chunk).unwrap();
 /// ```
 pub struct VM {
+    // Instruction pointer: the index of the next instruction to execute.
     ip: usize,
 }
 
@@ -298,6 +299,28 @@ impl VM {
                 }
                 Instruction::Pop => {
                     stack.pop();
+                }
+                Instruction::JumpIfFalse(target) => {
+                    let condition_value = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    let Value::Bool(condition) = condition_value else {
+                        return Err(RuntimeError::TypeError {
+                            expected: ValueType::Bool,
+                            actual: ValueType::from(&condition_value),
+                            span: self.current_span(chunk),
+                        });
+                    };
+
+                    if !condition {
+                        self.ip = *target;
+
+                        continue;
+                    }
+                }
+                Instruction::Jump(target) => {
+                    self.ip = *target;
+
+                    continue;
                 }
             }
 

@@ -159,3 +159,59 @@ fn logical_with_comparison() {
 fn multiple_statements() {
     assert_eq!(run("let x = 5\nlet y = 10\nprint(x + y)"), "15\n",);
 }
+
+// --- If / else / elif ---
+
+#[test]
+fn if_true_runs_body() {
+    assert_eq!(run("if true { print(1) }"), "1\n");
+}
+
+#[test]
+fn if_false_skips_body() {
+    assert_eq!(run("if false { print(1) }\nprint(2)"), "2\n");
+}
+
+#[test]
+fn if_else_takes_else_when_false() {
+    assert_eq!(run("if false { print(1) } else { print(2) }"), "2\n");
+}
+
+#[test]
+fn if_else_takes_if_when_true() {
+    assert_eq!(run("if true { print(1) } else { print(2) }"), "1\n");
+}
+
+#[test]
+fn elif_takes_first_true_branch() {
+    assert_eq!(
+        run("if false { print(1) } elif true { print(2) } else { print(3) }"),
+        "2\n",
+    );
+}
+
+#[test]
+fn elif_falls_through_to_else() {
+    assert_eq!(
+        run("if false { print(1) } elif false { print(2) } else { print(3) }"),
+        "3\n",
+    );
+}
+
+#[test]
+fn if_with_condition_expression() {
+    assert_eq!(
+        run("let x = 5\nif x > 3 { print(1) } else { print(2) }"),
+        "1\n"
+    );
+}
+
+#[test]
+fn elif_chain() {
+    assert_eq!(
+        run(
+            "let x = 3\nif x == 1 { print(1) } elif x == 2 { print(2) } elif x == 3 { print(3) } else { print(4) }"
+        ),
+        "3\n",
+    );
+}
