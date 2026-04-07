@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
+use std::ops::Range;
 
 use crate::compiler;
 use crate::compiler::Instruction;
@@ -24,6 +25,8 @@ pub(crate) enum Value {
 #[derive(Debug)]
 pub struct Chunk {
     pub(crate) instructions: Vec<Instruction>,
+    /// spans[i] is the source byte-range for instructions[i].
+    pub(crate) spans: Vec<Range<usize>>,
 }
 
 impl Chunk {
@@ -49,8 +52,11 @@ impl Chunk {
             return Err(errors);
         }
 
-        let instructions = compiler::compile(statements);
-        Ok(Self { instructions })
+        let output = compiler::compile(statements);
+        Ok(Self {
+            instructions: output.instructions,
+            spans: output.spans,
+        })
     }
 
     /// Returns all lex and parse errors without compiling. An empty
@@ -101,6 +107,11 @@ impl VM {
         self.run_with_writer(chunk, &mut std::io::stdout())
     }
 
+    /// Returns the source span for the current instruction, if available.
+    fn current_span(&self, chunk: &Chunk) -> Option<Range<usize>> {
+        chunk.spans.get(self.ip).cloned()
+    }
+
     pub fn run_with_writer(
         &mut self,
         chunk: &Chunk,
@@ -120,14 +131,30 @@ impl VM {
                     stack.push(Value::Int(*n));
                 }
                 Instruction::LoadVar(name) => {
-                    let value = variables
-                        .get(name)
-                        .ok_or_else(|| RuntimeError::UndefinedVariable(name.clone()))?;
+                    let value =
+                        variables
+                            .get(name)
+                            .ok_or_else(|| RuntimeError::UndefinedVariable {
+                                name: name.clone(),
+                                span: self.current_span(chunk),
+                            })?;
 
                     stack.push(value.clone());
                 }
                 Instruction::StoreVar(name) => {
                     let value = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    variables.insert(name.clone(), value);
+                }
+                Instruction::SetLocal(name) => {
+                    let value = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    if !variables.contains_key(name.as_str()) {
+                        return Err(RuntimeError::UndefinedVariable {
+                            name: name.clone(),
+                            span: self.current_span(chunk),
+                        });
+                    }
 
                     variables.insert(name.clone(), value);
                 }
@@ -261,7 +288,12 @@ impl VM {
 
                             stack.push(Value::Int(0));
                         }
-                        _ => return Err(RuntimeError::UndefinedFunction(name.clone())),
+                        _ => {
+                            return Err(RuntimeError::UndefinedFunction {
+                                name: name.clone(),
+                                span: self.current_span(chunk),
+                            });
+                        }
                     }
                 }
                 Instruction::Pop => {
@@ -286,48 +318,58 @@ impl Default for VM {
 mod tests {
     use super::*;
 
+    /// Helper: build a chunk with empty spans for unit tests that
+    /// construct instructions directly.
+    fn chunk(instructions: Vec<Instruction>) -> Chunk {
+        let len = instructions.len();
+        Chunk {
+            instructions,
+            spans: vec![0..0; len],
+        }
+    }
+
     #[test]
     fn executes_instructions_on_stack() {
-        let chunk = Chunk {
-            instructions: vec![
-                Instruction::PushInt(10),
-                Instruction::PushInt(3),
-                Instruction::Add,
-                Instruction::StoreVar("x".into()),
-                Instruction::LoadVar("x".into()),
-                Instruction::Pop,
-            ],
-        };
+        let c = chunk(vec![
+            Instruction::PushInt(10),
+            Instruction::PushInt(3),
+            Instruction::Add,
+            Instruction::StoreVar("x".into()),
+            Instruction::LoadVar("x".into()),
+            Instruction::Pop,
+        ]);
 
         let mut vm = VM::new();
-        vm.run(&chunk).unwrap();
+        vm.run(&c).unwrap();
     }
 
     #[test]
     fn undefined_variable_is_runtime_error() {
-        let chunk = Chunk {
-            instructions: vec![Instruction::LoadVar("nope".into()), Instruction::Pop],
-        };
+        let c = chunk(vec![Instruction::LoadVar("nope".into()), Instruction::Pop]);
 
         let mut vm = VM::new();
-        let err = vm.run(&chunk).unwrap_err();
+        let err = vm.run(&c).unwrap_err();
 
-        assert!(matches!(err, RuntimeError::UndefinedVariable(name) if name == "nope"));
+        assert!(matches!(
+            err,
+            RuntimeError::UndefinedVariable { ref name, .. } if name == "nope"
+        ));
     }
 
     #[test]
     fn undefined_function_is_runtime_error() {
-        let chunk = Chunk {
-            instructions: vec![
-                Instruction::PushInt(1),
-                Instruction::Call("nope".into(), 1),
-                Instruction::Pop,
-            ],
-        };
+        let c = chunk(vec![
+            Instruction::PushInt(1),
+            Instruction::Call("nope".into(), 1),
+            Instruction::Pop,
+        ]);
 
         let mut vm = VM::new();
-        let err = vm.run(&chunk).unwrap_err();
+        let err = vm.run(&c).unwrap_err();
 
-        assert!(matches!(err, RuntimeError::UndefinedFunction(name) if name == "nope"));
+        assert!(matches!(
+            err,
+            RuntimeError::UndefinedFunction { ref name, .. } if name == "nope"
+        ));
     }
 }

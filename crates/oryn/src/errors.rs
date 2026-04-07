@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::Range;
 
 /// An error from any phase of the pipeline: lexing, parsing, or runtime.
 ///
@@ -26,20 +27,30 @@ use std::fmt;
 #[derive(Debug)]
 pub enum OrynError {
     Lexer {
-        span: std::ops::Range<usize>,
+        span: Range<usize>,
     },
     Parser {
-        span: std::ops::Range<usize>,
+        span: Range<usize>,
         message: String,
     },
     Runtime(RuntimeError),
 }
 
 /// A runtime error from the VM.
+///
+/// Each variant carries an optional byte-offset span pointing back to
+/// the source instruction that caused the error. When present, the CLI
+/// can render full ariadne diagnostics with source highlighting.
 #[derive(Debug)]
 pub enum RuntimeError {
-    UndefinedVariable(String),
-    UndefinedFunction(String),
+    UndefinedVariable {
+        name: String,
+        span: Option<Range<usize>>,
+    },
+    UndefinedFunction {
+        name: String,
+        span: Option<Range<usize>>,
+    },
     StackUnderflow,
     IoError(std::io::Error),
 }
@@ -59,10 +70,25 @@ impl fmt::Display for OrynError {
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RuntimeError::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
-            RuntimeError::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
+            RuntimeError::UndefinedVariable { name, .. } => {
+                write!(f, "undefined variable: {name}")
+            }
+            RuntimeError::UndefinedFunction { name, .. } => {
+                write!(f, "undefined function: {name}")
+            }
             RuntimeError::StackUnderflow => write!(f, "stack underflow"),
             RuntimeError::IoError(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl RuntimeError {
+    /// Returns the source span associated with this error, if available.
+    pub fn span(&self) -> Option<&Range<usize>> {
+        match self {
+            RuntimeError::UndefinedVariable { span, .. } => span.as_ref(),
+            RuntimeError::UndefinedFunction { span, .. } => span.as_ref(),
+            _ => None,
         }
     }
 }

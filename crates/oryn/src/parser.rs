@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use chumsky::input::{Input as _, MappedInput};
 use chumsky::prelude::*;
 
@@ -5,15 +7,41 @@ use crate::errors::OrynError;
 use crate::lexer::Token;
 
 // Chumsky needs tokens paired with their source spans.
-type Spanned = (Token, SimpleSpan);
-// The input type chumsky operates on — a slice of `Spanned` tokens.
-type TokenInput<'src> = MappedInput<'src, Token, SimpleSpan, &'src [Spanned]>;
+type TokenSpanned = (Token, SimpleSpan);
+// The input type chumsky operates on — a slice of `TokenSpanned` tokens.
+type TokenInput<'src> = MappedInput<'src, Token, SimpleSpan, &'src [TokenSpanned]>;
+
+/// Byte-offset span in the source.
+pub type Span = Range<usize>;
+
+/// An AST node paired with its source span.
+#[derive(Debug)]
+pub struct Spanned<T> {
+    pub node: T,
+    pub span: Span,
+}
+
+impl<T> Spanned<T> {
+    pub fn new(node: T, span: SimpleSpan) -> Self {
+        Self {
+            node,
+            span: span.start..span.end,
+        }
+    }
+}
 
 /// A top-level statement in the AST.
 #[derive(Debug)]
 pub enum Statement {
-    Let { name: String, value: Expression },
-    Expression(Expression),
+    Let {
+        name: String,
+        value: Spanned<Expression>,
+    },
+    Assignment {
+        name: String,
+        value: Spanned<Expression>,
+    },
+    Expression(Spanned<Expression>),
 }
 
 /// An expression node in the AST.
@@ -25,16 +53,16 @@ pub enum Expression {
     Ident(String),
     BinaryOp {
         op: BinOp,
-        left: Box<Expression>,
-        right: Box<Expression>,
+        left: Box<Spanned<Expression>>,
+        right: Box<Spanned<Expression>>,
     },
     UnaryOp {
         op: UnaryOp,
-        expr: Box<Expression>,
+        expr: Box<Spanned<Expression>>,
     },
     Call {
         name: String,
-        args: Vec<Expression>,
+        args: Vec<Spanned<Expression>>,
     },
 }
 
@@ -72,9 +100,11 @@ pub enum UnaryOp {
 /// assert!(errors.is_empty());
 /// assert_eq!(ast.len(), 1);
 /// ```
-pub fn parse(tokens: Vec<(Token, std::ops::Range<usize>)>) -> (Vec<Statement>, Vec<OrynError>) {
+pub fn parse(
+    tokens: Vec<(Token, std::ops::Range<usize>)>,
+) -> (Vec<Spanned<Statement>>, Vec<OrynError>) {
     // Convert lexer spans (Range<usize>) into chumsky's SimpleSpan type.
-    let tokens: Vec<Spanned> = tokens
+    let tokens: Vec<TokenSpanned> = tokens
         .into_iter()
         .map(|(t, s)| (t, SimpleSpan::from(s)))
         .collect();
@@ -106,10 +136,10 @@ pub fn parse(tokens: Vec<(Token, std::ops::Range<usize>)>) -> (Vec<Statement>, V
 // parser as a parameter so atoms can contain nested expressions (e.g. in
 // call args or parens).
 fn atom<'src>(
-    expr: impl Parser<'src, TokenInput<'src>, Expression, extra::Err<Rich<'src, Token, SimpleSpan>>>
-    + Clone,
-) -> impl Parser<'src, TokenInput<'src>, Expression, extra::Err<Rich<'src, Token, SimpleSpan>>> + Clone
-{
+    expr: impl Parser<'src, TokenInput<'src>, Spanned<Expression>, extra::Err<Rich<'src, Token, SimpleSpan>>>
+        + Clone,
+) -> impl Parser<'src, TokenInput<'src>, Spanned<Expression>, extra::Err<Rich<'src, Token, SimpleSpan>>>
+       + Clone {
     // select! matches a single token and extracts data from it.
     let bool_lit = select! { Token::True => Expression::True, Token::False => Expression::False };
 
@@ -132,17 +162,21 @@ fn atom<'src>(
         });
 
     // Parenthesized expression: just strips the parens and returns the inner expr.
-    let paren = expr.delimited_by(just(Token::LeftParen), just(Token::RightParen));
+    let paren = expr
+        .delimited_by(just(Token::LeftParen), just(Token::RightParen))
+        .map(|spanned| spanned.node);
 
     bool_lit
         .or(int)
         .or(ident_or_call)
         .or(paren)
+        .map_with(|node, extra| Spanned::new(node, extra.span()))
         .labelled("expression")
 }
 
-fn program<'src>()
--> impl Parser<'src, TokenInput<'src>, Vec<Statement>, extra::Err<Rich<'src, Token, SimpleSpan>>> {
+fn program<'src>(
+) -> impl Parser<'src, TokenInput<'src>, Vec<Spanned<Statement>>, extra::Err<Rich<'src, Token, SimpleSpan>>>
+{
     // recursive() lets the expression parser refer to itself, which is needed
     // because atoms can contain sub-expressions (parens, call args).
     let expr = recursive(|expr| {
@@ -158,10 +192,16 @@ fn program<'src>()
             ))
             .then(atom)
             .repeated(),
-            |left, (op, right)| Expression::BinaryOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
+            |left, (op, right)| {
+                let span = left.span.start..right.span.end;
+                Spanned {
+                    node: Expression::BinaryOp {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    span,
+                }
             },
         );
 
@@ -174,10 +214,16 @@ fn program<'src>()
             ))
             .then(product)
             .repeated(),
-            |left, (op, right)| Expression::BinaryOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
+            |left, (op, right)| {
+                let span = left.span.start..right.span.end;
+                Spanned {
+                    node: Expression::BinaryOp {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    span,
+                }
             },
         );
 
@@ -193,39 +239,63 @@ fn program<'src>()
             ))
             .then(sum)
             .repeated(),
-            |left, (op, right)| Expression::BinaryOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
+            |left, (op, right)| {
+                let span = left.span.start..right.span.end;
+                Spanned {
+                    node: Expression::BinaryOp {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    span,
+                }
             },
         );
 
         // Not operators are lower precedence, so they wrap comparisons.
         let not = just(Token::Not)
             .repeated()
-            .foldr(comparison, |_op, expr| Expression::UnaryOp {
-                op: UnaryOp::Not,
-                expr: Box::new(expr),
+            .foldr(comparison, |_op, expr| {
+                let span = expr.span.clone();
+                Spanned {
+                    node: Expression::UnaryOp {
+                        op: UnaryOp::Not,
+                        expr: Box::new(expr),
+                    },
+                    span,
+                }
             })
             .boxed();
 
         // And operators are lower precedence, so they wrap not.
         let and = not.clone().foldl(
             just(Token::And).to(BinOp::And).then(not).repeated(),
-            |left, (op, right)| Expression::BinaryOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
+            |left, (op, right)| {
+                let span = left.span.start..right.span.end;
+                Spanned {
+                    node: Expression::BinaryOp {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    span,
+                }
             },
         );
 
         // Or operators are lower precedence, so they wrap Ands.
         let or = and.clone().foldl(
             just(Token::Or).to(BinOp::Or).then(and).repeated(),
-            |left, (op, right)| Expression::BinaryOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
+            |left, (op, right)| {
+                let span = left.span.start..right.span.end;
+                Spanned {
+                    node: Expression::BinaryOp {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    span,
+                }
             },
         );
 
@@ -237,13 +307,25 @@ fn program<'src>()
         .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
         .then_ignore(just(Token::Equals))
         .then(expr.clone())
-        .map(|(name, value)| Statement::Let { name, value })
+        .map_with(|(name, value), extra| {
+            Spanned::new(Statement::Let { name, value }, extra.span())
+        })
         .labelled("let statement");
 
-    // A bare expression as a statement (e.g. a function call).
-    let expr_stmt = expr.map(Statement::Expression);
+    // "x = <expr>"
+    let assign_stmt = select! { Token::Ident(name) => name }
+        .then_ignore(just(Token::Equals))
+        .then(expr.clone())
+        .map_with(|(name, value), extra| {
+            Spanned::new(Statement::Assignment { name, value }, extra.span())
+        })
+        .labelled("assign statement");
 
-    let stmt = let_stmt.or(expr_stmt).labelled("statement");
+    // A bare expression as a statement (e.g. a function call).
+    let expr_stmt = expr
+        .map_with(|expr, extra| Spanned::new(Statement::Expression(expr), extra.span()));
+
+    let stmt = let_stmt.or(assign_stmt).or(expr_stmt).labelled("statement");
 
     // Statements are separated by one or more newlines (blank lines are fine).
     // Leading newlines are skipped so files can start with blank lines.
@@ -261,7 +343,7 @@ mod tests {
     use crate::lexer::lex;
 
     /// Helper: lex + parse source, assert no errors, return statements.
-    fn parse_ok(source: &str) -> Vec<Statement> {
+    fn parse_ok(source: &str) -> Vec<Spanned<Statement>> {
         let (tokens, lex_errors) = lex(source);
         assert!(lex_errors.is_empty());
         let (stmts, parse_errors) = parse(tokens);
@@ -274,7 +356,7 @@ mod tests {
         let stmts = parse_ok("let x = 5");
 
         assert_eq!(stmts.len(), 1);
-        assert!(matches!(&stmts[0], Statement::Let { name, .. } if name == "x"));
+        assert!(matches!(&stmts[0].node, Statement::Let { name, .. } if name == "x"));
     }
 
     #[test]
@@ -283,5 +365,14 @@ mod tests {
         let (_, errors) = parse(tokens);
 
         assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn expressions_carry_spans() {
+        let stmts = parse_ok("5 + 10");
+
+        assert_eq!(stmts.len(), 1);
+        // The whole expression "5 + 10" should span from 0..6
+        assert_eq!(stmts[0].span.start, 0);
     }
 }

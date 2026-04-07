@@ -17,6 +17,32 @@ fn let_binding() {
     assert_eq!(run("let x = 42\nprint(x)"), "42\n");
 }
 
+// --- Assignment ---
+
+#[test]
+fn assignment() {
+    assert_eq!(run("let x = 5\nx = 10\nprint(x)"), "10\n");
+}
+
+#[test]
+fn assignment_with_expression() {
+    assert_eq!(run("let x = 5\nx = x + 1\nprint(x)"), "6\n");
+}
+
+#[test]
+fn assignment_to_undefined_variable_is_runtime_error() {
+    let chunk = oryn::Chunk::compile("foo = 3").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+
+    assert!(matches!(
+        err,
+        oryn::RuntimeError::UndefinedVariable { ref name, .. } if name == "foo"
+    ));
+}
+
 // --- Arithmetic ---
 
 #[test]

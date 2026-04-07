@@ -1,4 +1,6 @@
-use crate::parser::{BinOp, Expression, Statement, UnaryOp};
+use std::ops::Range;
+
+use crate::parser::{BinOp, Expression, Span, Spanned, Statement, UnaryOp};
 
 // Flat bytecode that the VM executes. The compiler's job is to walk the
 // tree-shaped AST and flatten it into this linear sequence. The VM uses
@@ -9,6 +11,7 @@ pub(crate) enum Instruction {
     PushInt(i32),
     LoadVar(String),
     StoreVar(String),
+    SetLocal(String),
     Equal,
     NotEqual,
     LessThan,
@@ -26,75 +29,104 @@ pub(crate) enum Instruction {
     Pop,
 }
 
-pub(crate) fn compile(statements: Vec<Statement>) -> Vec<Instruction> {
-    let mut instructions = Vec::new();
-
-    for stmt in statements {
-        compile_statement(&mut instructions, stmt);
-    }
-
-    instructions
+/// Compiled output: instructions paired with a parallel span table.
+pub(crate) struct CompilerOutput {
+    pub instructions: Vec<Instruction>,
+    pub spans: Vec<Range<usize>>,
 }
 
-fn compile_statement(instructions: &mut Vec<Instruction>, stmt: Statement) {
-    match stmt {
+pub(crate) fn compile(statements: Vec<Spanned<Statement>>) -> CompilerOutput {
+    let mut output = CompilerOutput {
+        instructions: Vec::new(),
+        spans: Vec::new(),
+    };
+
+    for stmt in statements {
+        compile_statement(&mut output, stmt);
+    }
+
+    output
+}
+
+/// Push an instruction along with its source span.
+fn emit(output: &mut CompilerOutput, instruction: Instruction, span: &Span) {
+    output.instructions.push(instruction);
+    output.spans.push(span.clone());
+}
+
+fn compile_statement(output: &mut CompilerOutput, stmt: Spanned<Statement>) {
+    let stmt_span = stmt.span.clone();
+    match stmt.node {
         Statement::Let { name, value } => {
             // Evaluate the right-hand side, then store the result.
-            compile_expression(instructions, value);
-
-            instructions.push(Instruction::StoreVar(name));
+            compile_expression(output, value);
+            emit(output, Instruction::StoreVar(name), &stmt_span);
+        }
+        Statement::Assignment { name, value } => {
+            // Evaluate the right-hand side, then store the result.
+            compile_expression(output, value);
+            emit(output, Instruction::SetLocal(name), &stmt_span);
         }
         Statement::Expression(expr) => {
             // Expression statements (like `print(x)`) still leave a value
             // on the stack, so we `Pop` it to keep the stack clean.
-            compile_expression(instructions, expr);
-
-            instructions.push(Instruction::Pop);
+            let expr_span = expr.span.clone();
+            compile_expression(output, expr);
+            emit(output, Instruction::Pop, &expr_span);
         }
     }
 }
 
-fn compile_expression(instructions: &mut Vec<Instruction>, expr: Expression) {
-    match expr {
+fn compile_expression(output: &mut CompilerOutput, expr: Spanned<Expression>) {
+    let span = expr.span.clone();
+    match expr.node {
         Expression::True => {
-            instructions.push(Instruction::PushBool(true));
+            emit(output, Instruction::PushBool(true), &span);
         }
         Expression::False => {
-            instructions.push(Instruction::PushBool(false));
+            emit(output, Instruction::PushBool(false), &span);
         }
         Expression::Int(n) => {
-            instructions.push(Instruction::PushInt(n));
+            emit(output, Instruction::PushInt(n), &span);
         }
         Expression::Ident(name) => {
-            instructions.push(Instruction::LoadVar(name));
+            emit(output, Instruction::LoadVar(name), &span);
         }
         Expression::BinaryOp { op, left, right } => {
             // Left goes on the stack first, then right. The op instruction
             // pops both and pushes the result — order matters for `-` and `/`.
-            compile_expression(instructions, *left);
-            compile_expression(instructions, *right);
+            compile_expression(output, *left);
+            compile_expression(output, *right);
 
-            instructions.push(match op {
-                BinOp::Equals => Instruction::Equal,
-                BinOp::NotEquals => Instruction::NotEqual,
-                BinOp::LessThan => Instruction::LessThan,
-                BinOp::GreaterThan => Instruction::GreaterThan,
-                BinOp::LessThanEquals => Instruction::LessThanEquals,
-                BinOp::GreaterThanEquals => Instruction::GreaterThanEquals,
-                BinOp::And => Instruction::And,
-                BinOp::Or => Instruction::Or,
-                BinOp::Add => Instruction::Add,
-                BinOp::Sub => Instruction::Sub,
-                BinOp::Mul => Instruction::Mul,
-                BinOp::Div => Instruction::Div,
-            });
+            emit(
+                output,
+                match op {
+                    BinOp::Equals => Instruction::Equal,
+                    BinOp::NotEquals => Instruction::NotEqual,
+                    BinOp::LessThan => Instruction::LessThan,
+                    BinOp::GreaterThan => Instruction::GreaterThan,
+                    BinOp::LessThanEquals => Instruction::LessThanEquals,
+                    BinOp::GreaterThanEquals => Instruction::GreaterThanEquals,
+                    BinOp::And => Instruction::And,
+                    BinOp::Or => Instruction::Or,
+                    BinOp::Add => Instruction::Add,
+                    BinOp::Sub => Instruction::Sub,
+                    BinOp::Mul => Instruction::Mul,
+                    BinOp::Div => Instruction::Div,
+                },
+                &span,
+            );
         }
-        Expression::UnaryOp { op, expr } => {
-            compile_expression(instructions, *expr);
+        Expression::UnaryOp { op, expr: operand } => {
+            compile_expression(output, *operand);
 
-            instructions.push(match op {
-                UnaryOp::Not => Instruction::Not,
-            });
+            emit(
+                output,
+                match op {
+                    UnaryOp::Not => Instruction::Not,
+                },
+                &span,
+            );
         }
         Expression::Call { name, args } => {
             // Push all args left-to-right, then `Call` tells the VM how
@@ -102,10 +134,10 @@ fn compile_expression(instructions: &mut Vec<Instruction>, expr: Expression) {
             let arity = args.len();
 
             for arg in args {
-                compile_expression(instructions, arg);
+                compile_expression(output, arg);
             }
 
-            instructions.push(Instruction::Call(name, arity));
+            emit(output, Instruction::Call(name, arity), &span);
         }
     }
 }
@@ -114,19 +146,30 @@ fn compile_expression(instructions: &mut Vec<Instruction>, expr: Expression) {
 mod tests {
     use super::*;
 
+    /// Helper to create an unspanned expression (for unit tests that
+    /// don't care about spans).
+    fn spanned<T>(node: T) -> Spanned<T> {
+        Spanned {
+            node,
+            span: 0..0,
+        }
+    }
+
     #[test]
     fn flattens_ast_to_instructions() {
         // A binary op should push left, push right, then the op instruction.
-        let stmts = vec![Statement::Expression(Expression::BinaryOp {
-            op: BinOp::Add,
-            left: Box::new(Expression::Int(1)),
-            right: Box::new(Expression::Int(2)),
-        })];
+        let stmts = vec![spanned(Statement::Expression(spanned(
+            Expression::BinaryOp {
+                op: BinOp::Add,
+                left: Box::new(spanned(Expression::Int(1))),
+                right: Box::new(spanned(Expression::Int(2))),
+            },
+        )))];
 
-        let instructions = compile(stmts);
+        let output = compile(stmts);
 
         assert_eq!(
-            instructions,
+            output.instructions,
             vec![
                 Instruction::PushInt(1),
                 Instruction::PushInt(2),
@@ -134,13 +177,15 @@ mod tests {
                 Instruction::Pop,
             ]
         );
+        // Every instruction has a corresponding span.
+        assert_eq!(output.instructions.len(), output.spans.len());
     }
 
     #[test]
     fn expression_statements_are_popped() {
-        let stmts = vec![Statement::Expression(Expression::Int(1))];
-        let instructions = compile(stmts);
+        let stmts = vec![spanned(Statement::Expression(spanned(Expression::Int(1))))];
+        let output = compile(stmts);
 
-        assert_eq!(instructions.last(), Some(&Instruction::Pop));
+        assert_eq!(output.instructions.last(), Some(&Instruction::Pop));
     }
 }
