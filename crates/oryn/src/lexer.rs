@@ -23,6 +23,13 @@ pub enum Token {
     False,
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i32>().ok())]
     Int(i32),
+    #[regex(r#""[^"]*""#, |lex| {
+        let s = lex.slice();
+
+        // Strip the surrounding quotes.
+        s[1..s.len()-1].to_string()
+    })]
+    String(String),
 
     // Operators.
     #[token("=")]
@@ -98,6 +105,7 @@ impl Display for Token {
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::Int(n) => write!(f, "{n}"),
+            Token::String(s) => write!(f, "{s}"),
             Token::Equals => write!(f, "="),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),

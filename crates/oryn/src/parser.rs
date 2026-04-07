@@ -67,6 +67,7 @@ pub enum Expression {
     True,
     False,
     Int(i32),
+    String(String),
     Ident(String),
     BinaryOp {
         op: BinOp,
@@ -167,6 +168,8 @@ fn atom<'src>(
 
     let int = select! { Token::Int(n) => Expression::Int(n) };
 
+    let string = select! { Token::String(s) => Expression::String(s) };
+
     // An identifier optionally followed by (args) becomes a call; otherwise
     // it stays as a plain identifier. .then(...or_not()) tries the call
     // syntax but backtracks if there are no parens.
@@ -190,6 +193,7 @@ fn atom<'src>(
 
     bool_lit
         .or(int)
+        .or(string)
         .or(ident_or_call)
         .or(paren)
         .map_with(|node, extra| Spanned::new(node, extra.span()))

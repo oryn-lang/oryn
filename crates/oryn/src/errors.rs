@@ -68,13 +68,15 @@ pub enum RuntimeError {
 pub enum ValueType {
     Bool,
     Int,
+    String,
 }
 
-impl From<&Value> for ValueType {
-    fn from(value: &Value) -> Self {
+impl From<&Value<'_>> for ValueType {
+    fn from(value: &Value<'_>) -> Self {
         match value {
             Value::Bool(_) => ValueType::Bool,
             Value::Int(_) => ValueType::Int,
+            Value::String(_) => ValueType::String,
         }
     }
 }
@@ -84,6 +86,7 @@ impl fmt::Display for ValueType {
         match self {
             ValueType::Bool => write!(f, "bool"),
             ValueType::Int => write!(f, "int"),
+            ValueType::String => write!(f, "string"),
         }
     }
 }

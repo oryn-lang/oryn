@@ -10,6 +10,7 @@ use crate::parser::{BinOp, Expression, Span, Spanned, Statement, UnaryOp};
 pub(crate) enum Instruction {
     PushBool(bool),
     PushInt(i32),
+    PushString(String),
     GetLocal(usize),
     SetLocal(usize),
     Return,
@@ -334,6 +335,7 @@ fn compile_expression(
     expr: Spanned<Expression>,
 ) {
     let span = expr.span.clone();
+
     match expr.node {
         Expression::True => {
             emit(output, Instruction::PushBool(true), &span);
@@ -343,6 +345,9 @@ fn compile_expression(
         }
         Expression::Int(n) => {
             emit(output, Instruction::PushInt(n), &span);
+        }
+        Expression::String(s) => {
+            emit(output, Instruction::PushString(s), &span);
         }
         Expression::Ident(name) => {
             if let Some(slot) = locals.resolve(&name) {

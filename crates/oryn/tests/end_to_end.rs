@@ -336,6 +336,39 @@ fn fibonacci() {
     );
 }
 
+// --- Strings ---
+
+#[test]
+fn string_literal() {
+    assert_eq!(run("print(\"hello\")"), "hello\n");
+}
+
+#[test]
+fn string_in_variable() {
+    assert_eq!(run("let name = \"world\"\nprint(name)"), "world\n");
+}
+
+#[test]
+fn string_with_spaces_and_punctuation() {
+    assert_eq!(run("print(\"hello, world!\")"), "hello, world!\n",);
+}
+
+#[test]
+fn string_equality() {
+    assert_eq!(run("print(\"abc\" == \"abc\")"), "true\n");
+    assert_eq!(run("print(\"abc\" == \"def\")"), "false\n");
+}
+
+#[test]
+fn string_as_function_param() {
+    assert_eq!(
+        run("fn greet(name) {\nprint(name)\n}\ngreet(\"alice\")"),
+        "alice\n",
+    );
+}
+
+// --- Errors ---
+
 #[test]
 fn arity_mismatch_is_runtime_error() {
     let chunk = oryn::Chunk::compile("fn add(a, b) {\nrn a + b\n}\nadd(1)").expect("compile error");
