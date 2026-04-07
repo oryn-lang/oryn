@@ -388,8 +388,8 @@ fn program<'src>() -> impl Parser<
             })
             .labelled("while statement");
 
-        let break_stmt = just(Token::Break)
-            .map_with(|_, extra| Spanned::new(Statement::Break, extra.span()));
+        let break_stmt =
+            just(Token::Break).map_with(|_, extra| Spanned::new(Statement::Break, extra.span()));
 
         let continue_stmt = just(Token::Continue)
             .map_with(|_, extra| Spanned::new(Statement::Continue, extra.span()));

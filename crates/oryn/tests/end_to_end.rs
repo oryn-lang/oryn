@@ -277,7 +277,9 @@ fn break_exits_loop() {
 fn continue_skips_rest_of_body() {
     // Print only odd numbers: skip even ones with continue.
     assert_eq!(
-        run("let i = 0\nwhile i < 5 {\ni = i + 1\nif i == 2 { continue }\nif i == 4 { continue }\nprint(i)\n}"),
+        run(
+            "let i = 0\nwhile i < 5 {\ni = i + 1\nif i == 2 { continue }\nif i == 4 { continue }\nprint(i)\n}"
+        ),
         "1\n3\n5\n",
     );
 }
