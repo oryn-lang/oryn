@@ -210,7 +210,7 @@ fn publish_diagnostics(connection: &Connection, uri: Uri, source: &str) {
 }
 
 // Finds the token under the cursor and returns a description. Since we
-// only have `Int` types right now, this is pretty basic — but it'll grow
+// only have `Int` types right now, this is pretty basic, but it'll grow
 // as the language does.
 fn hover(source: &str, pos: Position) -> Option<Hover> {
     let offset = position_to_offset(source, pos)?;

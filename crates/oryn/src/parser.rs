@@ -8,7 +8,7 @@ use crate::lexer::Token;
 
 // Chumsky needs tokens paired with their source spans.
 type TokenSpanned = (Token, SimpleSpan);
-// The input type chumsky operates on — a slice of `TokenSpanned` tokens.
+// The input type chumsky operates on. A slice of `TokenSpanned` tokens.
 type TokenInput<'src> = MappedInput<'src, Token, SimpleSpan, &'src [TokenSpanned]>;
 
 /// Byte-offset span in the source.
@@ -44,7 +44,7 @@ pub enum Statement {
     If {
         condition: Spanned<Expression>,
         body: Spanned<Expression>,
-        else_body: Option<Box<Spanned<Statement>>>,
+        else_body: Option<Spanned<Expression>>,
     },
     Expression(Spanned<Expression>),
 }
@@ -69,6 +69,7 @@ pub enum Expression {
         name: String,
         args: Vec<Spanned<Expression>>,
     },
+    Block(Vec<Spanned<Statement>>),
 }
 
 /// A binary operator.
@@ -314,64 +315,72 @@ fn program<'src>() -> impl Parser<
         or.labelled("expression")
     });
 
-    let let_stmt = just(Token::Let)
-        .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
-        .then_ignore(just(Token::Equals))
-        .then(expr.clone())
-        .map_with(|(name, value), extra| Spanned::new(Statement::Let { name, value }, extra.span()))
-        .labelled("let statement");
+    // Statements are separated by one or more newlines (blank lines are fine).
+    // Leading newlines are skipped so files can start with blank lines.
+    let newlines = just(Token::Newline).repeated();
 
-    let assign_stmt = select! { Token::Ident(name) => name }
-        .then_ignore(just(Token::Equals))
-        .then(expr.clone())
-        .map_with(|(name, value), extra| {
-            Spanned::new(Statement::Assignment { name, value }, extra.span())
-        })
-        .labelled("assign statement");
+    let stmt = recursive(|stmt| {
+        let block = stmt
+            .clone()
+            .separated_by(newlines.clone())
+            .allow_trailing()
+            .collect::<Vec<Spanned<Statement>>>()
+            .delimited_by(
+                just(Token::LeftCurly).then(newlines.clone()),
+                newlines.clone().or_not().then(just(Token::RightCurly)),
+            )
+            .map_with(|stmts, extra| Spanned::new(Expression::Block(stmts), extra.span()));
 
-    // "if <expr> { <block> } [elif <expr> { <block> }]* [else { <block> }]"
-    //
-    // The recursive handle wraps the *body* of an if (condition + block +
-    // optional else/elif) so that `elif` can reuse it without a leading
-    // `if` keyword.
-    let if_stmt = just(Token::If).ignore_then(recursive(|if_body| {
-        let newlines = just(Token::Newline).repeated();
-
-        let block = just(Token::LeftCurly)
-            .then(newlines.clone())
-            .ignore_then(expr.clone())
-            .then_ignore(newlines)
-            .then_ignore(just(Token::RightCurly));
-
-        let else_branch = just(Token::Else)
-            .ignore_then(block.clone())
-            .map_with(|body, extra| Spanned::new(Statement::Expression(body), extra.span()))
-            .or(just(Token::Elif).ignore_then(if_body));
-
-        expr.clone()
-            .then(block)
-            .then(else_branch.or_not())
-            .map_with(|((condition, body), else_body), extra| {
-                Spanned::new(
-                    Statement::If {
-                        condition,
-                        body,
-                        else_body: else_body.map(Box::new),
-                    },
-                    extra.span(),
-                )
+        let let_stmt = just(Token::Let)
+            .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
+            .then_ignore(just(Token::Equals))
+            .then(expr.clone())
+            .map_with(|(name, value), extra| {
+                Spanned::new(Statement::Let { name, value }, extra.span())
             })
-    }));
+            .labelled("let statement");
 
-    // A bare expression as a statement (e.g. a function call).
-    let expr_stmt =
-        expr.map_with(|expr, extra| Spanned::new(Statement::Expression(expr), extra.span()));
+        let assign_stmt = select! { Token::Ident(name) => name }
+            .then_ignore(just(Token::Equals))
+            .then(expr.clone())
+            .map_with(|(name, value), extra| {
+                Spanned::new(Statement::Assignment { name, value }, extra.span())
+            })
+            .labelled("assign statement");
 
-    let stmt = let_stmt
-        .or(assign_stmt)
-        .or(if_stmt)
-        .or(expr_stmt)
-        .labelled("statement");
+        let if_stmt = just(Token::If).ignore_then(recursive(|if_body| {
+            let else_branch = just(Token::Else)
+                .ignore_then(block.clone())
+                .or(just(Token::Elif).ignore_then(if_body).map_with(
+                    |elif_stmt: Spanned<Statement>, extra| {
+                        // Desugar `elif` into an else-block containing a single if statement.
+                        Spanned::new(Expression::Block(vec![elif_stmt]), extra.span())
+                    },
+                ));
+
+            expr.clone()
+                .then(block.clone())
+                .then(else_branch.or_not())
+                .map_with(|((condition, body), else_body), extra| {
+                    Spanned::new(
+                        Statement::If {
+                            condition,
+                            body,
+                            else_body,
+                        },
+                        extra.span(),
+                    )
+                })
+        }));
+
+        // A bare expression as a statement (e.g. a function call).
+        let expr_stmt = expr
+            .clone()
+            .map_with(|expr, extra| Spanned::new(Statement::Expression(expr), extra.span()));
+
+        let_stmt.or(assign_stmt).or(if_stmt).or(expr_stmt)
+    })
+    .labelled("statement");
 
     // Statements are separated by one or more newlines (blank lines are fine).
     // Leading newlines are skipped so files can start with blank lines.
@@ -386,6 +395,7 @@ fn program<'src>() -> impl Parser<
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::lexer::lex;
 
     /// Helper: lex + parse source, assert no errors, return statements.
@@ -394,6 +404,7 @@ mod tests {
         assert!(lex_errors.is_empty());
         let (stmts, parse_errors) = parse(tokens);
         assert!(parse_errors.is_empty(), "parse errors: {parse_errors:?}");
+
         stmts
     }
 

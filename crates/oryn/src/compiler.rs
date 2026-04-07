@@ -84,10 +84,9 @@ fn compile_statement(output: &mut CompilerOutput, stmt: Spanned<Statement>) {
             let jump_if_false_idx = output.instructions.len();
             emit(output, Instruction::JumpIfFalse(0), &stmt_span);
 
-            // Compile the then-body expression and pop its result.
-            let body_span = body.span.clone();
+            // Compile the then-body block. Block compiles each inner
+            // statement, which handle their own pops.
             compile_expression(output, body);
-            emit(output, Instruction::Pop, &body_span);
 
             if let Some(else_body) = else_body {
                 // Emit unconditional Jump to skip the else branch.
@@ -98,14 +97,14 @@ fn compile_statement(output: &mut CompilerOutput, stmt: Spanned<Statement>) {
                 let else_start = output.instructions.len();
                 output.instructions[jump_if_false_idx] = Instruction::JumpIfFalse(else_start);
 
-                // Compile the else body statement.
-                compile_statement(output, *else_body);
+                // Compile the else-body block (or elif desugared into a block).
+                compile_expression(output, else_body);
 
                 // Patch Jump to point here (end of if/else).
                 let end = output.instructions.len();
                 output.instructions[jump_idx] = Instruction::Jump(end);
             } else {
-                // No else branch — patch JumpIfFalse to skip the body.
+                // No else branch, patch JumpIfFalse to skip the body.
                 let end = output.instructions.len();
                 output.instructions[jump_if_false_idx] = Instruction::JumpIfFalse(end);
             }
@@ -181,6 +180,14 @@ fn compile_expression(output: &mut CompilerOutput, expr: Spanned<Expression>) {
             }
 
             emit(output, Instruction::Call(name, arity), &span);
+        }
+        Expression::Block(stmts) => {
+            // A block compiles each statement sequentially. Each statement
+            // handles its own stack effects (expression statements pop
+            // their values), so the block itself leaves nothing on the stack.
+            for stmt in stmts {
+                compile_statement(output, stmt);
+            }
         }
     }
 }

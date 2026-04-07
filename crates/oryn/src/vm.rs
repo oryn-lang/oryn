@@ -265,7 +265,7 @@ impl VM {
                     stack.push(Value::Int(left / right));
                 }
                 Instruction::Call(name, arity) => {
-                    // `split_off` grabs the last `arity` values — exactly
+                    // `split_off` grabs the last `arity` values, exactly
                     // the args that were pushed left-to-right by the compiler.
                     let args: Vec<Value> = stack.split_off(stack.len() - arity);
 

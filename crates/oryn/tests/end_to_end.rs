@@ -207,6 +207,32 @@ fn if_with_condition_expression() {
 }
 
 #[test]
+fn if_block_runs_multiple_statements() {
+    assert_eq!(
+        run("let x = 1\nif true {\nx = x + 1\nx = x + 1\nprint(x)\n}"),
+        "3\n",
+    );
+}
+
+#[test]
+fn else_block_runs_multiple_statements() {
+    assert_eq!(
+        run("let x = 1\nif false {\nprint(0)\n} else {\nx = x + 10\nx = x + 5\nprint(x)\n}"),
+        "16\n",
+    );
+}
+
+#[test]
+fn elif_block_runs_multiple_statements() {
+    assert_eq!(
+        run(
+            "let x = 0\nif false {\nprint(1)\n} elif true {\nx = x + 7\nx = x + 3\nprint(x)\n} else {\nprint(99)\n}"
+        ),
+        "10\n",
+    );
+}
+
+#[test]
 fn elif_chain() {
     assert_eq!(
         run(

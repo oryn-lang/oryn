@@ -131,7 +131,7 @@ pub fn lex(source: &str) -> (Vec<(Token, Span)>, Vec<OrynError>) {
     while let Some(token) = lex.next() {
         match token {
             Ok(token) => tokens.push((token, lex.span())),
-            // logos returns `Err(())` for unrecognized input — we just
+            // logos returns `Err(())` for unrecognized input, we just
             // need the span to report where it happened.
             Err(()) => errors.push(OrynError::Lexer { span: lex.span() }),
         }

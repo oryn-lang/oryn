@@ -3,8 +3,8 @@ use std::io;
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use oryn::OrynError;
 
-// Renders errors using ariadne. All error variants — Lexer, Parser, and
-// Runtime — get source-highlighted diagnostics when a span is available.
+// Renders errors using ariadne. All error variants: Lexer, Parser, and
+// Runtime. Get source-highlighted diagnostics when a span is available.
 pub fn report_errors(filename: &str, source: &str, errors: &[OrynError]) -> io::Result<()> {
     let src = Source::from(source);
 
