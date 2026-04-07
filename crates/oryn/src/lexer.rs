@@ -13,6 +13,10 @@ pub enum Token {
     Let,
 
     // Literals.
+    #[token("true")]
+    True,
+    #[token("false")]
+    False,
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i32>().ok())]
     Int(i32),
 
@@ -27,6 +31,24 @@ pub enum Token {
     Multiply,
     #[token("/")]
     Divide,
+    #[token("==")]
+    EqualsEquals,
+    #[token("!=")]
+    NotEquals,
+    #[token("<")]
+    LessThan,
+    #[token(">")]
+    GreaterThan,
+    #[token("<=")]
+    LessThanEquals,
+    #[token(">=")]
+    GreaterThanEquals,
+    #[token("and")]
+    And,
+    #[token("or")]
+    Or,
+    #[token("not")]
+    Not,
 
     // Punctuation.
     #[token(",")]
@@ -49,12 +71,23 @@ impl Display for Token {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             Token::Let => write!(f, "let"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
             Token::Int(n) => write!(f, "{n}"),
             Token::Equals => write!(f, "="),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Multiply => write!(f, "*"),
             Token::Divide => write!(f, "/"),
+            Token::EqualsEquals => write!(f, "=="),
+            Token::NotEquals => write!(f, "!="),
+            Token::LessThan => write!(f, "<"),
+            Token::GreaterThan => write!(f, ">"),
+            Token::LessThanEquals => write!(f, "<="),
+            Token::GreaterThanEquals => write!(f, ">="),
+            Token::And => write!(f, "and"),
+            Token::Or => write!(f, "or"),
+            Token::Not => write!(f, "not"),
             Token::Comma => write!(f, ","),
             Token::LeftParen => write!(f, "("),
             Token::RightParen => write!(f, ")"),
@@ -95,15 +128,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lex() {
+    fn tokenizes_source() {
         let (tokens, errors) = lex("let x = 5 + 10");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
 
         assert!(errors.is_empty());
-        assert_eq!(tokens[0].0, Token::Let);
-        assert_eq!(tokens[1].0, Token::Ident("x".to_string()));
-        assert_eq!(tokens[2].0, Token::Equals);
-        assert_eq!(tokens[3].0, Token::Int(5));
-        assert_eq!(tokens[4].0, Token::Plus);
-        assert_eq!(tokens[5].0, Token::Int(10));
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Let,
+                Token::Ident("x".into()),
+                Token::Equals,
+                Token::Int(5),
+                Token::Plus,
+                Token::Int(10),
+            ]
+        );
+    }
+
+    #[test]
+    fn reports_invalid_characters() {
+        let (_, errors) = lex("let x = @");
+
+        assert_eq!(errors.len(), 1);
     }
 }

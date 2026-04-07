@@ -2,3 +2,5 @@ let x = 5
 let y = 10
 
 print(x + y)
+
+print(true and 5 > 3)

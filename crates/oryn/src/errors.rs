@@ -25,8 +25,13 @@ use std::fmt;
 /// ```
 #[derive(Debug)]
 pub enum OrynError {
-    Lexer { span: std::ops::Range<usize> },
-    Parser { span: std::ops::Range<usize>, message: String },
+    Lexer {
+        span: std::ops::Range<usize>,
+    },
+    Parser {
+        span: std::ops::Range<usize>,
+        message: String,
+    },
     Runtime(RuntimeError),
 }
 
@@ -36,6 +41,7 @@ pub enum RuntimeError {
     UndefinedVariable(String),
     UndefinedFunction(String),
     StackUnderflow,
+    IoError(std::io::Error),
 }
 
 impl fmt::Display for OrynError {
@@ -56,6 +62,7 @@ impl fmt::Display for RuntimeError {
             RuntimeError::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
             RuntimeError::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
             RuntimeError::StackUnderflow => write!(f, "stack underflow"),
+            RuntimeError::IoError(e) => write!(f, "{e}"),
         }
     }
 }

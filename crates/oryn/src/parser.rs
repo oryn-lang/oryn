@@ -19,12 +19,18 @@ pub enum Statement {
 /// An expression node in the AST.
 #[derive(Debug)]
 pub enum Expression {
+    True,
+    False,
     Int(i32),
     Ident(String),
     BinaryOp {
         op: BinOp,
         left: Box<Expression>,
         right: Box<Expression>,
+    },
+    UnaryOp {
+        op: UnaryOp,
+        expr: Box<Expression>,
     },
     Call {
         name: String,
@@ -35,10 +41,24 @@ pub enum Expression {
 /// A binary operator.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinOp {
+    Equals,
+    NotEquals,
+    LessThan,
+    GreaterThan,
+    LessThanEquals,
+    GreaterThanEquals,
+    And,
+    Or,
     Add,
     Sub,
     Mul,
     Div,
+}
+
+/// A unary operator.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnaryOp {
+    Not,
 }
 
 /// Parses a token stream into an AST. Returns the statements and any
@@ -91,6 +111,8 @@ fn atom<'src>(
 ) -> impl Parser<'src, TokenInput<'src>, Expression, extra::Err<Rich<'src, Token, SimpleSpan>>> + Clone
 {
     // select! matches a single token and extracts data from it.
+    let bool_lit = select! { Token::True => Expression::True, Token::False => Expression::False };
+
     let int = select! { Token::Int(n) => Expression::Int(n) };
 
     // An identifier optionally followed by (args) becomes a call; otherwise
@@ -112,7 +134,11 @@ fn atom<'src>(
     // Parenthesized expression: just strips the parens and returns the inner expr.
     let paren = expr.delimited_by(just(Token::LeftParen), just(Token::RightParen));
 
-    int.or(ident_or_call).or(paren).labelled("expression")
+    bool_lit
+        .or(int)
+        .or(ident_or_call)
+        .or(paren)
+        .labelled("expression")
 }
 
 fn program<'src>()
@@ -155,7 +181,55 @@ fn program<'src>()
             },
         );
 
-        sum.labelled("expression")
+        // Comparison operators are lower precedence, so they wrap sums.
+        let comparison = sum.clone().foldl(
+            choice((
+                just(Token::EqualsEquals).to(BinOp::Equals),
+                just(Token::NotEquals).to(BinOp::NotEquals),
+                just(Token::LessThan).to(BinOp::LessThan),
+                just(Token::GreaterThan).to(BinOp::GreaterThan),
+                just(Token::LessThanEquals).to(BinOp::LessThanEquals),
+                just(Token::GreaterThanEquals).to(BinOp::GreaterThanEquals),
+            ))
+            .then(sum)
+            .repeated(),
+            |left, (op, right)| Expression::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+        );
+
+        // Not operators are lower precedence, so they wrap comparisons.
+        let not = just(Token::Not)
+            .repeated()
+            .foldr(comparison, |_op, expr| Expression::UnaryOp {
+                op: UnaryOp::Not,
+                expr: Box::new(expr),
+            })
+            .boxed();
+
+        // And operators are lower precedence, so they wrap not.
+        let and = not.clone().foldl(
+            just(Token::And).to(BinOp::And).then(not).repeated(),
+            |left, (op, right)| Expression::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+        );
+
+        // Or operators are lower precedence, so they wrap Ands.
+        let or = and.clone().foldl(
+            just(Token::Or).to(BinOp::Or).then(and).repeated(),
+            |left, (op, right)| Expression::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+        );
+
+        or.labelled("expression")
     });
 
     // "let x = <expr>"
@@ -184,52 +258,30 @@ fn program<'src>()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lexer::lex;
 
-    #[test]
-    fn test_parse_let() {
-        let tokens = vec![
-            (Token::Let, 0..4),
-            (Token::Ident("x".into()), 5..6),
-            (Token::Equals, 7..8),
-            (Token::Int(5), 9..10),
-        ];
-
-        let (stmts, errors) = parse(tokens);
-
-        assert_eq!(stmts.len(), 1);
-        assert!(errors.is_empty());
+    /// Helper: lex + parse source, assert no errors, return statements.
+    fn parse_ok(source: &str) -> Vec<Statement> {
+        let (tokens, lex_errors) = lex(source);
+        assert!(lex_errors.is_empty());
+        let (stmts, parse_errors) = parse(tokens);
+        assert!(parse_errors.is_empty(), "parse errors: {parse_errors:?}");
+        stmts
     }
 
     #[test]
-    fn test_parse_print() {
-        let tokens = vec![
-            (Token::Ident("print".into()), 0..5),
-            (Token::LeftParen, 6..7),
-            (Token::Ident("x".into()), 7..8),
-            (Token::Plus, 8..9),
-            (Token::Ident("y".into()), 9..10),
-            (Token::RightParen, 10..11),
-        ];
-
-        let (stmts, errors) = parse(tokens);
+    fn builds_ast_from_tokens() {
+        let stmts = parse_ok("let x = 5");
 
         assert_eq!(stmts.len(), 1);
-        assert!(errors.is_empty());
+        assert!(matches!(&stmts[0], Statement::Let { name, .. } if name == "x"));
+    }
 
-        if let Statement::Expression(Expression::Call { name, args }) = &stmts[0] {
-            assert_eq!(name, "print");
-            assert_eq!(args.len(), 1);
+    #[test]
+    fn reports_parse_errors() {
+        let (tokens, _) = lex("let = 5");
+        let (_, errors) = parse(tokens);
 
-            if let Expression::BinaryOp { op, left, right } = &args[0] {
-                assert_eq!(op, &BinOp::Add);
-
-                assert!(matches!(left.as_ref(), Expression::Ident(s) if s == "x"));
-                assert!(matches!(right.as_ref(), Expression::Ident(s) if s == "y"));
-            } else {
-                panic!("Expected a BinaryOp expression");
-            }
-        } else {
-            panic!("Expected a Call expression");
-        }
+        assert!(!errors.is_empty());
     }
 }

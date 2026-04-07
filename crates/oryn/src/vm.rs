@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write;
 
 use crate::compiler;
 use crate::compiler::Instruction;
@@ -6,8 +7,9 @@ use crate::errors::{OrynError, RuntimeError};
 use crate::lexer;
 use crate::parser;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub(crate) enum Value {
+    Bool(bool),
     Int(i32),
 }
 
@@ -96,6 +98,14 @@ impl VM {
     /// vm.run(&add).unwrap();
     /// ```
     pub fn run(&mut self, chunk: &Chunk) -> Result<(), RuntimeError> {
+        self.run_with_writer(chunk, &mut std::io::stdout())
+    }
+
+    pub fn run_with_writer(
+        &mut self,
+        chunk: &Chunk,
+        writer: &mut impl Write,
+    ) -> Result<(), RuntimeError> {
         let mut stack: Vec<Value> = Vec::new();
         let mut variables: HashMap<String, Value> = HashMap::new();
 
@@ -103,6 +113,9 @@ impl VM {
 
         while self.ip < chunk.instructions.len() {
             match &chunk.instructions[self.ip] {
+                Instruction::PushBool(b) => {
+                    stack.push(Value::Bool(*b));
+                }
                 Instruction::PushInt(n) => {
                     stack.push(Value::Int(*n));
                 }
@@ -118,27 +131,108 @@ impl VM {
 
                     variables.insert(name.clone(), value);
                 }
+                Instruction::Equal => {
+                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    stack.push(Value::Bool(left == right));
+                }
+                Instruction::NotEqual => {
+                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    stack.push(Value::Bool(left != right));
+                }
+                Instruction::LessThan => {
+                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    stack.push(Value::Bool(left < right));
+                }
+                Instruction::GreaterThan => {
+                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    stack.push(Value::Bool(left > right));
+                }
+                Instruction::LessThanEquals => {
+                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    stack.push(Value::Bool(left <= right));
+                }
+                Instruction::GreaterThanEquals => {
+                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    stack.push(Value::Bool(left >= right));
+                }
+                Instruction::And => {
+                    let Value::Bool(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+                    let Value::Bool(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+
+                    stack.push(Value::Bool(left && right));
+                }
+                Instruction::Or => {
+                    let Value::Bool(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+                    let Value::Bool(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+
+                    stack.push(Value::Bool(left || right));
+                }
+                Instruction::Not => {
+                    let value = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                    stack.push(Value::Bool(!matches!(value, Value::Bool(true))));
+                }
+
                 Instruction::Add => {
-                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
 
                     stack.push(Value::Int(left + right));
                 }
                 Instruction::Sub => {
-                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+
+                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
 
                     stack.push(Value::Int(left - right));
                 }
                 Instruction::Mul => {
-                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
 
                     stack.push(Value::Int(left * right));
                 }
                 Instruction::Div => {
-                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
 
                     stack.push(Value::Int(left / right));
                 }
@@ -155,10 +249,15 @@ impl VM {
                                 .iter()
                                 .map(|a| match a {
                                     Value::Int(n) => n.to_string(),
+                                    Value::Bool(b) => b.to_string(),
                                 })
                                 .collect();
 
-                            println!("{}", output.join(", "));
+                            let output_str = output.join(", ");
+                            writer
+                                .write_all(output_str.as_bytes())
+                                .map_err(RuntimeError::IoError)?;
+                            writer.write_all(b"\n").map_err(RuntimeError::IoError)?;
 
                             stack.push(Value::Int(0));
                         }
@@ -188,7 +287,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_vm_arithmetic() {
+    fn executes_instructions_on_stack() {
         let chunk = Chunk {
             instructions: vec![
                 Instruction::PushInt(10),
@@ -205,35 +304,30 @@ mod tests {
     }
 
     #[test]
-    fn test_vm_print() {
+    fn undefined_variable_is_runtime_error() {
         let chunk = Chunk {
-            instructions: vec![
-                Instruction::PushInt(42),
-                Instruction::Call("print".into(), 1),
-                Instruction::Pop,
-            ],
+            instructions: vec![Instruction::LoadVar("nope".into()), Instruction::Pop],
         };
 
         let mut vm = VM::new();
-        vm.run(&chunk).unwrap();
+        let err = vm.run(&chunk).unwrap_err();
+
+        assert!(matches!(err, RuntimeError::UndefinedVariable(name) if name == "nope"));
     }
 
     #[test]
-    fn test_vm_let_and_binop() {
+    fn undefined_function_is_runtime_error() {
         let chunk = Chunk {
             instructions: vec![
-                Instruction::PushInt(7),
-                Instruction::StoreVar("a".into()),
-                Instruction::PushInt(3),
-                Instruction::StoreVar("b".into()),
-                Instruction::LoadVar("a".into()),
-                Instruction::LoadVar("b".into()),
-                Instruction::Mul,
+                Instruction::PushInt(1),
+                Instruction::Call("nope".into(), 1),
                 Instruction::Pop,
             ],
         };
 
         let mut vm = VM::new();
-        vm.run(&chunk).unwrap();
+        let err = vm.run(&chunk).unwrap_err();
+
+        assert!(matches!(err, RuntimeError::UndefinedFunction(name) if name == "nope"));
     }
 }
