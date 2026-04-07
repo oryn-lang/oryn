@@ -268,8 +268,7 @@ impl VM {
                                 state.stack.push(Value::Int(0));
                             }
                             _ => {
-                                let span =
-                                    Self::current_span_from_state(&state.frames, chunk);
+                                let span = Self::current_span_from_state(&state.frames, chunk);
 
                                 return Err(RuntimeError::UndefinedFunction {
                                     name: name.clone(),
