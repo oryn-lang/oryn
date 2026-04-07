@@ -241,3 +241,52 @@ fn elif_chain() {
         "3\n",
     );
 }
+
+// --- While loops ---
+
+#[test]
+fn while_loop() {
+    assert_eq!(
+        run("let x = 0\nwhile x < 3 {\nx = x + 1\n}\nprint(x)"),
+        "3\n",
+    );
+}
+
+#[test]
+fn while_false_skips_body() {
+    assert_eq!(run("while false {\nprint(1)\n}\nprint(2)"), "2\n");
+}
+
+#[test]
+fn while_with_print_each_iteration() {
+    assert_eq!(
+        run("let i = 0\nwhile i < 3 {\nprint(i)\ni = i + 1\n}"),
+        "0\n1\n2\n",
+    );
+}
+
+#[test]
+fn break_exits_loop() {
+    assert_eq!(
+        run("let i = 0\nwhile true {\nif i == 3 { break }\ni = i + 1\n}\nprint(i)"),
+        "3\n",
+    );
+}
+
+#[test]
+fn continue_skips_rest_of_body() {
+    // Print only odd numbers: skip even ones with continue.
+    assert_eq!(
+        run("let i = 0\nwhile i < 5 {\ni = i + 1\nif i == 2 { continue }\nif i == 4 { continue }\nprint(i)\n}"),
+        "1\n3\n5\n",
+    );
+}
+
+#[test]
+fn break_in_nested_if() {
+    // break inside an if inside a while should exit the while.
+    assert_eq!(
+        run("let x = 0\nwhile true {\nx = x + 1\nif x > 5 {\nbreak\n}\n}\nprint(x)"),
+        "6\n",
+    );
+}

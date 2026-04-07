@@ -46,6 +46,12 @@ pub enum Statement {
         body: Spanned<Expression>,
         else_body: Option<Spanned<Expression>>,
     },
+    While {
+        condition: Spanned<Expression>,
+        body: Spanned<Expression>,
+    },
+    Break,
+    Continue,
     Expression(Spanned<Expression>),
 }
 
@@ -373,12 +379,33 @@ fn program<'src>() -> impl Parser<
                 })
         }));
 
+        // "while <expr> { <block> }"
+        let while_stmt = just(Token::While)
+            .ignore_then(expr.clone())
+            .then(block.clone())
+            .map_with(|(condition, body), extra| {
+                Spanned::new(Statement::While { condition, body }, extra.span())
+            })
+            .labelled("while statement");
+
+        let break_stmt = just(Token::Break)
+            .map_with(|_, extra| Spanned::new(Statement::Break, extra.span()));
+
+        let continue_stmt = just(Token::Continue)
+            .map_with(|_, extra| Spanned::new(Statement::Continue, extra.span()));
+
         // A bare expression as a statement (e.g. a function call).
         let expr_stmt = expr
             .clone()
             .map_with(|expr, extra| Spanned::new(Statement::Expression(expr), extra.span()));
 
-        let_stmt.or(assign_stmt).or(if_stmt).or(expr_stmt)
+        let_stmt
+            .or(assign_stmt)
+            .or(if_stmt)
+            .or(while_stmt)
+            .or(break_stmt)
+            .or(continue_stmt)
+            .or(expr_stmt)
     })
     .labelled("statement");
 

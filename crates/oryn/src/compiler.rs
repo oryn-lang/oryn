@@ -40,14 +40,24 @@ pub(crate) struct CompilerOutput {
     pub spans: Vec<Range<usize>>,
 }
 
+/// Tracks the addresses needed by `break` and `continue` inside a loop.
+struct LoopContext {
+    /// Instruction index of the loop condition (target for `continue`).
+    start: usize,
+    /// Indices of `Jump(0)` placeholders emitted by `break` statements.
+    /// Patched to point past the loop after the body is compiled.
+    break_patches: Vec<usize>,
+}
+
 pub(crate) fn compile(statements: Vec<Spanned<Statement>>) -> CompilerOutput {
     let mut output = CompilerOutput {
         instructions: Vec::new(),
         spans: Vec::new(),
     };
+    let mut loops: Vec<LoopContext> = Vec::new();
 
     for stmt in statements {
-        compile_statement(&mut output, stmt);
+        compile_statement(&mut output, &mut loops, stmt);
     }
 
     output
@@ -59,16 +69,18 @@ fn emit(output: &mut CompilerOutput, instruction: Instruction, span: &Span) {
     output.spans.push(span.clone());
 }
 
-fn compile_statement(output: &mut CompilerOutput, stmt: Spanned<Statement>) {
+fn compile_statement(
+    output: &mut CompilerOutput,
+    loops: &mut Vec<LoopContext>,
+    stmt: Spanned<Statement>,
+) {
     let stmt_span = stmt.span.clone();
     match stmt.node {
         Statement::Let { name, value } => {
-            // Evaluate the right-hand side, then store the result.
             compile_expression(output, value);
             emit(output, Instruction::StoreVar(name), &stmt_span);
         }
         Statement::Assignment { name, value } => {
-            // Evaluate the right-hand side, then store the result.
             compile_expression(output, value);
             emit(output, Instruction::SetLocal(name), &stmt_span);
         }
@@ -77,45 +89,107 @@ fn compile_statement(output: &mut CompilerOutput, stmt: Spanned<Statement>) {
             body,
             else_body,
         } => {
-            // Compile the condition, leaving a bool on the stack.
             compile_expression(output, condition);
 
-            // Emit JumpIfFalse with a placeholder target.
             let jump_if_false_idx = output.instructions.len();
             emit(output, Instruction::JumpIfFalse(0), &stmt_span);
 
-            // Compile the then-body block. Block compiles each inner
-            // statement, which handle their own pops.
-            compile_expression(output, body);
+            compile_expression_with_loops(output, loops, body);
 
             if let Some(else_body) = else_body {
-                // Emit unconditional Jump to skip the else branch.
                 let jump_idx = output.instructions.len();
                 emit(output, Instruction::Jump(0), &stmt_span);
 
-                // Patch JumpIfFalse to point here (start of else).
                 let else_start = output.instructions.len();
                 output.instructions[jump_if_false_idx] = Instruction::JumpIfFalse(else_start);
 
-                // Compile the else-body block (or elif desugared into a block).
-                compile_expression(output, else_body);
+                compile_expression_with_loops(output, loops, else_body);
 
-                // Patch Jump to point here (end of if/else).
                 let end = output.instructions.len();
                 output.instructions[jump_idx] = Instruction::Jump(end);
             } else {
-                // No else branch, patch JumpIfFalse to skip the body.
                 let end = output.instructions.len();
                 output.instructions[jump_if_false_idx] = Instruction::JumpIfFalse(end);
             }
         }
+        Statement::While { condition, body } => {
+            // loop_start: the condition is re-evaluated each iteration.
+            // `continue` jumps here.
+            let loop_start = output.instructions.len();
+
+            compile_expression(output, condition);
+
+            // Exit the loop when the condition is false.
+            let exit_jump_idx = output.instructions.len();
+            emit(output, Instruction::JumpIfFalse(0), &stmt_span);
+
+            // Push a loop context so break/continue inside the body
+            // know where to jump.
+            loops.push(LoopContext {
+                start: loop_start,
+                break_patches: Vec::new(),
+            });
+
+            compile_expression_with_loops(output, loops, body);
+
+            // Jump back to re-check the condition.
+            emit(output, Instruction::Jump(loop_start), &stmt_span);
+
+            // "end" is right after the backward jump.
+            let end = output.instructions.len();
+
+            // Patch the condition's exit jump.
+            output.instructions[exit_jump_idx] = Instruction::JumpIfFalse(end);
+
+            // Patch all break statements to jump here.
+            let loop_ctx = loops.pop().expect("loop context missing");
+            for patch_idx in loop_ctx.break_patches {
+                output.instructions[patch_idx] = Instruction::Jump(end);
+            }
+        }
+        Statement::Break => {
+            // Emit a Jump with a placeholder. The enclosing while
+            // will patch it to point past the loop.
+            if let Some(loop_ctx) = loops.last_mut() {
+                let idx = output.instructions.len();
+                emit(output, Instruction::Jump(0), &stmt_span);
+                loop_ctx.break_patches.push(idx);
+            }
+            // break outside a loop is silently ignored for now.
+            // TODO: make this a compile error.
+        }
+        Statement::Continue => {
+            // Jump back to the loop condition.
+            if let Some(loop_ctx) = loops.last() {
+                emit(output, Instruction::Jump(loop_ctx.start), &stmt_span);
+            }
+            // continue outside a loop is silently ignored for now.
+            // TODO: make this a compile error.
+        }
         Statement::Expression(expr) => {
-            // Expression statements (like `print(x)`) still leave a value
-            // on the stack, so we `Pop` it to keep the stack clean.
             let expr_span = expr.span.clone();
             compile_expression(output, expr);
             emit(output, Instruction::Pop, &expr_span);
         }
+    }
+}
+
+/// Compile an expression, passing through the loop context stack so that
+/// blocks inside if/while bodies can contain break/continue.
+fn compile_expression_with_loops(
+    output: &mut CompilerOutput,
+    loops: &mut Vec<LoopContext>,
+    expr: Spanned<Expression>,
+) {
+    let span = expr.span.clone();
+    match expr.node {
+        Expression::Block(stmts) => {
+            for stmt in stmts {
+                compile_statement(output, loops, stmt);
+            }
+        }
+        // Everything else delegates to the loop-unaware version.
+        other => compile_expression(output, Spanned { node: other, span }),
     }
 }
 
@@ -135,8 +209,6 @@ fn compile_expression(output: &mut CompilerOutput, expr: Spanned<Expression>) {
             emit(output, Instruction::LoadVar(name), &span);
         }
         Expression::BinaryOp { op, left, right } => {
-            // Left goes on the stack first, then right. The op instruction
-            // pops both and pushes the result — order matters for `-` and `/`.
             compile_expression(output, *left);
             compile_expression(output, *right);
 
@@ -171,8 +243,6 @@ fn compile_expression(output: &mut CompilerOutput, expr: Spanned<Expression>) {
             );
         }
         Expression::Call { name, args } => {
-            // Push all args left-to-right, then `Call` tells the VM how
-            // many values to pull off the stack for this function.
             let arity = args.len();
 
             for arg in args {
@@ -182,11 +252,11 @@ fn compile_expression(output: &mut CompilerOutput, expr: Spanned<Expression>) {
             emit(output, Instruction::Call(name, arity), &span);
         }
         Expression::Block(stmts) => {
-            // A block compiles each statement sequentially. Each statement
-            // handles its own stack effects (expression statements pop
-            // their values), so the block itself leaves nothing on the stack.
+            // When compiled outside a loop context (e.g. top-level),
+            // blocks can't contain break/continue. Use an empty loop stack.
+            let mut no_loops = Vec::new();
             for stmt in stmts {
-                compile_statement(output, stmt);
+                compile_statement(output, &mut no_loops, stmt);
             }
         }
     }
