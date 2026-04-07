@@ -1,7 +1,7 @@
 use std::fmt;
 use std::ops::Range;
 
-use crate::vm::Value;
+use crate::vm::value::Value;
 
 /// An error from any phase of the pipeline: lexing, parsing, or runtime.
 ///
