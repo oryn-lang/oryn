@@ -1,0 +1,6 @@
+fn fib(n) {
+    if n <= 1 { rn n }
+    rn fib(n - 1) + fib(n - 2)
+}
+
+print(fib(28))

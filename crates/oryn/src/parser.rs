@@ -37,6 +37,12 @@ pub enum Statement {
         name: String,
         value: Spanned<Expression>,
     },
+    Function {
+        name: String,
+        params: Vec<String>,
+        body: Spanned<Expression>,
+    },
+    Return(Option<Spanned<Expression>>),
     Assignment {
         name: String,
         value: Spanned<Expression>,
@@ -354,6 +360,26 @@ fn program<'src>() -> impl Parser<
             })
             .labelled("assign statement");
 
+        // fn <name>(<params>) <block>
+        let fn_stmt = just(Token::Fn)
+            .ignore_then(select! { Token::Ident(name) => name }.labelled("function name"))
+            .then(
+                select! { Token::Ident(name) => name }
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
+            )
+            .then(block.clone())
+            .map_with(|((name, params), body), extra| {
+                Spanned::new(Statement::Function { name, params, body }, extra.span())
+            })
+            .labelled("function");
+
+        let return_stmt = just(Token::Rn)
+            .ignore_then(expr.clone().or_not())
+            .map_with(|value, extra| Spanned::new(Statement::Return(value), extra.span()))
+            .labelled("return");
+
         let if_stmt = just(Token::If).ignore_then(recursive(|if_body| {
             let else_branch = just(Token::Else)
                 .ignore_then(block.clone())
@@ -401,6 +427,8 @@ fn program<'src>() -> impl Parser<
 
         let_stmt
             .or(assign_stmt)
+            .or(fn_stmt)
+            .or(return_stmt)
             .or(if_stmt)
             .or(while_stmt)
             .or(break_stmt)

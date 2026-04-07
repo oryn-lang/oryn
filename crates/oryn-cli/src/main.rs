@@ -15,6 +15,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Run { file: PathBuf },
+    Disasm { file: PathBuf },
     Lsp,
 }
 
@@ -23,6 +24,7 @@ fn main() {
 
     match cli.command {
         Command::Run { file } => commands::run::run(&file),
+        Command::Disasm { file } => commands::disasm::run(&file),
         Command::Lsp => commands::lsp::run(),
     }
 }

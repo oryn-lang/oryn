@@ -55,6 +55,12 @@ pub enum RuntimeError {
         actual: ValueType,
         span: Option<Range<usize>>,
     },
+    ArityMismatch {
+        name: String,
+        expected: usize,
+        actual: usize,
+        span: Option<Range<usize>>,
+    },
 }
 
 /// The type of a value.
@@ -110,6 +116,14 @@ impl fmt::Display for RuntimeError {
             } => {
                 write!(f, "type error: expected {expected}, got {actual}")
             }
+            RuntimeError::ArityMismatch {
+                name,
+                expected,
+                actual,
+                ..
+            } => {
+                write!(f, "{name} expects {expected} argument(s), got {actual}")
+            }
         }
     }
 }
@@ -123,6 +137,7 @@ impl RuntimeError {
             RuntimeError::StackUnderflow => None,
             RuntimeError::IoError(_) => None,
             RuntimeError::TypeError { span, .. } => span.as_ref(),
+            RuntimeError::ArityMismatch { span, .. } => span.as_ref(),
         }
     }
 }

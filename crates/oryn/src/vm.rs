@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use std::io::Write;
 use std::ops::Range;
 
 use crate::compiler;
-use crate::compiler::Instruction;
+use crate::compiler::{CompiledFunction, Instruction};
 use crate::errors::{OrynError, RuntimeError, ValueType};
 use crate::lexer;
 use crate::parser;
@@ -12,6 +11,18 @@ use crate::parser;
 pub(crate) enum Value {
     Bool(bool),
     Int(i32),
+}
+
+/// A call frame on the VM's call stack. Each function invocation
+/// (including top-level code) gets its own frame with an instruction
+/// pointer and a fixed-size array of local variable slots.
+struct CallFrame {
+    // None = top-level, Some(i) = functions[i].
+    function_idx: Option<usize>,
+    ip: usize,
+    // Local variables indexed by slot number. Slot indices are
+    // assigned at compile time so access is O(1) with no hashing.
+    locals: Vec<Value>,
 }
 
 /// Compiled bytecode ready to be run by a [`VM`].
@@ -25,8 +36,8 @@ pub(crate) enum Value {
 #[derive(Debug)]
 pub struct Chunk {
     pub(crate) instructions: Vec<Instruction>,
-    /// spans[i] is the source byte-range for instructions[i].
     pub(crate) spans: Vec<Range<usize>>,
+    pub(crate) functions: Vec<CompiledFunction>,
 }
 
 impl Chunk {
@@ -53,9 +64,11 @@ impl Chunk {
         }
 
         let output = compiler::compile(statements);
+
         Ok(Self {
             instructions: output.instructions,
             spans: output.spans,
+            functions: output.functions,
         })
     }
 
@@ -69,7 +82,34 @@ impl Chunk {
     pub fn check(source: &str) -> Vec<OrynError> {
         let (tokens, lex_errors) = lexer::lex(source);
         let (_, parse_errors) = parser::parse(tokens);
+
         lex_errors.into_iter().chain(parse_errors).collect()
+    }
+
+    /// Returns a human-readable disassembly of the compiled bytecode.
+    ///
+    /// ```
+    /// let chunk = oryn::Chunk::compile("let x = 5\nprint(x)").unwrap();
+    /// let output = chunk.disassemble();
+    ///
+    /// assert!(output.contains("SetLocal"));
+    /// assert!(output.contains("CallBuiltin"));
+    /// ```
+    pub fn disassemble(&self) -> String {
+        use std::fmt::Write;
+
+        let mut out = String::new();
+
+        writeln!(out, "== <main> ==").unwrap();
+        disassemble_instructions(&mut out, &self.instructions);
+
+        for func in &self.functions {
+            let params = func.params.join(", ");
+            writeln!(out, "\n== {}({}) ==", func.name, params).unwrap();
+            disassemble_instructions(&mut out, &func.instructions);
+        }
+
+        out
     }
 }
 
@@ -82,14 +122,17 @@ impl Chunk {
 /// vm.run(&chunk).unwrap();
 /// ```
 pub struct VM {
-    // Instruction pointer: the index of the next instruction to execute.
-    ip: usize,
+    stack: Vec<Value>,
+    frames: Vec<CallFrame>,
 }
 
 impl VM {
     /// Creates a new VM.
     pub fn new() -> Self {
-        Self { ip: 0 }
+        Self {
+            stack: Vec::new(),
+            frames: Vec::new(),
+        }
     }
 
     /// Runs a compiled [`Chunk`]. Can be called multiple times with
@@ -108,171 +151,181 @@ impl VM {
         self.run_with_writer(chunk, &mut std::io::stdout())
     }
 
-    /// Returns the source span for the current instruction, if available.
-    fn current_span(&self, chunk: &Chunk) -> Option<Range<usize>> {
-        chunk.spans.get(self.ip).cloned()
-    }
-
     pub fn run_with_writer(
         &mut self,
         chunk: &Chunk,
         writer: &mut impl Write,
     ) -> Result<(), RuntimeError> {
-        let mut stack: Vec<Value> = Vec::new();
-        let mut variables: HashMap<String, Value> = HashMap::new();
+        self.stack.clear();
+        self.frames.clear();
 
-        self.ip = 0;
+        // Top-level code runs in the first frame with a growable
+        // locals vec (we don't track num_locals for top-level yet).
+        self.frames.push(CallFrame {
+            function_idx: None,
+            ip: 0,
+            locals: Vec::new(),
+        });
 
-        while self.ip < chunk.instructions.len() {
-            match &chunk.instructions[self.ip] {
+        while let Some(frame) = self.frames.last() {
+            let (instructions, _spans): (&[Instruction], &[Range<usize>]) = match frame.function_idx
+            {
+                None => (&chunk.instructions, &chunk.spans),
+                Some(idx) => (
+                    &chunk.functions[idx].instructions,
+                    &chunk.functions[idx].spans,
+                ),
+            };
+
+            if frame.ip >= instructions.len() {
+                if frame.function_idx.is_none() {
+                    break;
+                }
+                self.stack.push(Value::Int(0));
+                self.frames.pop();
+                continue;
+            }
+
+            let ip = frame.ip;
+            let instruction = &instructions[ip];
+
+            match instruction {
                 Instruction::PushBool(b) => {
-                    stack.push(Value::Bool(*b));
+                    self.stack.push(Value::Bool(*b));
                 }
                 Instruction::PushInt(n) => {
-                    stack.push(Value::Int(*n));
+                    self.stack.push(Value::Int(*n));
                 }
-                Instruction::LoadVar(name) => {
-                    let value =
-                        variables
-                            .get(name)
-                            .ok_or_else(|| RuntimeError::UndefinedVariable {
-                                name: name.clone(),
-                                span: self.current_span(chunk),
-                            })?;
-
-                    stack.push(value.clone());
+                Instruction::GetLocal(slot) => {
+                    let frame = self.frames.last().unwrap();
+                    let value = frame.locals[*slot].clone();
+                    self.stack.push(value);
                 }
-                Instruction::StoreVar(name) => {
-                    let value = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                Instruction::SetLocal(slot) => {
+                    let value = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let frame = self.frames.last_mut().unwrap();
 
-                    variables.insert(name.clone(), value);
-                }
-                Instruction::SetLocal(name) => {
-                    let value = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                    if !variables.contains_key(name.as_str()) {
-                        return Err(RuntimeError::UndefinedVariable {
-                            name: name.clone(),
-                            span: self.current_span(chunk),
-                        });
+                    // Grow the locals vec if needed (top-level code
+                    // doesn't pre-allocate).
+                    if *slot >= frame.locals.len() {
+                        frame.locals.resize(*slot + 1, Value::Int(0));
                     }
 
-                    variables.insert(name.clone(), value);
+                    frame.locals[*slot] = value;
+                }
+                Instruction::Return => {
+                    self.frames.pop();
+                    continue;
                 }
                 Instruction::Equal => {
-                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                    stack.push(Value::Bool(left == right));
+                    let right = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    self.stack.push(Value::Bool(left == right));
                 }
                 Instruction::NotEqual => {
-                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                    stack.push(Value::Bool(left != right));
+                    let right = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    self.stack.push(Value::Bool(left != right));
                 }
                 Instruction::LessThan => {
-                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                    stack.push(Value::Bool(left < right));
+                    let right = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    self.stack.push(Value::Bool(left < right));
                 }
                 Instruction::GreaterThan => {
-                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                    stack.push(Value::Bool(left > right));
+                    let right = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    self.stack.push(Value::Bool(left > right));
                 }
                 Instruction::LessThanEquals => {
-                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                    stack.push(Value::Bool(left <= right));
+                    let right = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    self.stack.push(Value::Bool(left <= right));
                 }
                 Instruction::GreaterThanEquals => {
-                    let right = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                    let left = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                    stack.push(Value::Bool(left >= right));
+                    let right = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let left = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    self.stack.push(Value::Bool(left >= right));
                 }
                 Instruction::And => {
-                    let Value::Bool(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    let Value::Bool(right) =
+                        self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
                     else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-                    let Value::Bool(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Bool(left) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-
-                    stack.push(Value::Bool(left && right));
+                    self.stack.push(Value::Bool(left && right));
                 }
                 Instruction::Or => {
-                    let Value::Bool(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    let Value::Bool(right) =
+                        self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
                     else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-                    let Value::Bool(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Bool(left) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-
-                    stack.push(Value::Bool(left || right));
+                    self.stack.push(Value::Bool(left || right));
                 }
                 Instruction::Not => {
-                    let value = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                    stack.push(Value::Bool(!matches!(value, Value::Bool(true))));
+                    let value = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    self.stack
+                        .push(Value::Bool(!matches!(value, Value::Bool(true))));
                 }
-
                 Instruction::Add => {
-                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Int(right) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Int(left) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-
-                    stack.push(Value::Int(left + right));
+                    self.stack.push(Value::Int(left + right));
                 }
                 Instruction::Sub => {
-                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Int(right) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-
-                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Int(left) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-
-                    stack.push(Value::Int(left - right));
+                    self.stack.push(Value::Int(left - right));
                 }
                 Instruction::Mul => {
-                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Int(right) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Int(left) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-
-                    stack.push(Value::Int(left * right));
+                    self.stack.push(Value::Int(left * right));
                 }
                 Instruction::Div => {
-                    let Value::Int(right) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Int(right) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-                    let Value::Int(left) = stack.pop().ok_or(RuntimeError::StackUnderflow)? else {
+                    let Value::Int(left) = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?
+                    else {
                         return Err(RuntimeError::StackUnderflow);
                     };
-
-                    stack.push(Value::Int(left / right));
+                    self.stack.push(Value::Int(left / right));
                 }
-                Instruction::Call(name, arity) => {
-                    // `split_off` grabs the last `arity` values, exactly
-                    // the args that were pushed left-to-right by the compiler.
-                    let args: Vec<Value> = stack.split_off(stack.len() - arity);
-
-                    // Builtins are handled inline for now. Every call pushes
-                    // a return value so the caller can use it or `Pop` it.
+                Instruction::CallBuiltin(name, arity) => {
+                    let arity = *arity;
                     match name.as_str() {
                         "print" => {
+                            let args: Vec<Value> = self.stack.split_off(self.stack.len() - arity);
+
                             let output: Vec<String> = args
                                 .iter()
                                 .map(|a| match a {
@@ -287,7 +340,7 @@ impl VM {
                                 .map_err(RuntimeError::IoError)?;
                             writer.write_all(b"\n").map_err(RuntimeError::IoError)?;
 
-                            stack.push(Value::Int(0));
+                            self.stack.push(Value::Int(0));
                         }
                         _ => {
                             return Err(RuntimeError::UndefinedFunction {
@@ -297,11 +350,40 @@ impl VM {
                         }
                     }
                 }
+                Instruction::Call(func_idx, arity) => {
+                    let func_idx = *func_idx;
+                    let arity = *arity;
+
+                    let func = &chunk.functions[func_idx];
+                    if arity != func.arity {
+                        return Err(RuntimeError::ArityMismatch {
+                            name: func.name.clone(),
+                            expected: func.arity,
+                            actual: arity,
+                            span: self.current_span(chunk),
+                        });
+                    }
+
+                    // Advance caller's ip past the Call before pushing
+                    // the new frame.
+                    self.frames.last_mut().unwrap().ip += 1;
+
+                    // Pre-allocate the locals vec to the right size.
+                    // The function's first instructions will SetLocal
+                    // the params into their slots.
+                    self.frames.push(CallFrame {
+                        function_idx: Some(func_idx),
+                        ip: 0,
+                        locals: vec![Value::Int(0); func.num_locals],
+                    });
+
+                    continue;
+                }
                 Instruction::Pop => {
-                    stack.pop();
+                    self.stack.pop();
                 }
                 Instruction::JumpIfFalse(target) => {
-                    let condition_value = stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                    let condition_value = self.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
                     let Value::Bool(condition) = condition_value else {
                         return Err(RuntimeError::TypeError {
@@ -312,22 +394,31 @@ impl VM {
                     };
 
                     if !condition {
-                        self.ip = *target;
-
+                        self.frames.last_mut().unwrap().ip = *target;
                         continue;
                     }
                 }
                 Instruction::Jump(target) => {
-                    self.ip = *target;
-
+                    self.frames.last_mut().unwrap().ip = *target;
                     continue;
                 }
             }
 
-            self.ip += 1;
+            self.frames.last_mut().unwrap().ip += 1;
         }
 
         Ok(())
+    }
+
+    fn current_span(&self, chunk: &Chunk) -> Option<Range<usize>> {
+        let frame = self.frames.last()?;
+
+        let spans = match frame.function_idx {
+            None => &chunk.spans,
+            Some(idx) => &chunk.functions[idx].spans,
+        };
+
+        spans.get(frame.ip).cloned()
     }
 }
 
@@ -337,17 +428,56 @@ impl Default for VM {
     }
 }
 
+fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
+    use std::fmt::Write;
+
+    for (i, instr) in instructions.iter().enumerate() {
+        let formatted = match instr {
+            Instruction::PushBool(b) => format!("PushBool {b}"),
+            Instruction::PushInt(n) => format!("PushInt {n}"),
+            Instruction::GetLocal(slot) => format!("GetLocal {slot}"),
+            Instruction::SetLocal(slot) => format!("SetLocal {slot}"),
+            Instruction::Return => "Return".to_string(),
+            Instruction::Equal => "Equal".to_string(),
+            Instruction::NotEqual => "NotEqual".to_string(),
+            Instruction::LessThan => "LessThan".to_string(),
+            Instruction::GreaterThan => "GreaterThan".to_string(),
+            Instruction::LessThanEquals => "LessThanEquals".to_string(),
+            Instruction::GreaterThanEquals => "GreaterThanEquals".to_string(),
+            Instruction::And => "And".to_string(),
+            Instruction::Or => "Or".to_string(),
+            Instruction::Not => "Not".to_string(),
+            Instruction::Add => "Add".to_string(),
+            Instruction::Sub => "Sub".to_string(),
+            Instruction::Mul => "Mul".to_string(),
+            Instruction::Div => "Div".to_string(),
+            Instruction::Call(idx, arity) => {
+                let s = if *arity == 1 { "arg" } else { "args" };
+                format!("Call fn#{idx} ({arity} {s})")
+            }
+            Instruction::CallBuiltin(name, arity) => {
+                let s = if *arity == 1 { "arg" } else { "args" };
+                format!("CallBuiltin \"{name}\" ({arity} {s})")
+            }
+            Instruction::Pop => "Pop".to_string(),
+            Instruction::JumpIfFalse(target) => format!("JumpIfFalse -> {target:04}"),
+            Instruction::Jump(target) => format!("Jump -> {target:04}"),
+        };
+
+        writeln!(out, "{i:04}  {formatted}").unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Helper: build a chunk with empty spans for unit tests that
-    /// construct instructions directly.
     fn chunk(instructions: Vec<Instruction>) -> Chunk {
         let len = instructions.len();
         Chunk {
             instructions,
             spans: vec![0..0; len],
+            functions: vec![],
         }
     }
 
@@ -357,8 +487,8 @@ mod tests {
             Instruction::PushInt(10),
             Instruction::PushInt(3),
             Instruction::Add,
-            Instruction::StoreVar("x".into()),
-            Instruction::LoadVar("x".into()),
+            Instruction::SetLocal(0),
+            Instruction::GetLocal(0),
             Instruction::Pop,
         ]);
 
@@ -367,23 +497,10 @@ mod tests {
     }
 
     #[test]
-    fn undefined_variable_is_runtime_error() {
-        let c = chunk(vec![Instruction::LoadVar("nope".into()), Instruction::Pop]);
-
-        let mut vm = VM::new();
-        let err = vm.run(&c).unwrap_err();
-
-        assert!(matches!(
-            err,
-            RuntimeError::UndefinedVariable { ref name, .. } if name == "nope"
-        ));
-    }
-
-    #[test]
     fn undefined_function_is_runtime_error() {
         let c = chunk(vec![
             Instruction::PushInt(1),
-            Instruction::Call("nope".into(), 1),
+            Instruction::CallBuiltin("nope".into(), 1),
             Instruction::Pop,
         ]);
 

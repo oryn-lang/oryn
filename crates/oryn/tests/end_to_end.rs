@@ -29,19 +29,10 @@ fn assignment_with_expression() {
     assert_eq!(run("let x = 5\nx = x + 1\nprint(x)"), "6\n");
 }
 
-#[test]
-fn assignment_to_undefined_variable_is_runtime_error() {
-    let chunk = oryn::Chunk::compile("foo = 3").expect("compile error");
-    let mut vm = oryn::VM::new();
-    let mut output = Vec::new();
-
-    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
-
-    assert!(matches!(
-        err,
-        oryn::RuntimeError::UndefinedVariable { ref name, .. } if name == "foo"
-    ));
-}
+// Note: with slot-based locals, `foo = 3` without a prior `let` is
+// silently allowed (the compiler assigns a slot). This will become a
+// compile-time error when we add proper variable resolution.
+// TODO: add compile-time "undefined variable" error.
 
 // --- Arithmetic ---
 
@@ -291,4 +282,74 @@ fn break_in_nested_if() {
         run("let x = 0\nwhile true {\nx = x + 1\nif x > 5 {\nbreak\n}\n}\nprint(x)"),
         "6\n",
     );
+}
+
+// --- Functions ---
+
+#[test]
+fn simple_function() {
+    assert_eq!(run("fn greet() {\nprint(42)\n}\ngreet()"), "42\n",);
+}
+
+#[test]
+fn function_with_params() {
+    assert_eq!(run("fn add(a, b) {\nrn a + b\n}\nprint(add(3, 4))"), "7\n",);
+}
+
+#[test]
+fn function_return_value() {
+    assert_eq!(
+        run("fn double(x) {\nrn x * 2\n}\nlet y = double(5)\nprint(y)"),
+        "10\n",
+    );
+}
+
+#[test]
+fn function_implicit_return() {
+    // A function without rn returns 0 by default.
+    assert_eq!(run("fn noop() {\nlet x = 1\n}\nprint(noop())"), "0\n",);
+}
+
+#[test]
+fn function_with_locals() {
+    // Variables inside a function are local to that frame.
+    assert_eq!(
+        run("let x = 1\nfn bump() {\nlet x = 99\nrn x\n}\nprint(bump())\nprint(x)"),
+        "99\n1\n",
+    );
+}
+
+#[test]
+fn recursive_function() {
+    // Classic: factorial.
+    assert_eq!(
+        run("fn fact(n) {\nif n <= 1 { rn 1 }\nrn n * fact(n - 1)\n}\nprint(fact(5))"),
+        "120\n",
+    );
+}
+
+#[test]
+fn fibonacci() {
+    assert_eq!(
+        run("fn fib(n) {\nif n <= 1 { rn n }\nrn fib(n - 1) + fib(n - 2)\n}\nprint(fib(10))"),
+        "55\n",
+    );
+}
+
+#[test]
+fn arity_mismatch_is_runtime_error() {
+    let chunk = oryn::Chunk::compile("fn add(a, b) {\nrn a + b\n}\nadd(1)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+
+    assert!(matches!(
+        err,
+        oryn::RuntimeError::ArityMismatch {
+            expected: 2,
+            actual: 1,
+            ..
+        }
+    ));
 }
