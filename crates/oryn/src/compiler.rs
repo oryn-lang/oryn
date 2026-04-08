@@ -30,6 +30,7 @@ pub(crate) enum Instruction {
     And,
     Or,
     Not,
+    Negate,
     Add,
     Sub,
     Mul,
@@ -212,6 +213,49 @@ fn emit(output: &mut CompilerOutput, instruction: Instruction, span: &Span) {
     output.spans.push(span.clone());
 }
 
+/// Resolve a field name to its index on an object type. Returns the index
+/// on success, or pushes a compiler error and returns None.
+fn resolve_field(
+    output: &mut CompilerOutput,
+    obj_table: &ObjTable,
+    obj_type: &Option<String>,
+    field: &str,
+    span: &Span,
+) -> Option<usize> {
+    let type_name = match obj_type {
+        Some(name) => name,
+        None => {
+            output.errors.push(OrynError::Compiler {
+                span: span.clone(),
+                message: "cannot access field on non-object".into(),
+            });
+            return None;
+        }
+    };
+
+    let (_, def) = match obj_table.resolve(type_name) {
+        Some(pair) => pair,
+        None => {
+            output.errors.push(OrynError::Compiler {
+                span: span.clone(),
+                message: format!("undefined type `{type_name}`"),
+            });
+            return None;
+        }
+    };
+
+    match def.fields.iter().position(|f| f == field) {
+        Some(idx) => Some(idx),
+        None => {
+            output.errors.push(OrynError::Compiler {
+                span: span.clone(),
+                message: format!("unknown field `{field}` on type `{type_name}`"),
+            });
+            None
+        }
+    }
+}
+
 fn compile_statement(
     output: &mut CompilerOutput,
     fn_table: &FunctionTable,
@@ -390,22 +434,9 @@ fn compile_statement(
             compile_expression(output, fn_table, obj_table, locals, object);
             compile_expression(output, fn_table, obj_table, locals, value);
 
-            if let Some(type_name) = obj_type {
-                if let Some((_, def)) = obj_table.resolve(&type_name) {
-                    if let Some(field_idx) = def.fields.iter().position(|f| *f == field) {
-                        emit(output, Instruction::SetField(field_idx), &stmt_span);
-                    } else {
-                        output.errors.push(OrynError::Compiler {
-                            span: stmt_span.clone(),
-                            message: format!("unknown field `{field}` on type `{type_name}`"),
-                        });
-                    }
-                }
-            } else {
-                output.errors.push(OrynError::Compiler {
-                    span: stmt_span.clone(),
-                    message: "cannot access field on non-object".into(),
-                });
+            if let Some(field_idx) = resolve_field(output, obj_table, &obj_type, &field, &stmt_span)
+            {
+                emit(output, Instruction::SetField(field_idx), &stmt_span);
             }
         }
         Statement::If {
@@ -610,23 +641,9 @@ fn compile_expression(
 
             compile_expression(output, fn_table, obj_table, locals, *object);
 
-            if let Some(type_name) = obj_type {
-                if let Some((_, def)) = obj_table.resolve(&type_name) {
-                    if let Some(field_idx) = def.fields.iter().position(|f| *f == field) {
-                        emit(output, Instruction::GetField(field_idx), &span);
-                    } else {
-                        output.errors.push(OrynError::Compiler {
-                            span: span.clone(),
-                            message: format!("unknown field `{field}` on type `{type_name}`"),
-                        });
-                        emit(output, Instruction::PushInt(0), &span);
-                    }
-                }
+            if let Some(field_idx) = resolve_field(output, obj_table, &obj_type, &field, &span) {
+                emit(output, Instruction::GetField(field_idx), &span);
             } else {
-                output.errors.push(OrynError::Compiler {
-                    span: span.clone(),
-                    message: "cannot access field on non-object".into(),
-                });
                 emit(output, Instruction::PushInt(0), &span);
             }
         }
@@ -660,6 +677,7 @@ fn compile_expression(
                 output,
                 match op {
                     UnaryOp::Not => Instruction::Not,
+                    UnaryOp::Negate => Instruction::Negate,
                 },
                 &span,
             );

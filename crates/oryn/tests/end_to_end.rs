@@ -741,3 +741,35 @@ fn object_in_function() {
         "42\n",
     );
 }
+
+// --- Unary minus ---
+
+#[test]
+fn negate_int() {
+    assert_eq!(run("print(-5)"), "-5\n");
+}
+
+#[test]
+fn negate_float() {
+    assert_eq!(run("print(-3.14)"), "-3.14\n");
+}
+
+#[test]
+fn negate_variable() {
+    assert_eq!(run("let x = 10\nprint(-x)"), "-10\n");
+}
+
+#[test]
+fn negate_in_expression() {
+    assert_eq!(run("print(-2 * 3)"), "-6\n");
+}
+
+#[test]
+fn double_negate() {
+    assert_eq!(run("print(--5)"), "5\n");
+}
+
+#[test]
+fn negate_precedence() {
+    assert_eq!(run("print(-2 + 3)"), "1\n");
+}

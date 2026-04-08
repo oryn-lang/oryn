@@ -131,6 +131,7 @@ pub enum BinOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Not,
+    Negate,
 }
 
 #[derive(Debug, Clone)]
@@ -275,15 +276,27 @@ fn program<'src>() -> impl Parser<
             },
         );
 
+        // Unary minus: tighter than *, so -2 * 3 is (-2) * 3.
+        let negate = just(Token::Minus).repeated().foldr(postfix, |_op, expr| {
+            let span = expr.span.clone();
+            Spanned {
+                node: Expression::UnaryOp {
+                    op: UnaryOp::Negate,
+                    expr: Box::new(expr),
+                },
+                span,
+            }
+        });
+
         // foldl builds a left-associative chain: it parses one atom, then
         // zero or more (op, atom) pairs, folding them into nested BinaryOps.
         // * and / bind tighter, so they're parsed first as "product".
-        let product = postfix.clone().foldl(
+        let product = negate.clone().foldl(
             choice((
                 just(Token::Multiply).to(BinOp::Mul),
                 just(Token::Divide).to(BinOp::Div),
             ))
-            .then(atom)
+            .then(negate)
             .repeated(),
             |left, (op, right)| {
                 let span = left.span.start..right.span.end;

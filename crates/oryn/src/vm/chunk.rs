@@ -132,6 +132,7 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::And => "And".to_string(),
             Instruction::Or => "Or".to_string(),
             Instruction::Not => "Not".to_string(),
+            Instruction::Negate => "Negate".to_string(),
             Instruction::Add => "Add".to_string(),
             Instruction::Sub => "Sub".to_string(),
             Instruction::Mul => "Mul".to_string(),

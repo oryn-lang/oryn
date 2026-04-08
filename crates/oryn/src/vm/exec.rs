@@ -290,6 +290,22 @@ impl VM {
                             .stack
                             .push(Value::Bool(!matches!(value, Value::Bool(true))));
                     }
+                    Instruction::Negate => {
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        match value {
+                            Value::Int(n) => state.stack.push(Value::Int(-n)),
+                            Value::Float(n) => state.stack.push(Value::Float(-n)),
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Int,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
+                    }
                     Instruction::Add => {
                         let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
                         let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
