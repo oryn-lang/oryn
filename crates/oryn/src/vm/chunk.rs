@@ -141,6 +141,10 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
                 let s = if *arity == 1 { "arg" } else { "args" };
                 format!("Call fn#{idx} ({arity} {s})")
             }
+            Instruction::CallMethod(name, arity) => {
+                let s = if *arity == 1 { "arg" } else { "args" };
+                format!("CallMethod \"{name}\" ({arity} {s} + self)")
+            }
             Instruction::CallBuiltin(name, arity) => {
                 let s = if *arity == 1 { "arg" } else { "args" };
                 format!("CallBuiltin \"{name}\" ({arity} {s})")

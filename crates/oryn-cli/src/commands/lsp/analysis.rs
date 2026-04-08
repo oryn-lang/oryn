@@ -245,6 +245,12 @@ fn walk_expression(
                 walk_expression(idents, table, scopes, arg);
             }
         }
+        Expression::MethodCall { object, args, .. } => {
+            walk_expression(idents, table, scopes, object);
+            for arg in args {
+                walk_expression(idents, table, scopes, arg);
+            }
+        }
         Expression::BinaryOp { left, right, .. } => {
             walk_expression(idents, table, scopes, left);
             walk_expression(idents, table, scopes, right);

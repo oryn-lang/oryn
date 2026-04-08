@@ -469,6 +469,55 @@ impl VM {
 
                         continue;
                     }
+                    Instruction::CallMethod(method_name, arity) => {
+                        let arity = *arity;
+
+                        // The object (self) is on the stack below the args.
+                        // Peek at it to find its type.
+                        let obj_pos = state.stack.len() - arity - 1;
+                        let obj = &state.stack[obj_pos];
+
+                        let type_idx = match obj {
+                            Value::Object(obj_ref) => obj_ref.borrow().type_idx,
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Object,
+                                    actual: ValueType::from(obj),
+                                    span,
+                                });
+                            }
+                        };
+
+                        // Look up the method on the object's type definition.
+                        let obj_def = &chunk.obj_defs[type_idx];
+                        let func_idx = match obj_def.methods.get(method_name.as_str()) {
+                            Some(idx) => *idx,
+                            None => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::UndefinedFunction {
+                                    name: format!("{}.{}", obj_def.name, method_name),
+                                    span,
+                                });
+                            }
+                        };
+
+                        let func = &chunk.functions[func_idx];
+
+                        // Advance caller's ip, then push a new frame.
+                        // The function's arity includes self, so total args = arity + 1.
+                        // SAFETY: Same frame-stack invariant.
+                        state.frames.last_mut().unwrap().ip += 1;
+
+                        state.frames.push(CallFrame {
+                            function_idx: Some(func_idx),
+                            ip: 0,
+                            locals: vec![Value::Uninitialized; func.num_locals],
+                        });
+
+                        continue;
+                    }
                     Instruction::Pop => {
                         state.stack.pop();
                     }

@@ -53,6 +53,7 @@ pub enum Statement {
     ObjDef {
         name: String,
         fields: Vec<(String, TypeAnnotation)>,
+        methods: Vec<ObjMethod>,
     },
     FieldAssignment {
         object: Spanned<Expression>,
@@ -93,6 +94,11 @@ pub enum Expression {
     FieldAccess {
         object: Box<Spanned<Expression>>,
         field: String,
+    },
+    MethodCall {
+        object: Box<Spanned<Expression>>,
+        method: String,
+        args: Vec<Spanned<Expression>>,
     },
     BinaryOp {
         op: BinOp,
@@ -137,6 +143,14 @@ pub enum UnaryOp {
 #[derive(Debug, Clone)]
 pub enum TypeAnnotation {
     Named(String),
+}
+
+#[derive(Debug)]
+pub struct ObjMethod {
+    pub name: String,
+    pub params: Vec<(String, Option<TypeAnnotation>)>,
+    pub body: Spanned<Expression>,
+    pub return_type: Option<TypeAnnotation>,
 }
 
 /// Parses a token stream into an AST. Returns the statements and any
@@ -260,18 +274,38 @@ fn program<'src>() -> impl Parser<
     let expr = recursive(|expr| {
         let atom = atom(expr.clone());
 
+        // Postfix: .field access and .method(args) calls.
+        // After parsing an atom, repeatedly try .ident or .ident(args).
+        // If parens follow, it's a method call; otherwise field access.
         let postfix = atom.clone().foldl(
             just(Token::Dot)
                 .ignore_then(select! { Token::Ident(name) => name })
+                .then(
+                    expr.clone()
+                        .separated_by(just(Token::Comma))
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LeftParen), just(Token::RightParen))
+                        .or_not(),
+                )
                 .repeated(),
-            |object, field| {
+            |object, (name, args)| {
                 let span = object.span.clone();
-                Spanned {
-                    node: Expression::FieldAccess {
-                        object: Box::new(object),
-                        field,
+                match args {
+                    Some(args) => Spanned {
+                        node: Expression::MethodCall {
+                            object: Box::new(object),
+                            method: name,
+                            args,
+                        },
+                        span,
                     },
-                    span,
+                    None => Spanned {
+                        node: Expression::FieldAccess {
+                            object: Box::new(object),
+                            field: name,
+                        },
+                        span,
+                    },
                 }
             },
         );
@@ -490,16 +524,47 @@ fn program<'src>() -> impl Parser<
             .then_ignore(just(Token::Colon))
             .then(select! { Token::Ident(name) => TypeAnnotation::Named(name) });
 
+        let obj_method = just(Token::Fn)
+            .ignore_then(select! { Token::Ident(name) => name })
+            .then(
+                select! { Token::Ident(name) => name }
+                    .then(type_annotation.clone().or_not())
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
+            )
+            .then(
+                just(Token::Arrow)
+                    .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
+                    .or_not(),
+            )
+            .then(block.clone())
+            .map(|(((name, params), return_type), body)| ObjMethod {
+                name,
+                params,
+                body,
+                return_type,
+            });
+
+        let obj_item = obj_method
+            .map(ObjItem::Method)
+            .or(obj_field.map(|(name, ty)| ObjItem::Field(name, ty)));
+
         // obj <name> { <field>, <field> } or { <field> \n <field> }
         let field_sep = just(Token::Comma)
             .then(newlines.clone().or_not())
             .or(newlines.clone().map(|n| (Token::Newline, Some(n))))
             .ignored();
 
+        enum ObjItem {
+            Field(String, TypeAnnotation),
+            Method(ObjMethod),
+        }
+
         let obj_stmt = just(Token::Obj)
             .ignore_then(select! { Token::Ident(name) => name })
             .then(
-                obj_field
+                obj_item
                     .separated_by(field_sep)
                     .allow_trailing()
                     .collect::<Vec<_>>()
@@ -508,8 +573,25 @@ fn program<'src>() -> impl Parser<
                         newlines.clone().or_not().then(just(Token::RightCurly)),
                     ),
             )
-            .map_with(|(name, fields), extra| {
-                Spanned::new(Statement::ObjDef { name, fields }, extra.span())
+            .map_with(|(name, items), extra| {
+                let mut fields = Vec::new();
+                let mut methods = Vec::new();
+
+                for item in items {
+                    match item {
+                        ObjItem::Field(name, ty) => fields.push((name, ty)),
+                        ObjItem::Method(m) => methods.push(m),
+                    }
+                }
+
+                Spanned::new(
+                    Statement::ObjDef {
+                        name,
+                        fields,
+                        methods,
+                    },
+                    extra.span(),
+                )
             })
             .labelled("object definition");
 

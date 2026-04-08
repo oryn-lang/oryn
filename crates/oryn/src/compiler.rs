@@ -37,6 +37,8 @@ pub(crate) enum Instruction {
     Div,
     // Call a user-defined function by index into the function table.
     Call(usize, usize),
+    // Call a method by name on an object.
+    CallMethod(String, usize),
     // Call a builtin function by name.
     CallBuiltin(String, usize),
     Pop,
@@ -129,6 +131,8 @@ pub(crate) struct ObjDefInfo {
     pub name: String,
     // Field names in order - index = field offset.
     pub fields: Vec<String>,
+    // Method name -> function table index.
+    pub methods: HashMap<String, usize>,
 }
 
 /// Compile-time registry of object definitions. Parallel to FunctionTable
@@ -147,11 +151,20 @@ impl ObjTable {
         }
     }
 
-    fn register(&mut self, name: String, fields: Vec<String>) -> usize {
+    fn register(
+        &mut self,
+        name: String,
+        fields: Vec<String>,
+        methods: HashMap<String, usize>,
+    ) -> usize {
         let idx = self.defs.len();
 
         self.names.insert(name.clone(), idx);
-        self.defs.push(ObjDefInfo { name, fields });
+        self.defs.push(ObjDefInfo {
+            name,
+            fields,
+            methods,
+        });
 
         idx
     }
@@ -201,6 +214,7 @@ pub(crate) fn compile(statements: Vec<Spanned<Statement>>) -> CompilerOutput {
             obj_table.register(
                 output.obj_defs[i].name.clone(),
                 output.obj_defs[i].fields.clone(),
+                output.obj_defs[i].methods.clone(),
             );
         }
     }
@@ -315,85 +329,27 @@ fn compile_statement(
         Statement::Function {
             name, params, body, ..
         } => {
-            // Reserve the function's index so recursive calls and
-            // later calls resolve correctly.
-            let func_idx = output.functions.len();
-
-            // Register in the lookup table BEFORE compiling the body.
-            // This is what makes recursion work - fib can find itself.
-            // We use a mutable ref to fn_table here via a small trick:
-            // the FunctionTable is passed immutably to other functions,
-            // but we need to mutate it here. We'll handle this by
-            // registering before the recursive compile call.
-
-            // Push a placeholder so the index is valid.
-            output.functions.push(CompiledFunction {
-                name: name.clone(),
-                arity: params.len(),
-                params: params.clone().into_iter().map(|p| p.0).collect(),
-                num_locals: 0,
-                instructions: Vec::new(),
-                spans: Vec::new(),
-            });
-
-            let mut func_output = CompilerOutput {
-                instructions: Vec::new(),
-                spans: Vec::new(),
-                functions: Vec::new(),
-                obj_defs: Vec::new(),
-                errors: Vec::new(),
-            };
-
-            let mut func_locals = Locals::new();
-            for param in &params {
-                // Parameters are immutable, so we define them as such.
-                // Extract object type from type annotation if present.
-                let obj_type = param.1.as_ref().map(|t| match t {
-                    crate::parser::TypeAnnotation::Named(name) => name.clone(),
+            // All params are immutable; type comes from annotation.
+            let param_fn = |_name: &str, ann: &Option<crate::parser::TypeAnnotation>| {
+                let obj_type = ann.as_ref().map(|t| match t {
+                    crate::parser::TypeAnnotation::Named(n) => n.clone(),
                 });
-                func_locals.define(param.0.clone(), false, obj_type);
-            }
-
-            for param in params.iter().rev() {
-                // SAFETY: We just defined every param in the loop above,
-                // so resolve is guaranteed to succeed.
-                let slot = func_locals.resolve(param.0.as_str()).unwrap();
-
-                emit(&mut func_output, Instruction::SetLocal(slot.0), &stmt_span);
-            }
-
-            // Build a function table that includes this function (for
-            // recursion) plus all previously defined functions.
-            let mut inner_fn_table = FunctionTable::new();
-            for (name, idx) in &fn_table.names {
-                inner_fn_table.register(name.clone(), *idx);
-            }
-
-            inner_fn_table.register(name.clone(), func_idx);
-
-            compile_expression_with_loops(
-                &mut func_output,
-                &inner_fn_table,
-                obj_table,
-                &mut Vec::new(),
-                &mut func_locals,
-                body,
-            );
-
-            emit(&mut func_output, Instruction::PushInt(0), &stmt_span);
-            emit(&mut func_output, Instruction::Return, &stmt_span);
-
-            output.functions[func_idx] = CompiledFunction {
-                name: name.clone(),
-                arity: params.len(),
-                params: params.into_iter().map(|p| p.0).collect(),
-                num_locals: func_locals.count,
-                instructions: func_output.instructions,
-                spans: func_output.spans,
+                (false, obj_type)
             };
 
-            output.functions.extend(func_output.functions);
-            output.errors.extend(func_output.errors);
+            compile_function_body(
+                output,
+                fn_table,
+                obj_table,
+                FunctionBodyConfig {
+                    name: &name,
+                    params: &params,
+                    param_local_fn: &param_fn,
+                    self_name: Some(&name),
+                    body,
+                    span: &stmt_span,
+                },
+            );
         }
         Statement::Return(Some(expr)) => {
             compile_expression(output, fn_table, obj_table, locals, expr);
@@ -403,11 +359,60 @@ fn compile_statement(
             emit(output, Instruction::PushInt(0), &stmt_span);
             emit(output, Instruction::Return, &stmt_span);
         }
-        Statement::ObjDef { name, fields } => {
+        Statement::ObjDef {
+            name,
+            fields,
+            methods,
+        } => {
             let field_names: Vec<String> = fields.into_iter().map(|(name, _)| name).collect();
+            let mut method_indices: HashMap<String, usize> = HashMap::new();
+
+            // Build a temporary ObjTable that includes the current type
+            // so method bodies can resolve self.field accesses. The real
+            // registration happens after compile_statement returns.
+            let mut inner_obj_table = ObjTable::new();
+            for (tname, &idx) in &obj_table.names {
+                inner_obj_table.names.insert(tname.clone(), idx);
+            }
+            inner_obj_table.defs = obj_table.defs.clone();
+            inner_obj_table.register(name.clone(), field_names.clone(), HashMap::new());
+
+            for method in methods {
+                // `self` gets the object's type and is mutable (for
+                // field mutation). Other params are immutable.
+                let obj_name = name.clone();
+                let param_fn = move |pname: &str, ann: &Option<crate::parser::TypeAnnotation>| {
+                    if pname == "self" {
+                        (true, Some(obj_name.clone()))
+                    } else {
+                        let obj_type = ann.as_ref().map(|t| match t {
+                            crate::parser::TypeAnnotation::Named(n) => n.clone(),
+                        });
+                        (false, obj_type)
+                    }
+                };
+
+                let func_idx = compile_function_body(
+                    output,
+                    fn_table,
+                    &inner_obj_table,
+                    FunctionBodyConfig {
+                        name: &method.name,
+                        params: &method.params,
+                        param_local_fn: &param_fn,
+                        self_name: None,
+                        body: method.body,
+                        span: &stmt_span,
+                    },
+                );
+
+                method_indices.insert(method.name.clone(), func_idx);
+            }
+
             output.obj_defs.push(ObjDefInfo {
                 name,
                 fields: field_names,
+                methods: method_indices,
             });
         }
         Statement::FieldAssignment {
@@ -512,6 +517,109 @@ fn compile_statement(
             emit(output, Instruction::Pop, &expr_span);
         }
     }
+}
+
+/// Callback that determines (mutable, obj_type) for each parameter.
+type ParamLocalFn = dyn Fn(&str, &Option<crate::parser::TypeAnnotation>) -> (bool, Option<String>);
+
+/// Configuration for compiling a function or method body.
+struct FunctionBodyConfig<'a> {
+    name: &'a str,
+    params: &'a [(String, Option<crate::parser::TypeAnnotation>)],
+    param_local_fn: &'a ParamLocalFn,
+    /// If Some, registers the function under this name for recursion.
+    self_name: Option<&'a str>,
+    body: Spanned<Expression>,
+    span: &'a Span,
+}
+
+/// Shared compilation logic for functions and methods. Reserves a slot in
+/// the function table, compiles the body with its own locals and output,
+/// then writes the result back. Returns the function table index.
+fn compile_function_body(
+    output: &mut CompilerOutput,
+    fn_table: &FunctionTable,
+    obj_table: &ObjTable,
+    config: FunctionBodyConfig<'_>,
+) -> usize {
+    let FunctionBodyConfig {
+        name,
+        params,
+        param_local_fn,
+        self_name,
+        body,
+        span,
+    } = config;
+    let func_idx = output.functions.len();
+    let param_names: Vec<String> = params.iter().map(|p| p.0.clone()).collect();
+
+    // Push a placeholder so the index is valid.
+    output.functions.push(CompiledFunction {
+        name: name.to_string(),
+        arity: params.len(),
+        params: param_names.clone(),
+        num_locals: 0,
+        instructions: Vec::new(),
+        spans: Vec::new(),
+    });
+
+    let mut func_output = CompilerOutput {
+        instructions: Vec::new(),
+        spans: Vec::new(),
+        functions: Vec::new(),
+        obj_defs: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    let mut func_locals = Locals::new();
+    for param in params {
+        let (mutable, obj_type) = param_local_fn(&param.0, &param.1);
+        func_locals.define(param.0.clone(), mutable, obj_type);
+    }
+
+    // Pop params from the stack into locals in reverse order.
+    for pname in param_names.iter().rev() {
+        // SAFETY: We just defined every param in the loop above,
+        // so resolve is guaranteed to succeed.
+        let slot = func_locals.resolve(pname.as_str()).unwrap();
+        emit(&mut func_output, Instruction::SetLocal(slot.0), span);
+    }
+
+    // Build a function table that includes all previously defined functions.
+    // If self_name is set, also register this function for recursion.
+    let mut inner_fn_table = FunctionTable::new();
+    for (fname, idx) in &fn_table.names {
+        inner_fn_table.register(fname.clone(), *idx);
+    }
+    if let Some(self_name) = self_name {
+        inner_fn_table.register(self_name.to_string(), func_idx);
+    }
+
+    compile_expression_with_loops(
+        &mut func_output,
+        &inner_fn_table,
+        obj_table,
+        &mut Vec::new(),
+        &mut func_locals,
+        body,
+    );
+
+    emit(&mut func_output, Instruction::PushInt(0), span);
+    emit(&mut func_output, Instruction::Return, span);
+
+    output.functions[func_idx] = CompiledFunction {
+        name: name.to_string(),
+        arity: params.len(),
+        params: param_names,
+        num_locals: func_locals.count,
+        instructions: func_output.instructions,
+        spans: func_output.spans,
+    };
+
+    output.functions.extend(func_output.functions);
+    output.errors.extend(func_output.errors);
+
+    func_idx
 }
 
 fn compile_expression_with_loops(
@@ -646,6 +754,20 @@ fn compile_expression(
             } else {
                 emit(output, Instruction::PushInt(0), &span);
             }
+        }
+        Expression::MethodCall {
+            object,
+            method,
+            args,
+        } => {
+            compile_expression(output, fn_table, obj_table, locals, *object);
+
+            let arity = args.len();
+            for arg in args {
+                compile_expression(output, fn_table, obj_table, locals, arg);
+            }
+
+            emit(output, Instruction::CallMethod(method, arity), &span);
         }
         Expression::BinaryOp { op, left, right } => {
             compile_expression(output, fn_table, obj_table, locals, *left);

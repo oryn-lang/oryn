@@ -773,3 +773,77 @@ fn double_negate() {
 fn negate_precedence() {
     assert_eq!(run("print(-2 + 3)"), "1\n");
 }
+
+// --- Methods ---
+
+#[test]
+fn method_no_params() {
+    assert_eq!(
+        run(
+            "obj Vec2 {\nx: i32\ny: i32\nfn sum(self) {\nrn self.x + self.y\n}\n}\nlet v = Vec2 { x: 3, y: 4 }\nprint(v.sum())"
+        ),
+        "7\n",
+    );
+}
+
+#[test]
+fn method_with_params() {
+    assert_eq!(
+        run(
+            "obj Counter {\ncount: i32\nfn add(self, n: i32) {\nrn self.count + n\n}\n}\nlet c = Counter { count: 10 }\nprint(c.add(5))"
+        ),
+        "15\n",
+    );
+}
+
+#[test]
+fn method_mutates_field() {
+    assert_eq!(
+        run(
+            "obj Counter {\ncount: i32\nfn inc(self) {\nself.count = self.count + 1\n}\n}\nlet c = Counter { count: 0 }\nc.inc()\nprint(c.count)"
+        ),
+        "1\n",
+    );
+}
+
+#[test]
+fn method_on_val_binding() {
+    // Methods should still work on val bindings (calling doesn't reassign).
+    assert_eq!(
+        run(
+            "obj Vec2 {\nx: i32\ny: i32\nfn sum(self) {\nrn self.x + self.y\n}\n}\nval v = Vec2 { x: 1, y: 2 }\nprint(v.sum())"
+        ),
+        "3\n",
+    );
+}
+
+#[test]
+fn method_with_float_fields() {
+    assert_eq!(
+        run(
+            "obj Circle {\nradius: f32\nfn area(self) {\nrn self.radius * self.radius * 3.14\n}\n}\nlet c = Circle { radius: 2.0 }\nprint(c.area())"
+        ),
+        "12.56\n",
+    );
+}
+
+#[test]
+fn multiple_methods() {
+    assert_eq!(
+        run(
+            "obj Vec2 {\nx: i32\ny: i32\nfn get_x(self) {\nrn self.x\n}\nfn get_y(self) {\nrn self.y\n}\n}\nlet v = Vec2 { x: 10, y: 20 }\nprint(v.get_x())\nprint(v.get_y())"
+        ),
+        "10\n20\n",
+    );
+}
+
+#[test]
+fn undefined_method_is_runtime_error() {
+    let chunk = oryn::Chunk::compile("obj Foo {\nx: i32\n}\nlet f = Foo { x: 1 }\nf.nope()")
+        .expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::UndefinedFunction { .. }));
+}
