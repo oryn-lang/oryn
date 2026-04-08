@@ -91,6 +91,7 @@ impl ObjTable {
         name: String,
         fields: Vec<String>,
         methods: HashMap<String, usize>,
+        signatures: Vec<String>,
     ) -> usize {
         let idx = self.defs.len();
 
@@ -99,6 +100,7 @@ impl ObjTable {
             name,
             fields,
             methods,
+            signatures,
         });
 
         idx

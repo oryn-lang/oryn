@@ -58,6 +58,7 @@ pub(crate) fn compile(statements: Vec<Spanned<Statement>>) -> CompilerOutput {
                 output.obj_defs[i].name.clone(),
                 output.obj_defs[i].fields.clone(),
                 output.obj_defs[i].methods.clone(),
+                output.obj_defs[i].signatures.clone(),
             );
         }
     }
@@ -336,9 +337,17 @@ fn compile_statement(
         } => {
             let mut field_names: Vec<String> = Vec::new();
             let mut method_indices: HashMap<String, usize> = HashMap::new();
+            let mut all_required: Vec<String> = Vec::new();
 
             for used_type in &uses {
                 if let Some((_, def)) = obj_table.resolve(used_type) {
+                    // Collect signatures from the used type.
+                    for req in &def.signatures {
+                        if !all_required.contains(req) {
+                            all_required.push(req.clone());
+                        }
+                    }
+
                     for field in &def.fields {
                         if field_names.contains(field) {
                             output.errors.push(OrynError::Compiler {
@@ -382,42 +391,81 @@ fn compile_statement(
                 inner_obj_table.names.insert(tname.clone(), idx);
             }
             inner_obj_table.defs = obj_table.defs.clone();
-            inner_obj_table.register(name.clone(), field_names.clone(), HashMap::new());
+            inner_obj_table.register(
+                name.clone(),
+                field_names.clone(),
+                HashMap::new(),
+                Vec::new(),
+            );
+
+            // Collect this type's own required methods (bodyless declarations)
+            // before the loop moves `methods`.
+            let own_required: Vec<String> = methods
+                .iter()
+                .filter(|m| m.body.is_none())
+                .map(|m| m.name.clone())
+                .collect();
 
             for method in methods {
-                let obj_name = name.clone();
-                let param_fn = move |pname: &str, ann: &Option<crate::parser::TypeAnnotation>| {
-                    if pname == "self" {
-                        (true, Some(obj_name.clone()))
-                    } else {
-                        let obj_type = ann.as_ref().map(|t| match t {
-                            crate::parser::TypeAnnotation::Named(n) => n.clone(),
-                        });
-                        (false, obj_type)
-                    }
-                };
+                if let Some(body) = method.body {
+                    let obj_name = name.clone();
 
-                let func_idx = compile_function_body(
-                    output,
-                    fn_table,
-                    &inner_obj_table,
-                    FunctionBodyConfig {
-                        name: &method.name,
-                        params: &method.params,
-                        param_local_fn: &param_fn,
-                        self_name: None,
-                        body: method.body,
-                        span: &stmt_span,
-                    },
-                );
+                    let param_fn =
+                        move |pname: &str, ann: &Option<crate::parser::TypeAnnotation>| {
+                            if pname == "self" {
+                                (true, Some(obj_name.clone()))
+                            } else {
+                                let obj_type = ann.as_ref().map(|t| match t {
+                                    crate::parser::TypeAnnotation::Named(n) => n.clone(),
+                                });
+                                (false, obj_type)
+                            }
+                        };
 
-                method_indices.insert(method.name.clone(), func_idx);
+                    let func_idx = compile_function_body(
+                        output,
+                        fn_table,
+                        &inner_obj_table,
+                        FunctionBodyConfig {
+                            name: &method.name,
+                            params: &method.params,
+                            param_local_fn: &param_fn,
+                            self_name: None,
+                            body,
+                            span: &stmt_span,
+                        },
+                    );
+
+                    method_indices.insert(method.name.clone(), func_idx);
+                }
+            }
+
+            // Check: every required method from used types must be satisfied.
+            for req in &all_required {
+                if !method_indices.contains_key(req) {
+                    output.errors.push(OrynError::Compiler {
+                        span: stmt_span.clone(),
+                        message: format!("object `{name}` is missing required method `{req}`"),
+                    });
+                }
+            }
+
+            // The final signatures for this type are its own bodyless
+            // declarations, minus any that were already implemented, plus any
+            // inherited requirements that were NOT satisfied here (so they
+            // propagate upward).
+            let mut final_required: Vec<String> = Vec::new();
+            for req in own_required {
+                if !method_indices.contains_key(&req) {
+                    final_required.push(req);
+                }
             }
 
             output.obj_defs.push(ObjDefInfo {
                 name,
                 fields: field_names,
                 methods: method_indices,
+                signatures: final_required,
             });
         }
 

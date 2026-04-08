@@ -1013,3 +1013,60 @@ fn not_non_bool_is_type_error() {
     let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
     assert!(matches!(err, oryn::RuntimeError::TypeError { .. }));
 }
+
+// --- Signatures (required methods) ---
+
+#[test]
+fn signature_satisfied_by_own_method() {
+    assert_eq!(
+        run(
+            "obj Printable {\nfn to_string(self) -> String\n}\nobj Foo {\nuse Printable\nname: String\nfn to_string(self) -> String {\nrn self.name\n}\n}\nlet f = Foo { name: \"hello\" }\nprint(f.to_string())"
+        ),
+        "hello\n",
+    );
+}
+
+#[test]
+fn missing_signature_is_compile_error() {
+    let result = oryn::Chunk::compile(
+        "obj Printable {\nfn to_string(self) -> String\n}\nobj Foo {\nuse Printable\nname: String\n}",
+    );
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("missing required method"))
+    }));
+}
+
+#[test]
+fn signature_satisfied_by_composed_method() {
+    // Health provides heal(), Healable requires heal().
+    // Player uses both - heal() from Health satisfies Healable's requirement.
+    assert_eq!(
+        run(
+            "obj Healable {\nfn heal(self, amount: i32)\n}\nobj Health {\nhp: i32\nfn heal(self, amount: i32) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
+        ),
+        "70\n",
+    );
+}
+
+#[test]
+fn signature_on_type_with_no_uses() {
+    // An object with only signatures and no fields is valid (a pure interface).
+    let result = oryn::Chunk::compile("obj Printable {\nfn to_string(self) -> String\n}");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn multiple_signatures_all_must_be_satisfied() {
+    let result = oryn::Chunk::compile(
+        "obj Serializable {\nfn to_string(self) -> String\nfn to_bytes(self) -> i32\n}\nobj Foo {\nuse Serializable\nfn to_string(self) -> String {\nrn \"foo\"\n}\n}",
+    );
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("to_bytes"))
+    }));
+}

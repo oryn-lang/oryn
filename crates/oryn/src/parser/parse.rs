@@ -374,7 +374,7 @@ fn program<'src>() -> impl Parser<
                     .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
                     .or_not(),
             )
-            .then(block.clone())
+            .then(block.clone().or_not())
             .map(|(((name, params), return_type), body)| ObjMethod {
                 name,
                 params,

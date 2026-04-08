@@ -289,8 +289,7 @@ impl VM {
                         match value {
                             Value::Bool(b) => state.stack.push(Value::Bool(!b)),
                             _ => {
-                                let span =
-                                    Self::current_span_from_state(&state.frames, chunk);
+                                let span = Self::current_span_from_state(&state.frames, chunk);
                                 return Err(RuntimeError::TypeError {
                                     expected: ValueType::Bool,
                                     actual: ValueType::from(&value),

@@ -78,6 +78,9 @@ pub struct ObjDefInfo {
     pub fields: Vec<String>,
     /// Method name -> function table index.
     pub methods: HashMap<String, usize>,
+    /// Method signatures (declared without a body).
+    /// Types that `use` this one must provide implementations.
+    pub signatures: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

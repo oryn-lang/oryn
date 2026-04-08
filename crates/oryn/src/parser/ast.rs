@@ -141,6 +141,6 @@ pub enum TypeAnnotation {
 pub struct ObjMethod {
     pub name: String,
     pub params: Vec<(String, Option<TypeAnnotation>)>,
-    pub body: Spanned<Expression>,
+    pub body: Option<Spanned<Expression>>,
     pub return_type: Option<TypeAnnotation>,
 }
