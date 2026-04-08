@@ -912,3 +912,104 @@ fn use_own_fields_after_composed() {
         "5\nthing\n",
     );
 }
+
+// --- Bug fix regression tests ---
+
+#[test]
+fn integer_overflow_is_runtime_error() {
+    let chunk = oryn::Chunk::compile("print(2147483647 + 1)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::IntegerOverflow { .. }));
+}
+
+#[test]
+fn integer_underflow_is_runtime_error() {
+    let chunk = oryn::Chunk::compile("print(-2147483647 - 2)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::IntegerOverflow { .. }));
+}
+
+#[test]
+fn integer_multiply_overflow_is_runtime_error() {
+    let chunk = oryn::Chunk::compile("print(2147483647 * 2)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::IntegerOverflow { .. }));
+}
+
+#[test]
+fn negate_min_int_is_overflow() {
+    // -2147483647 - 1 produces i32::MIN, then negating it overflows.
+    let chunk = oryn::Chunk::compile("let x = -2147483647 - 1\nprint(-x)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::IntegerOverflow { .. }));
+}
+
+#[test]
+fn method_wrong_arity_is_runtime_error() {
+    let chunk = oryn::Chunk::compile(
+        "obj Foo {\nx: i32\nfn add(self, n: i32) {\nrn self.x + n\n}\n}\nlet f = Foo { x: 1 }\nf.add()",
+    )
+    .expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::ArityMismatch { .. }));
+}
+
+#[test]
+fn method_too_many_args_is_runtime_error() {
+    let chunk = oryn::Chunk::compile(
+        "obj Foo {\nx: i32\nfn get(self) {\nrn self.x\n}\n}\nlet f = Foo { x: 1 }\nf.get(1, 2)",
+    )
+    .expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::ArityMismatch { .. }));
+}
+
+#[test]
+fn break_outside_loop_is_compile_error() {
+    let result = oryn::Chunk::compile("break");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("break outside"))
+    }));
+}
+
+#[test]
+fn continue_outside_loop_is_compile_error() {
+    let result = oryn::Chunk::compile("continue");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("continue outside"))
+    }));
+}
+
+#[test]
+fn not_non_bool_is_type_error() {
+    let chunk = oryn::Chunk::compile("print(not 5)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::TypeError { .. }));
+}

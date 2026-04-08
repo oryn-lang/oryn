@@ -482,11 +482,21 @@ fn compile_statement(
                 let idx = output.instructions.len();
                 emit(output, Instruction::Jump(0), &stmt_span);
                 loop_ctx.break_patches.push(idx);
+            } else {
+                output.errors.push(OrynError::Compiler {
+                    span: stmt_span,
+                    message: "break outside of loop".into(),
+                });
             }
         }
         Statement::Continue => {
             if let Some(loop_ctx) = loops.last() {
                 emit(output, Instruction::Jump(loop_ctx.start), &stmt_span);
+            } else {
+                output.errors.push(OrynError::Compiler {
+                    span: stmt_span,
+                    message: "continue outside of loop".into(),
+                });
             }
         }
 

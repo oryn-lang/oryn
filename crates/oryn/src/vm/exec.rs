@@ -286,15 +286,31 @@ impl VM {
                     Instruction::Not => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
-                        state
-                            .stack
-                            .push(Value::Bool(!matches!(value, Value::Bool(true))));
+                        match value {
+                            Value::Bool(b) => state.stack.push(Value::Bool(!b)),
+                            _ => {
+                                let span =
+                                    Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Bool,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
                     }
                     Instruction::Negate => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
                         match value {
-                            Value::Int(n) => state.stack.push(Value::Int(-n)),
+                            Value::Int(n) => {
+                                let result = n.checked_neg().ok_or_else(|| {
+                                    RuntimeError::IntegerOverflow {
+                                        span: Self::current_span_from_state(&state.frames, chunk),
+                                    }
+                                })?;
+                                state.stack.push(Value::Int(result));
+                            }
                             Value::Float(n) => state.stack.push(Value::Float(-n)),
                             _ => {
                                 let span = Self::current_span_from_state(&state.frames, chunk);
@@ -311,7 +327,14 @@ impl VM {
                         let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
                         match (left, right) {
-                            (Value::Int(l), Value::Int(r)) => state.stack.push(Value::Int(l + r)),
+                            (Value::Int(l), Value::Int(r)) => {
+                                let result = l.checked_add(r).ok_or_else(|| {
+                                    RuntimeError::IntegerOverflow {
+                                        span: Self::current_span_from_state(&state.frames, chunk),
+                                    }
+                                })?;
+                                state.stack.push(Value::Int(result));
+                            }
                             (Value::Float(l), Value::Float(r)) => {
                                 state.stack.push(Value::Float(l + r))
                             }
@@ -331,7 +354,14 @@ impl VM {
                         let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
                         match (left, right) {
-                            (Value::Int(l), Value::Int(r)) => state.stack.push(Value::Int(l - r)),
+                            (Value::Int(l), Value::Int(r)) => {
+                                let result = l.checked_sub(r).ok_or_else(|| {
+                                    RuntimeError::IntegerOverflow {
+                                        span: Self::current_span_from_state(&state.frames, chunk),
+                                    }
+                                })?;
+                                state.stack.push(Value::Int(result));
+                            }
                             (Value::Float(l), Value::Float(r)) => {
                                 state.stack.push(Value::Float(l - r))
                             }
@@ -351,7 +381,14 @@ impl VM {
                         let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
                         match (left, right) {
-                            (Value::Int(l), Value::Int(r)) => state.stack.push(Value::Int(l * r)),
+                            (Value::Int(l), Value::Int(r)) => {
+                                let result = l.checked_mul(r).ok_or_else(|| {
+                                    RuntimeError::IntegerOverflow {
+                                        span: Self::current_span_from_state(&state.frames, chunk),
+                                    }
+                                })?;
+                                state.stack.push(Value::Int(result));
+                            }
                             (Value::Float(l), Value::Float(r)) => {
                                 state.stack.push(Value::Float(l * r))
                             }
@@ -505,8 +542,19 @@ impl VM {
 
                         let func = &chunk.functions[func_idx];
 
-                        // Advance caller's ip, then push a new frame.
-                        // The function's arity includes self, so total args = arity + 1.
+                        // The caller passes `arity` args plus the object (self).
+                        // The compiled method's arity includes self.
+                        let total_args = arity + 1;
+                        if total_args != func.arity {
+                            let span = Self::current_span_from_state(&state.frames, chunk);
+                            return Err(RuntimeError::ArityMismatch {
+                                name: format!("{}.{}", obj_def.name, method_name),
+                                expected: func.arity - 1, // exclude self in message
+                                actual: arity,
+                                span,
+                            });
+                        }
+
                         // SAFETY: Same frame-stack invariant.
                         state.frames.last_mut().unwrap().ip += 1;
 

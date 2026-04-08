@@ -74,6 +74,9 @@ pub enum RuntimeError {
     DivisionByZero {
         span: Option<Range<usize>>,
     },
+    IntegerOverflow {
+        span: Option<Range<usize>>,
+    },
 }
 
 /// The type of a value.
@@ -154,6 +157,7 @@ impl fmt::Display for RuntimeError {
                 write!(f, "cannot apply `{op}` to {left} and {right}")
             }
             RuntimeError::DivisionByZero { .. } => write!(f, "division by zero"),
+            RuntimeError::IntegerOverflow { .. } => write!(f, "integer overflow"),
         }
     }
 }
@@ -170,6 +174,7 @@ impl RuntimeError {
             RuntimeError::ArityMismatch { span, .. } => span.as_ref(),
             RuntimeError::TypeMismatch { span, .. } => span.as_ref(),
             RuntimeError::DivisionByZero { span } => span.as_ref(),
+            RuntimeError::IntegerOverflow { span } => span.as_ref(),
         }
     }
 }
