@@ -57,5 +57,5 @@ mod vm;
 
 pub use errors::{OrynError, RuntimeError};
 pub use lexer::{Token, lex};
-pub use parser::{BinOp, Expression, Spanned, Statement, parse};
+pub use parser::{BinOp, Expression, Spanned, Statement, TypeAnnotation, parse};
 pub use vm::{Chunk, VM};

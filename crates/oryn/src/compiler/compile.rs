@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::OrynError;
-use crate::parser::{BinOp, Expression, Span, Spanned, Statement, UnaryOp};
+use crate::compiler::types::ResolvedType;
+use crate::parser::{BinOp, Expression, Span, Spanned, Statement, TypeAnnotation, UnaryOp};
 
-use super::tables::{FunctionTable, Locals, ObjTable};
+use super::tables::{FunctionSignature, FunctionTable, Locals, ObjTable};
 use super::types::{CompiledFunction, CompilerOutput, FunctionBodyConfig, Instruction, ObjDefInfo};
 
 // ---------------------------------------------------------------------------
@@ -49,7 +50,19 @@ pub(crate) fn compile(statements: Vec<Spanned<Statement>>) -> CompilerOutput {
         // If a new function was added, register it in the lookup table
         // so subsequent statements can call it.
         for i in fn_count_before..output.functions.len() {
-            fn_table.register(output.functions[i].name.clone(), i);
+            let func = &output.functions[i];
+            fn_table.register(func.name.clone(), i);
+
+            // Store the type signature for call-site checking.
+            if let Some(ref rt) = func.return_type {
+                fn_table.signatures.insert(
+                    func.name.clone(),
+                    FunctionSignature {
+                        param_types: func.param_types.clone(),
+                        return_type: rt.clone(),
+                    },
+                );
+            }
         }
 
         // Same for object definitions.
@@ -57,6 +70,7 @@ pub(crate) fn compile(statements: Vec<Spanned<Statement>>) -> CompilerOutput {
             obj_table.register(
                 output.obj_defs[i].name.clone(),
                 output.obj_defs[i].fields.clone(),
+                output.obj_defs[i].field_types.clone(),
                 output.obj_defs[i].methods.clone(),
                 output.obj_defs[i].signatures.clone(),
             );
@@ -80,13 +94,13 @@ fn emit(output: &mut CompilerOutput, instruction: Instruction, span: &Span) {
 fn resolve_field(
     output: &mut CompilerOutput,
     obj_table: &ObjTable,
-    obj_type: &Option<String>,
+    obj_type: &ResolvedType,
     field: &str,
     span: &Span,
 ) -> Option<usize> {
     let type_name = match obj_type {
-        Some(name) => name,
-        None => {
+        ResolvedType::Object(name) => name,
+        _ => {
             output.errors.push(OrynError::Compiler {
                 span: span.clone(),
                 message: "cannot access field on non-object".into(),
@@ -118,6 +132,50 @@ fn resolve_field(
     }
 }
 
+// Resolves a type annotation to a `ResolvedType`.
+fn resolve_type_annotation(
+    ann: &TypeAnnotation,
+    obj_table: &ObjTable,
+) -> Result<ResolvedType, String> {
+    match ann {
+        TypeAnnotation::Named(name) => match name.as_str() {
+            "i32" => Ok(ResolvedType::Int),
+            "f32" => Ok(ResolvedType::Float),
+            "bool" => Ok(ResolvedType::Bool),
+            "String" => Ok(ResolvedType::Str),
+            other => {
+                if obj_table.resolve(other).is_some() {
+                    Ok(ResolvedType::Object(other.to_string()))
+                } else {
+                    Err(format!("undefined type `{other}`"))
+                }
+            }
+        },
+    }
+}
+
+// Checks that the expected and actual types match, and adds an error to the output if they don't.
+fn check_types(
+    output: &mut CompilerOutput,
+    expected: &ResolvedType,
+    actual: &ResolvedType,
+    span: &Span,
+    message: &str,
+) {
+    if *expected != ResolvedType::Unknown && *actual != ResolvedType::Unknown && expected != actual
+    {
+        output.errors.push(OrynError::Compiler {
+            span: span.clone(),
+            message: format!(
+                "{}: expected `{}`, got `{}`",
+                message,
+                expected.display_name(),
+                actual.display_name()
+            ),
+        });
+    }
+}
+
 /// Shared compilation logic for functions and methods. Reserves a slot in
 /// the function table, compiles the body with its own locals and output,
 /// then writes the result back. Returns the function table index.
@@ -130,10 +188,12 @@ fn compile_function_body(
     let FunctionBodyConfig {
         name,
         params,
+        param_types,
         param_local_fn,
         self_name,
         body,
         span,
+        return_type,
     } = config;
     let func_idx = output.functions.len();
     let param_names: Vec<String> = params.iter().map(|p| p.0.clone()).collect();
@@ -143,6 +203,8 @@ fn compile_function_body(
         name: name.to_string(),
         arity: params.len(),
         params: param_names.clone(),
+        param_types: param_types.clone(),
+        return_type: return_type.clone(),
         num_locals: 0,
         instructions: Vec::new(),
         spans: Vec::new(),
@@ -196,6 +258,8 @@ fn compile_function_body(
         name: name.to_string(),
         arity: params.len(),
         params: param_names,
+        param_types,
+        return_type,
         num_locals: func_locals.count,
         instructions: func_output.instructions,
         spans: func_output.spans,
@@ -223,40 +287,85 @@ fn compile_statement(
 
     match stmt.node {
         // -- Bindings --
-        Statement::Let { name, value, .. } => {
-            let obj_type = match &value.node {
-                Expression::ObjLiteral { type_name, .. } => Some(type_name.clone()),
-                Expression::Ident(src) => locals.resolve(src).and_then(|(_, _, t)| t),
-                _ => None,
-            };
+        Statement::Let {
+            name,
+            value,
+            type_ann,
+        } => {
+            let declared_type =
+                type_ann
+                    .as_ref()
+                    .map(|ann| match resolve_type_annotation(ann, obj_table) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            output.errors.push(OrynError::Compiler {
+                                span: stmt_span.clone(),
+                                message: msg,
+                            });
+                            ResolvedType::Unknown
+                        }
+                    });
 
-            compile_expression(output, fn_table, obj_table, locals, value);
-            let slot = locals.define(name, true, obj_type);
+            let inferred_type = compile_expression(output, fn_table, obj_table, locals, value);
+
+            if let Some(ref decl) = declared_type {
+                check_types(output, decl, &inferred_type, &stmt_span, "type mismatch");
+            }
+
+            let resolved = declared_type.unwrap_or(inferred_type);
+            let slot = locals.define(name, true, resolved);
             emit(output, Instruction::SetLocal(slot), &stmt_span);
         }
-        Statement::Val { name, value, .. } => {
-            let obj_type = match &value.node {
-                Expression::ObjLiteral { type_name, .. } => Some(type_name.clone()),
-                Expression::Ident(src) => locals.resolve(src).and_then(|(_, _, t)| t),
-                _ => None,
-            };
+        Statement::Val {
+            name,
+            value,
+            type_ann,
+        } => {
+            let declared_type =
+                type_ann
+                    .as_ref()
+                    .map(|ann| match resolve_type_annotation(ann, obj_table) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            output.errors.push(OrynError::Compiler {
+                                span: stmt_span.clone(),
+                                message: msg,
+                            });
+                            ResolvedType::Unknown
+                        }
+                    });
 
-            compile_expression(output, fn_table, obj_table, locals, value);
-            let slot = locals.define(name, false, obj_type);
+            let inferred_type = compile_expression(output, fn_table, obj_table, locals, value);
+
+            if let Some(ref decl) = declared_type {
+                check_types(output, decl, &inferred_type, &stmt_span, "type mismatch");
+            }
+
+            let resolved = declared_type.unwrap_or(inferred_type);
+            let slot = locals.define(name, false, resolved);
             emit(output, Instruction::SetLocal(slot), &stmt_span);
         }
 
         // -- Assignments --
         Statement::Assignment { name, value } => {
-            compile_expression(output, fn_table, obj_table, locals, value);
+            let value_type = compile_expression(output, fn_table, obj_table, locals, value);
 
-            if let Some((slot, mutable, _)) = locals.resolve(&name) {
+            if let Some((slot, mutable, stored_type)) = locals.resolve(&name) {
                 if !mutable {
                     output.errors.push(OrynError::Compiler {
                         span: stmt_span.clone(),
                         message: format!("cannot reassign val binding `{name}`"),
                     });
                 }
+
+                check_types(
+                    output,
+                    &stored_type,
+                    &value_type,
+                    &stmt_span,
+                    "assignment type mismatch",
+                );
+
                 emit(output, Instruction::SetLocal(slot), &stmt_span);
             } else {
                 output.errors.push(OrynError::Compiler {
@@ -273,9 +382,9 @@ fn compile_statement(
             let (obj_type, mutable) = match &object.node {
                 Expression::Ident(name) => match locals.resolve(name) {
                     Some((_, m, t)) => (t, m),
-                    None => (None, true),
+                    None => (ResolvedType::Unknown, true),
                 },
-                _ => (None, true),
+                _ => (ResolvedType::Unknown, true),
             };
 
             if !mutable {
@@ -296,13 +405,58 @@ fn compile_statement(
 
         // -- Functions --
         Statement::Function {
-            name, params, body, ..
+            name,
+            params,
+            body,
+            return_type,
         } => {
-            let param_fn = |_name: &str, ann: &Option<crate::parser::TypeAnnotation>| {
-                let obj_type = ann.as_ref().map(|t| match t {
-                    crate::parser::TypeAnnotation::Named(n) => n.clone(),
-                });
-                (false, obj_type)
+            // Pre-resolve param types so the closure doesn't need to
+            // capture obj_table (which would cause a lifetime issue).
+            let resolved_params: HashMap<String, ResolvedType> = params
+                .iter()
+                .map(|(name, ann)| {
+                    let t = ann
+                        .as_ref()
+                        .map(|a| {
+                            resolve_type_annotation(a, obj_table).unwrap_or(ResolvedType::Unknown)
+                        })
+                        .unwrap_or(ResolvedType::Unknown);
+                    (name.clone(), t)
+                })
+                .collect();
+
+            let param_fn = move |pname: &str, _ann: &Option<crate::parser::TypeAnnotation>| {
+                let resolved = resolved_params
+                    .get(pname)
+                    .cloned()
+                    .unwrap_or(ResolvedType::Unknown);
+                (false, resolved)
+            };
+
+            for (param_name, ann) in &params {
+                if ann.is_none() {
+                    output.errors.push(OrynError::Compiler {
+                        span: stmt_span.clone(),
+                        message: format!("parameter `{param_name}` requires a type annotation"),
+                    });
+                }
+            }
+
+            let param_types: Vec<ResolvedType> = params
+                .iter()
+                .map(|(_, ann)| {
+                    ann.as_ref()
+                        .map(|a| {
+                            resolve_type_annotation(a, obj_table).unwrap_or(ResolvedType::Unknown)
+                        })
+                        .unwrap_or(ResolvedType::Unknown)
+                })
+                .collect();
+
+            // No return type annotation = void function.
+            let return_resolved = match &return_type {
+                Some(rt) => resolve_type_annotation(rt, obj_table).unwrap_or(ResolvedType::Unknown),
+                None => ResolvedType::Void,
             };
 
             compile_function_body(
@@ -312,15 +466,28 @@ fn compile_statement(
                 FunctionBodyConfig {
                     name: &name,
                     params: &params,
+                    param_types,
                     param_local_fn: &param_fn,
                     self_name: Some(&name),
                     body,
                     span: &stmt_span,
+                    return_type: Some(return_resolved),
                 },
             );
         }
         Statement::Return(Some(expr)) => {
-            compile_expression(output, fn_table, obj_table, locals, expr);
+            let return_type = compile_expression(output, fn_table, obj_table, locals, expr);
+
+            if let Some(ref expected) = locals.return_type {
+                check_types(
+                    output,
+                    expected,
+                    &return_type,
+                    &stmt_span,
+                    "return type mismatch",
+                );
+            }
+
             emit(output, Instruction::Return, &stmt_span);
         }
         Statement::Return(None) => {
@@ -336,6 +503,7 @@ fn compile_statement(
             uses,
         } => {
             let mut field_names: Vec<String> = Vec::new();
+            let mut field_types: Vec<ResolvedType> = Vec::new();
             let mut method_indices: HashMap<String, usize> = HashMap::new();
             let mut all_required: Vec<String> = Vec::new();
 
@@ -380,8 +548,20 @@ fn compile_statement(
             }
 
             // Then append this obj's own fields.
-            for (name, _) in fields {
-                field_names.push(name);
+            for (field_name, type_ann, field_span) in fields {
+                field_names.push(field_name.clone());
+
+                match resolve_type_annotation(&type_ann, obj_table) {
+                    Ok(t) => field_types.push(t),
+                    Err(msg) => {
+                        output.errors.push(OrynError::Compiler {
+                            span: field_span,
+                            message: format!("field `{field_name}`: {msg}"),
+                        });
+
+                        field_types.push(ResolvedType::Unknown);
+                    }
+                }
             }
 
             // Build a temporary ObjTable that includes the current type
@@ -394,6 +574,7 @@ fn compile_statement(
             inner_obj_table.register(
                 name.clone(),
                 field_names.clone(),
+                field_types.clone(),
                 HashMap::new(),
                 Vec::new(),
             );
@@ -410,17 +591,17 @@ fn compile_statement(
                 if let Some(body) = method.body {
                     let obj_name = name.clone();
 
-                    let param_fn =
-                        move |pname: &str, ann: &Option<crate::parser::TypeAnnotation>| {
-                            if pname == "self" {
-                                (true, Some(obj_name.clone()))
-                            } else {
-                                let obj_type = ann.as_ref().map(|t| match t {
-                                    crate::parser::TypeAnnotation::Named(n) => n.clone(),
-                                });
-                                (false, obj_type)
-                            }
-                        };
+                    let param_fn = move |pname: &str, ann: &Option<TypeAnnotation>| {
+                        if pname == "self" {
+                            (true, ResolvedType::Object(obj_name.clone()))
+                        } else {
+                            let resolved = match ann {
+                                Some(a) => ResolvedType::from_annotation(a),
+                                None => ResolvedType::Unknown,
+                            };
+                            (false, resolved)
+                        }
+                    };
 
                     let func_idx = compile_function_body(
                         output,
@@ -429,10 +610,12 @@ fn compile_statement(
                         FunctionBodyConfig {
                             name: &method.name,
                             params: &method.params,
+                            param_types: Vec::new(),
                             param_local_fn: &param_fn,
                             self_name: None,
                             body,
                             span: &stmt_span,
+                            return_type: None,
                         },
                     );
 
@@ -464,6 +647,7 @@ fn compile_statement(
             output.obj_defs.push(ObjDefInfo {
                 name,
                 fields: field_names,
+                field_types: Vec::new(),
                 methods: method_indices,
                 signatures: final_required,
             });
@@ -568,13 +752,15 @@ fn compile_expression_with_loops(
     loops: &mut Vec<LoopContext>,
     locals: &mut Locals,
     expr: Spanned<Expression>,
-) {
+) -> ResolvedType {
     let span = expr.span.clone();
     match expr.node {
         Expression::Block(stmts) => {
             for stmt in stmts {
                 compile_statement(output, fn_table, obj_table, loops, locals, stmt);
             }
+
+            ResolvedType::Unknown
         }
         other => compile_expression(
             output,
@@ -592,27 +778,47 @@ fn compile_expression(
     obj_table: &ObjTable,
     locals: &mut Locals,
     expr: Spanned<Expression>,
-) {
+) -> ResolvedType {
     let span = expr.span.clone();
 
     match expr.node {
         // -- Literals --
-        Expression::True => emit(output, Instruction::PushBool(true), &span),
-        Expression::False => emit(output, Instruction::PushBool(false), &span),
-        Expression::Float(n) => emit(output, Instruction::PushFloat(n), &span),
-        Expression::Int(n) => emit(output, Instruction::PushInt(n), &span),
-        Expression::String(s) => emit(output, Instruction::PushString(s), &span),
+        Expression::True => {
+            emit(output, Instruction::PushBool(true), &span);
+            ResolvedType::Bool
+        }
+        Expression::False => {
+            emit(output, Instruction::PushBool(false), &span);
+            ResolvedType::Bool
+        }
+        Expression::Float(n) => {
+            emit(output, Instruction::PushFloat(n), &span);
+            ResolvedType::Float
+        }
+        Expression::Int(n) => {
+            emit(output, Instruction::PushInt(n), &span);
+            ResolvedType::Int
+        }
+        Expression::String(s) => {
+            emit(output, Instruction::PushString(s), &span);
+            ResolvedType::Str
+        }
 
         // -- Variables --
         Expression::Ident(name) => {
-            if let Some(slot) = locals.resolve(&name) {
-                emit(output, Instruction::GetLocal(slot.0), &span);
+            if let Some((slot, _, resolved_type)) = locals.resolve(&name) {
+                emit(output, Instruction::GetLocal(slot), &span);
+
+                resolved_type
             } else {
                 output.errors.push(OrynError::Compiler {
                     span: span.clone(),
                     message: format!("undefined variable `{name}`"),
                 });
+
                 emit(output, Instruction::PushInt(0), &span);
+
+                ResolvedType::Unknown
             }
         }
 
@@ -648,23 +854,32 @@ fn compile_expression(
                                 "missing field `{def_field}` in `{type_name}` literal"
                             ),
                         });
+
                         emit(output, Instruction::PushInt(0), &span);
                     }
                 }
 
                 emit(output, Instruction::NewObject(type_idx, num_fields), &span);
+
+                ResolvedType::Object(type_name)
             } else {
                 output.errors.push(OrynError::Compiler {
                     span: span.clone(),
                     message: format!("undefined type `{type_name}`"),
                 });
+
                 emit(output, Instruction::PushInt(0), &span);
+
+                ResolvedType::Unknown
             }
         }
         Expression::FieldAccess { object, field } => {
             let obj_type = match &object.node {
-                Expression::Ident(name) => locals.resolve(name).and_then(|(_, _, t)| t),
-                _ => None,
+                Expression::Ident(name) => locals
+                    .resolve(name)
+                    .map(|(_, _, t)| t)
+                    .unwrap_or(ResolvedType::Unknown),
+                _ => ResolvedType::Unknown,
             };
 
             compile_expression(output, fn_table, obj_table, locals, *object);
@@ -674,6 +889,8 @@ fn compile_expression(
             } else {
                 emit(output, Instruction::PushInt(0), &span);
             }
+
+            ResolvedType::Unknown
         }
         Expression::MethodCall {
             object,
@@ -688,11 +905,13 @@ fn compile_expression(
             }
 
             emit(output, Instruction::CallMethod(method, arity), &span);
+
+            ResolvedType::Unknown
         }
 
         // -- Operators --
         Expression::BinaryOp { op, left, right } => {
-            compile_expression(output, fn_table, obj_table, locals, *left);
+            let left_type = compile_expression(output, fn_table, obj_table, locals, *left);
             compile_expression(output, fn_table, obj_table, locals, *right);
 
             emit(
@@ -713,9 +932,23 @@ fn compile_expression(
                 },
                 &span,
             );
+
+            match op {
+                // Comparisons always return bool
+                BinOp::Equals
+                | BinOp::NotEquals
+                | BinOp::LessThan
+                | BinOp::GreaterThan
+                | BinOp::LessThanEquals
+                | BinOp::GreaterThanEquals => ResolvedType::Bool,
+                // Logical ops return bool
+                BinOp::And | BinOp::Or => ResolvedType::Bool,
+                // Arithmetic returns the left operand's type
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => left_type,
+            }
         }
         Expression::UnaryOp { op, expr: operand } => {
-            compile_expression(output, fn_table, obj_table, locals, *operand);
+            let operand_type = compile_expression(output, fn_table, obj_table, locals, *operand);
 
             emit(
                 output,
@@ -725,29 +958,57 @@ fn compile_expression(
                 },
                 &span,
             );
+
+            operand_type
         }
 
         // -- Calls --
         Expression::Call { name, args } => {
             let arity = args.len();
 
+            let mut arg_types = Vec::new();
             for arg in args {
-                compile_expression(output, fn_table, obj_table, locals, arg);
+                let arg_type = compile_expression(output, fn_table, obj_table, locals, arg);
+
+                arg_types.push(arg_type);
+            }
+
+            if let Some(sig) = fn_table.signatures.get(&name) {
+                for (i, (arg_type, param_type)) in
+                    arg_types.iter().zip(&sig.param_types).enumerate()
+                {
+                    check_types(
+                        output,
+                        param_type,
+                        arg_type,
+                        &span,
+                        &format!("argument {} type mismatch", i + 1),
+                    );
+                }
             }
 
             if let Some(idx) = fn_table.resolve(&name) {
                 emit(output, Instruction::Call(idx, arity), &span);
             } else {
-                emit(output, Instruction::CallBuiltin(name, arity), &span);
+                emit(output, Instruction::CallBuiltin(name.clone(), arity), &span);
             }
+
+            fn_table
+                .signatures
+                .get(&name)
+                .map(|sig| sig.return_type.clone())
+                .unwrap_or(ResolvedType::Unknown)
         }
 
         // -- Blocks --
         Expression::Block(stmts) => {
             let mut no_loops = Vec::new();
+
             for stmt in stmts {
                 compile_statement(output, fn_table, obj_table, &mut no_loops, locals, stmt);
             }
+
+            ResolvedType::Unknown
         }
     }
 }

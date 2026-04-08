@@ -20,8 +20,12 @@ pub struct SymbolInfo {
     /// Byte span of the entire enclosing statement.
     pub full_span: Range<usize>,
     pub kind: SymbolKind,
-    /// For functions, the parameter names.
+    /// For functions, the parameter names with types (e.g. "a: i32").
     pub params: Option<Vec<String>>,
+    /// The type annotation as a string (e.g. "i32", "Vec2").
+    pub type_name: Option<String>,
+    /// For functions, the return type annotation.
+    pub return_type: Option<String>,
     /// 0 = top-level, 1+ = nested in function/block.
     pub scope_depth: usize,
 }
@@ -109,9 +113,21 @@ fn walk_statement(
     stmt: &Spanned<Statement>,
 ) {
     match &stmt.node {
-        Statement::Let { name, value, .. } | Statement::Val { name, value, .. } => {
-            // The name token is the first ident matching `name` in the statement span.
+        Statement::Let {
+            name,
+            value,
+            type_ann,
+        }
+        | Statement::Val {
+            name,
+            value,
+            type_ann,
+        } => {
             if let Some(name_span) = find_ident(idents, name, &stmt.span) {
+                let type_name = type_ann.as_ref().map(|ann| match ann {
+                    oryn::TypeAnnotation::Named(n) => n.clone(),
+                });
+
                 let idx = table.definitions.len();
                 table.definitions.push(SymbolInfo {
                     name: name.clone(),
@@ -119,28 +135,47 @@ fn walk_statement(
                     full_span: stmt.span.clone(),
                     kind: SymbolKind::Variable,
                     params: None,
+                    type_name,
+                    return_type: None,
                     scope_depth: scopes.len() - 1,
                 });
-                // Register in current scope.
                 if let Some(scope) = scopes.last_mut() {
                     scope.insert(name.clone(), idx);
                 }
             }
-            // Walk the value expression for references.
             walk_expression(idents, table, scopes, value);
         }
         Statement::Function {
-            name, params, body, ..
+            name,
+            params,
+            body,
+            return_type,
         } => {
-            // Register the function name as a definition.
             if let Some(name_span) = find_ident(idents, name, &stmt.span) {
+                // Format params with types: "a: i32, b: i32"
+                let param_strs: Vec<String> = params
+                    .iter()
+                    .map(|(pname, ann)| match ann {
+                        Some(oryn::TypeAnnotation::Named(t)) => {
+                            format!("{pname}: {t}")
+                        }
+                        None => pname.clone(),
+                    })
+                    .collect();
+
+                let ret = return_type.as_ref().map(|rt| match rt {
+                    oryn::TypeAnnotation::Named(n) => n.clone(),
+                });
+
                 let idx = table.definitions.len();
                 table.definitions.push(SymbolInfo {
                     name: name.clone(),
                     name_span,
                     full_span: stmt.span.clone(),
                     kind: SymbolKind::Function,
-                    params: Some(params.clone().into_iter().map(|p| p.0).collect()),
+                    params: Some(param_strs),
+                    type_name: None,
+                    return_type: ret,
                     scope_depth: scopes.len() - 1,
                 });
                 if let Some(scope) = scopes.last_mut() {
@@ -148,12 +183,14 @@ fn walk_statement(
                 }
             }
 
-            // Push a new scope for the function body.
             scopes.push(HashMap::new());
 
-            // Register parameters as definitions in the function scope.
-            for (param_name, _type_ann) in params {
+            for (param_name, type_ann) in params {
                 if let Some(param_span) = find_ident(idents, param_name, &stmt.span) {
+                    let type_name = type_ann.as_ref().map(|ann| match ann {
+                        oryn::TypeAnnotation::Named(n) => n.clone(),
+                    });
+
                     let idx = table.definitions.len();
                     table.definitions.push(SymbolInfo {
                         name: param_name.clone(),
@@ -161,6 +198,8 @@ fn walk_statement(
                         full_span: stmt.span.clone(),
                         kind: SymbolKind::Parameter,
                         params: None,
+                        type_name,
+                        return_type: None,
                         scope_depth: scopes.len() - 1,
                     });
                     if let Some(scope) = scopes.last_mut() {

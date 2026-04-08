@@ -43,7 +43,7 @@ pub enum Statement {
     Return(Option<Spanned<Expression>>),
     ObjDef {
         name: String,
-        fields: Vec<(String, TypeAnnotation)>,
+        fields: Vec<(String, TypeAnnotation, Span)>,
         methods: Vec<ObjMethod>,
         uses: Vec<String>,
     },

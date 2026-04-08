@@ -17,10 +17,14 @@ pub fn hover(source: &str, pos: Position, symbol_table: &SymbolTable) -> Option<
     let contents = match &token {
         oryn::Token::Ident(name) => hover_ident(name, offset, symbol_table),
         oryn::Token::Int(n) => Some(format!("`{n}` - i32 literal")),
+        oryn::Token::Float(n) => Some(format!("`{n}` - f32 literal")),
         oryn::Token::String(s) => Some(format!("`\"{s}\"` - String literal")),
         oryn::Token::True => Some("`true` - bool literal".to_string()),
         oryn::Token::False => Some("`false` - bool literal".to_string()),
         oryn::Token::Let => Some("`let` - declare a mutable variable".to_string()),
+        oryn::Token::Val => Some("`val` - declare an immutable variable".to_string()),
+        oryn::Token::Obj => Some("`obj` - declare an object type".to_string()),
+        oryn::Token::Use => Some("`use` - compose fields and methods from another type".to_string()),
         oryn::Token::Fn => Some("`fn` - declare a function".to_string()),
         oryn::Token::Rn => Some("`rn` - return a value from a function".to_string()),
         oryn::Token::If => Some("`if` - conditional branch".to_string()),
@@ -82,9 +86,25 @@ fn format_definition(def: &super::analysis::SymbolInfo) -> String {
                 .as_ref()
                 .map(|p| p.join(", "))
                 .unwrap_or_default();
-            format!("```\nfn {}({})\n```", def.name, params)
+            let ret = match &def.return_type {
+                Some(rt) => format!(" -> {rt}"),
+                None => String::new(),
+            };
+            format!("```oryn\nfn {}({}){}\n```", def.name, params, ret)
         }
-        SymbolKind::Variable => format!("`let {}`", def.name),
-        SymbolKind::Parameter => format!("`{}` - parameter", def.name),
+        SymbolKind::Variable => {
+            let type_str = match &def.type_name {
+                Some(t) => format!(": {t}"),
+                None => String::new(),
+            };
+            format!("`let {}{}`", def.name, type_str)
+        }
+        SymbolKind::Parameter => {
+            let type_str = match &def.type_name {
+                Some(t) => format!(": {t}"),
+                None => String::new(),
+            };
+            format!("`{}{}`  - parameter", def.name, type_str)
+        }
     }
 }

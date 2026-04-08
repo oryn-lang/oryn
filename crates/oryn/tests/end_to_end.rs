@@ -288,42 +288,44 @@ fn break_in_nested_if() {
 
 #[test]
 fn simple_function() {
-    assert_eq!(run("fn greet() {\nprint(42)\n}\ngreet()"), "42\n",);
+    // No return type = void function.
+    assert_eq!(run("fn greet() {\nprint(42)\n}\ngreet()"), "42\n");
 }
 
 #[test]
 fn function_with_params() {
-    assert_eq!(run("fn add(a, b) {\nrn a + b\n}\nprint(add(3, 4))"), "7\n",);
+    assert_eq!(
+        run("fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nprint(add(3, 4))"),
+        "7\n",
+    );
 }
 
 #[test]
 fn function_return_value() {
     assert_eq!(
-        run("fn double(x) {\nrn x * 2\n}\nlet y = double(5)\nprint(y)"),
+        run("fn double(x: i32) -> i32 {\nrn x * 2\n}\nlet y = double(5)\nprint(y)"),
         "10\n",
     );
 }
 
 #[test]
 fn function_implicit_return() {
-    // A function without rn returns 0 by default.
-    assert_eq!(run("fn noop() {\nlet x = 1\n}\nprint(noop())"), "0\n",);
+    // A void function without rn returns 0 (placeholder until None exists).
+    assert_eq!(run("fn noop() {\nlet x = 1\n}\nprint(noop())"), "0\n");
 }
 
 #[test]
 fn function_with_locals() {
-    // Variables inside a function are local to that frame.
     assert_eq!(
-        run("let x = 1\nfn bump() {\nlet x = 99\nrn x\n}\nprint(bump())\nprint(x)"),
+        run("let x = 1\nfn bump() -> i32 {\nlet x = 99\nrn x\n}\nprint(bump())\nprint(x)"),
         "99\n1\n",
     );
 }
 
 #[test]
 fn recursive_function() {
-    // Classic: factorial.
     assert_eq!(
-        run("fn fact(n) {\nif n <= 1 { rn 1 }\nrn n * fact(n - 1)\n}\nprint(fact(5))"),
+        run("fn fact(n: i32) -> i32 {\nif n <= 1 { rn 1 }\nrn n * fact(n - 1)\n}\nprint(fact(5))"),
         "120\n",
     );
 }
@@ -331,7 +333,7 @@ fn recursive_function() {
 #[test]
 fn fibonacci() {
     assert_eq!(
-        run("fn fib(n) {\nif n <= 1 { rn n }\nrn fib(n - 1) + fib(n - 2)\n}\nprint(fib(10))"),
+        run("fn fib(n: i32) -> i32 {\nif n <= 1 { rn n }\nrn fib(n - 1) + fib(n - 2)\n}\nprint(fib(10))"),
         "55\n",
     );
 }
@@ -362,7 +364,7 @@ fn string_equality() {
 #[test]
 fn string_as_function_param() {
     assert_eq!(
-        run("fn greet(name) {\nprint(name)\n}\ngreet(\"alice\")"),
+        run("fn greet(name: String) {\nprint(name)\n}\ngreet(\"alice\")"),
         "alice\n",
     );
 }
@@ -371,7 +373,7 @@ fn string_as_function_param() {
 
 #[test]
 fn arity_mismatch_is_runtime_error() {
-    let chunk = oryn::Chunk::compile("fn add(a, b) {\nrn a + b\n}\nadd(1)").expect("compile error");
+    let chunk = oryn::Chunk::compile("fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nadd(1)").expect("compile error");
     let mut vm = oryn::VM::new();
     let mut output = Vec::new();
 
@@ -432,7 +434,7 @@ fn float_comparison() {
 #[test]
 fn float_in_function() {
     assert_eq!(
-        run("fn half(x) {\nrn x / 2.0\n}\nprint(half(5.0))"),
+        run("fn half(x: f32) -> f32 {\nrn x / 2.0\n}\nprint(half(5.0))"),
         "2.5\n",
     );
 }
@@ -484,7 +486,7 @@ fn let_reassignment_still_works() {
 #[test]
 fn val_in_function() {
     assert_eq!(
-        run("fn double(n) {\nval result = n * 2\nrn result\n}\nprint(double(5))"),
+        run("fn double(n: i32) -> i32 {\nval result = n * 2\nrn result\n}\nprint(double(5))"),
         "10\n",
     );
 }
@@ -594,7 +596,7 @@ fn val_with_type_annotation() {
 #[test]
 fn function_with_param_types() {
     assert_eq!(
-        run("fn add(a: i32, b: i32) {\nrn a + b\n}\nprint(add(2, 3))"),
+        run("fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nprint(add(2, 3))"),
         "5\n",
     );
 }
@@ -613,11 +615,14 @@ fn mixed_annotated_and_unannotated() {
 }
 
 #[test]
-fn function_with_some_typed_params() {
-    assert_eq!(
-        run("fn add(a: i32, b) {\nrn a + b\n}\nprint(add(2, 3))"),
-        "5\n",
-    );
+fn function_missing_param_type_is_compile_error() {
+    let result = oryn::Chunk::compile("fn add(a: i32, b) -> i32 {\nrn a + b\n}");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("requires a type"))
+    }));
 }
 
 // --- Objects ---
@@ -736,7 +741,7 @@ fn object_with_float_fields() {
 fn object_in_function() {
     assert_eq!(
         run(
-            "obj Vec2 {\nx: i32\ny: i32\n}\nfn get_x(v: Vec2) {\nrn v.x\n}\nlet v = Vec2 { x: 42, y: 0 }\nprint(get_x(v))"
+            "obj Vec2 {\nx: i32\ny: i32\n}\nfn get_x(v: Vec2) -> i32 {\nrn v.x\n}\nlet v = Vec2 { x: 42, y: 0 }\nprint(get_x(v))"
         ),
         "42\n",
     );
@@ -1069,4 +1074,85 @@ fn multiple_signatures_all_must_be_satisfied() {
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("to_bytes"))
     }));
+}
+
+// --- Type checking ---
+
+#[test]
+fn unknown_type_annotation_is_compile_error() {
+    let result = oryn::Chunk::compile("let x: banana = 5");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined type"))
+    }));
+}
+
+#[test]
+fn let_type_mismatch_is_compile_error() {
+    let result = oryn::Chunk::compile("let x: i32 = \"hello\"");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("type mismatch"))
+    }));
+}
+
+#[test]
+fn val_type_mismatch_is_compile_error() {
+    let result = oryn::Chunk::compile("val x: f32 = 5");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("type mismatch"))
+    }));
+}
+
+#[test]
+fn assignment_type_mismatch_is_compile_error() {
+    let result = oryn::Chunk::compile("let x = 5\nx = \"hello\"");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("type mismatch"))
+    }));
+}
+
+#[test]
+fn void_function_no_return_type_needed() {
+    // Functions without -> ReturnType are void.
+    assert_eq!(
+        run("fn greet(name: String) {\nprint(name)\n}\ngreet(\"world\")"),
+        "world\n",
+    );
+}
+
+#[test]
+fn obj_field_unknown_type_is_compile_error() {
+    let result = oryn::Chunk::compile("obj Foo { x: huge }");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined type"))
+    }));
+}
+
+#[test]
+fn correct_type_annotations_pass() {
+    assert_eq!(run("let x: i32 = 5\nprint(x)"), "5\n");
+    assert_eq!(run("let x: f32 = 3.14\nprint(x)"), "3.14\n");
+    assert_eq!(run("let x: bool = true\nprint(x)"), "true\n");
+    assert_eq!(run("let x: String = \"hi\"\nprint(x)"), "hi\n");
+}
+
+#[test]
+fn inferred_types_work_without_annotations() {
+    assert_eq!(run("let x = 5\nlet y = 10\nprint(x + y)"), "15\n");
+    assert_eq!(run("let x = 3.14\nprint(x)"), "3.14\n");
+    assert_eq!(run("let x = true\nprint(x)"), "true\n");
 }

@@ -358,7 +358,11 @@ fn program<'src>() -> impl Parser<
 
         let obj_field = select! { Token::Ident(name) => name }
             .then_ignore(just(Token::Colon))
-            .then(select! { Token::Ident(name) => TypeAnnotation::Named(name) });
+            .then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
+            .map_with(|(name, ty), extra| {
+                let s: SimpleSpan = extra.span();
+                (name, ty, s.start..s.end)
+            });
 
         let obj_method = just(Token::Fn)
             .ignore_then(select! { Token::Ident(name) => name })
@@ -383,7 +387,7 @@ fn program<'src>() -> impl Parser<
             });
 
         enum ObjItem {
-            Field(String, TypeAnnotation),
+            Field(String, TypeAnnotation, Span),
             Method(ObjMethod),
             Use(String),
         }
@@ -393,7 +397,7 @@ fn program<'src>() -> impl Parser<
         let obj_item = obj_method
             .map(ObjItem::Method)
             .or(use_item.map(ObjItem::Use))
-            .or(obj_field.map(|(name, ty)| ObjItem::Field(name, ty)));
+            .or(obj_field.map(|(name, ty, span)| ObjItem::Field(name, ty, span)));
 
         // obj <name> { <field>, <field> } or { <field> \n <field> }
         let field_sep = just(Token::Comma)
@@ -420,7 +424,7 @@ fn program<'src>() -> impl Parser<
 
                 for item in items {
                     match item {
-                        ObjItem::Field(name, ty) => fields.push((name, ty)),
+                        ObjItem::Field(name, ty, span) => fields.push((name, ty, span)),
                         ObjItem::Method(m) => methods.push(m),
                         ObjItem::Use(name) => uses.push(name),
                     }

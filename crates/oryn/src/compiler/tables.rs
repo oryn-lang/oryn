@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::compiler::types::ResolvedType;
+
 use super::types::ObjDefInfo;
 
 // ---------------------------------------------------------------------------
@@ -13,8 +15,9 @@ use super::types::ObjDefInfo;
 /// and typed function parameters.
 pub(super) struct Locals {
     // (slot, mutable, obj_type).
-    slots: HashMap<String, (usize, bool, Option<String>)>,
+    slots: HashMap<String, (usize, bool, ResolvedType)>,
     pub count: usize,
+    pub return_type: Option<ResolvedType>,
 }
 
 impl Locals {
@@ -22,10 +25,11 @@ impl Locals {
         Self {
             slots: HashMap::new(),
             count: 0,
+            return_type: None,
         }
     }
 
-    pub fn define(&mut self, name: String, mutable: bool, obj_type: Option<String>) -> usize {
+    pub fn define(&mut self, name: String, mutable: bool, obj_type: ResolvedType) -> usize {
         let slot = self.count;
 
         self.slots.insert(name, (slot, mutable, obj_type));
@@ -34,7 +38,7 @@ impl Locals {
         slot
     }
 
-    pub fn resolve(&self, name: &str) -> Option<(usize, bool, Option<String>)> {
+    pub fn resolve(&self, name: &str) -> Option<(usize, bool, ResolvedType)> {
         self.slots.get(name).cloned()
     }
 }
@@ -48,12 +52,14 @@ impl Locals {
 /// indices without borrowing the output.
 pub(super) struct FunctionTable {
     pub names: HashMap<String, usize>,
+    pub signatures: HashMap<String, FunctionSignature>,
 }
 
 impl FunctionTable {
     pub fn new() -> Self {
         Self {
             names: HashMap::new(),
+            signatures: HashMap::new(),
         }
     }
 
@@ -64,6 +70,11 @@ impl FunctionTable {
     pub fn resolve(&self, name: &str) -> Option<usize> {
         self.names.get(name).copied()
     }
+}
+
+pub(super) struct FunctionSignature {
+    pub param_types: Vec<ResolvedType>,
+    pub return_type: ResolvedType,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +101,7 @@ impl ObjTable {
         &mut self,
         name: String,
         fields: Vec<String>,
+        field_types: Vec<ResolvedType>,
         methods: HashMap<String, usize>,
         signatures: Vec<String>,
     ) -> usize {
@@ -99,6 +111,7 @@ impl ObjTable {
         self.defs.push(ObjDefInfo {
             name,
             fields,
+            field_types,
             methods,
             signatures,
         });
