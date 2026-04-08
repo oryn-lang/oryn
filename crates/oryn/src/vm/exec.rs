@@ -99,6 +99,10 @@ impl VM {
                         state.stack.push(Value::String(Gc::new(mc, s.clone())));
                     }
                     Instruction::GetLocal(slot) => {
+                        // SAFETY: A main frame is always pushed before the
+                        // execution loop, and frames are only popped on
+                        // Return (which continues past ip advancement).
+                        // The frame stack is never empty during dispatch.
                         let frame = state.frames.last().unwrap();
                         let value = frame.locals[*slot].clone();
 
@@ -106,6 +110,8 @@ impl VM {
                     }
                     Instruction::SetLocal(slot) => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        // SAFETY: Same invariant as GetLocal - frame stack
+                        // is never empty during instruction dispatch.
                         let frame = state.frames.last_mut().unwrap();
 
                         if *slot >= frame.locals.len() {
@@ -325,6 +331,8 @@ impl VM {
                             });
                         }
 
+                        // SAFETY: Same frame-stack invariant. We advance the
+                        // caller's ip before pushing the callee's frame.
                         state.frames.last_mut().unwrap().ip += 1;
 
                         state.frames.push(CallFrame {
@@ -353,11 +361,13 @@ impl VM {
                         };
 
                         if !condition {
+                            // SAFETY: Same frame-stack invariant.
                             state.frames.last_mut().unwrap().ip = *target;
                             continue;
                         }
                     }
                     Instruction::Jump(target) => {
+                        // SAFETY: Same frame-stack invariant.
                         state.frames.last_mut().unwrap().ip = *target;
                         continue;
                     }

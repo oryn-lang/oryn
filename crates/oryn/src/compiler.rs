@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use crate::parser::{BinOp, Expression, Span, Spanned, Statement, UnaryOp};
+use crate::{
+    OrynError,
+    parser::{BinOp, Expression, Span, Spanned, Statement, UnaryOp},
+};
 
 // Flat bytecode that the VM executes. The compiler's job is to walk the
 // tree-shaped AST and flatten it into this linear sequence. The VM uses
@@ -42,6 +45,7 @@ pub(crate) struct CompilerOutput {
     pub instructions: Vec<Instruction>,
     pub spans: Vec<Range<usize>>,
     pub functions: Vec<CompiledFunction>,
+    pub errors: Vec<OrynError>,
 }
 
 struct LoopContext {
@@ -51,7 +55,8 @@ struct LoopContext {
 
 /// Maps variable names to numeric slot indices during compilation.
 struct Locals {
-    slots: HashMap<String, usize>,
+    // (slot, mutable).
+    slots: HashMap<String, (usize, bool)>,
     count: usize,
 }
 
@@ -63,14 +68,16 @@ impl Locals {
         }
     }
 
-    fn define(&mut self, name: String) -> usize {
+    fn define(&mut self, name: String, mutable: bool) -> usize {
         let slot = self.count;
-        self.slots.insert(name, slot);
+
+        self.slots.insert(name, (slot, mutable));
         self.count += 1;
+
         slot
     }
 
-    fn resolve(&self, name: &str) -> Option<usize> {
+    fn resolve(&self, name: &str) -> Option<(usize, bool)> {
         self.slots.get(name).copied()
     }
 }
@@ -113,6 +120,7 @@ pub(crate) fn compile(statements: Vec<Spanned<Statement>>) -> CompilerOutput {
         instructions: Vec::new(),
         spans: Vec::new(),
         functions: Vec::new(),
+        errors: Vec::new(),
     };
     let mut loops: Vec<LoopContext> = Vec::new();
     let mut locals = Locals::new();
@@ -150,8 +158,35 @@ fn compile_statement(
     match stmt.node {
         Statement::Let { name, value } => {
             compile_expression(output, fn_table, locals, value);
-            let slot = locals.define(name);
+
+            let slot = locals.define(name, true);
+
             emit(output, Instruction::SetLocal(slot), &stmt_span);
+        }
+        Statement::Val { name, value } => {
+            compile_expression(output, fn_table, locals, value);
+
+            let slot = locals.define(name, false);
+
+            emit(output, Instruction::SetLocal(slot), &stmt_span);
+        }
+        Statement::Assignment { name, value } => {
+            compile_expression(output, fn_table, locals, value);
+
+            if let Some((slot, mutable)) = locals.resolve(&name) {
+                if !mutable {
+                    output.errors.push(OrynError::Compiler {
+                        span: stmt_span.clone(),
+                        message: format!("cannot reassign val binding `{name}`"),
+                    });
+                }
+
+                emit(output, Instruction::SetLocal(slot), &stmt_span);
+            } else {
+                let slot = locals.define(name, true);
+
+                emit(output, Instruction::SetLocal(slot), &stmt_span);
+            }
         }
         Statement::Function { name, params, body } => {
             // Reserve the function's index so recursive calls and
@@ -179,16 +214,21 @@ fn compile_statement(
                 instructions: Vec::new(),
                 spans: Vec::new(),
                 functions: Vec::new(),
+                errors: Vec::new(),
             };
 
             let mut func_locals = Locals::new();
             for param in &params {
-                func_locals.define(param.clone());
+                // Parameters are immutable, so we define them as such.
+                func_locals.define(param.clone(), false);
             }
 
             for param in params.iter().rev() {
+                // SAFETY: We just defined every param in the loop above,
+                // so resolve is guaranteed to succeed.
                 let slot = func_locals.resolve(param).unwrap();
-                emit(&mut func_output, Instruction::SetLocal(slot), &stmt_span);
+
+                emit(&mut func_output, Instruction::SetLocal(slot.0), &stmt_span);
             }
 
             // Build a function table that includes this function (for
@@ -197,6 +237,7 @@ fn compile_statement(
             for (name, idx) in &fn_table.names {
                 inner_fn_table.register(name.clone(), *idx);
             }
+
             inner_fn_table.register(name.clone(), func_idx);
 
             compile_expression_with_loops(
@@ -220,6 +261,7 @@ fn compile_statement(
             };
 
             output.functions.extend(func_output.functions);
+            output.errors.extend(func_output.errors);
         }
         Statement::Return(Some(expr)) => {
             compile_expression(output, fn_table, locals, expr);
@@ -228,15 +270,6 @@ fn compile_statement(
         Statement::Return(None) => {
             emit(output, Instruction::PushInt(0), &stmt_span);
             emit(output, Instruction::Return, &stmt_span);
-        }
-        Statement::Assignment { name, value } => {
-            compile_expression(output, fn_table, locals, value);
-            if let Some(slot) = locals.resolve(&name) {
-                emit(output, Instruction::SetLocal(slot), &stmt_span);
-            } else {
-                let slot = locals.define(name);
-                emit(output, Instruction::SetLocal(slot), &stmt_span);
-            }
         }
         Statement::If {
             condition,
@@ -355,9 +388,9 @@ fn compile_expression(
         }
         Expression::Ident(name) => {
             if let Some(slot) = locals.resolve(&name) {
-                emit(output, Instruction::GetLocal(slot), &span);
+                emit(output, Instruction::GetLocal(slot.0), &span);
             } else {
-                let slot = locals.define(name);
+                let slot = locals.define(name, true);
                 emit(output, Instruction::GetLocal(slot), &span);
             }
         }

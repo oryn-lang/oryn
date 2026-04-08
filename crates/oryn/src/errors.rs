@@ -5,7 +5,7 @@ use crate::vm::value::Value;
 
 /// An error from any phase of the pipeline: lexing, parsing, or runtime.
 ///
-/// `Lexer` and `Parser` variants carry byte-offset spans for diagnostics.
+/// `Lexer`, `Parser`, and `Compiler` variants carry byte-offset spans for diagnostics.
 /// `Runtime` wraps a [`RuntimeError`] from the VM.
 ///
 /// ```
@@ -20,6 +20,9 @@ use crate::vm::value::Value;
 ///         oryn::OrynError::Parser { span, message } => {
 ///             println!("{message} at {}..{}", span.start, span.end);
 ///         }
+///         oryn::OrynError::Compiler { span, message } => {
+///             println!("{message} at {}..{}", span.start, span.end);
+///         }
 ///         oryn::OrynError::Runtime(e) => {
 ///             println!("runtime: {e}");
 ///         }
@@ -30,6 +33,7 @@ use crate::vm::value::Value;
 pub enum OrynError {
     Lexer { span: Range<usize> },
     Parser { span: Range<usize>, message: String },
+    Compiler { span: Range<usize>, message: String },
     Runtime(RuntimeError),
 }
 
@@ -101,6 +105,7 @@ impl fmt::Display for OrynError {
                 write!(f, "unexpected character at {}..{}", span.start, span.end)
             }
             OrynError::Parser { message, .. } => write!(f, "{message}"),
+            OrynError::Compiler { message, .. } => write!(f, "{message}"),
             OrynError::Runtime(e) => write!(f, "{e}"),
         }
     }

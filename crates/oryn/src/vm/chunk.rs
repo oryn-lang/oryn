@@ -45,6 +45,9 @@ impl Chunk {
         }
 
         let output = compiler::compile(statements);
+        if !output.errors.is_empty() {
+            return Err(output.errors);
+        }
 
         Ok(Self {
             instructions: output.instructions,
@@ -53,7 +56,7 @@ impl Chunk {
         })
     }
 
-    /// Returns all lex and parse errors without compiling. An empty
+    /// Returns all lex, parse, and compile errors. An empty
     /// vec means the source is valid.
     ///
     /// ```
@@ -62,9 +65,16 @@ impl Chunk {
     /// ```
     pub fn check(source: &str) -> Vec<OrynError> {
         let (tokens, lex_errors) = lexer::lex(source);
-        let (_, parse_errors) = parser::parse(tokens);
+        let (statements, parse_errors) = parser::parse(tokens);
 
-        lex_errors.into_iter().chain(parse_errors).collect()
+        let mut errors: Vec<OrynError> = lex_errors.into_iter().chain(parse_errors).collect();
+
+        // Run the compiler even if there are lex/parse errors so that
+        // compile-time checks (e.g. val reassignment) are reported too.
+        let output = compiler::compile(statements);
+        errors.extend(output.errors);
+
+        errors
     }
 
     /// Returns a human-readable disassembly of the compiled bytecode.

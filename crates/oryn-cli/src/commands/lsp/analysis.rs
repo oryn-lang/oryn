@@ -109,7 +109,7 @@ fn walk_statement(
     stmt: &Spanned<Statement>,
 ) {
     match &stmt.node {
-        Statement::Let { name, value } => {
+        Statement::Let { name, value } | Statement::Val { name, value } => {
             // The name token is the first ident matching `name` in the statement span.
             if let Some(name_span) = find_ident(idents, name, &stmt.span) {
                 let idx = table.definitions.len();

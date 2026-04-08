@@ -11,6 +11,8 @@ pub enum Token {
     // Keywords.
     #[token("let")]
     Let,
+    #[token("val")]
+    Val,
     #[token("fn")]
     Fn,
     #[token("rn")]
@@ -102,6 +104,7 @@ impl Display for Token {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             Token::Let => write!(f, "let"),
+            Token::Val => write!(f, "val"),
             Token::Fn => write!(f, "fn"),
             Token::Rn => write!(f, "rn"),
             Token::True => write!(f, "true"),

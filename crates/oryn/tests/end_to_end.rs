@@ -450,3 +450,54 @@ fn mixed_int_float_is_runtime_error() {
 
     assert!(vm.run_with_writer(&chunk, &mut output).is_err());
 }
+
+// --- Val bindings ---
+
+#[test]
+fn val_binding() {
+    assert_eq!(run("val x = 42\nprint(x)"), "42\n");
+}
+
+#[test]
+fn val_binding_with_expression() {
+    assert_eq!(run("val x = 1 + 2\nprint(x)"), "3\n");
+}
+
+#[test]
+fn val_reassignment_is_compile_error() {
+    let result = oryn::Chunk::compile("val x = 1\nx = 2");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+    );
+}
+
+#[test]
+fn let_reassignment_still_works() {
+    assert_eq!(run("let x = 1\nx = 2\nprint(x)"), "2\n");
+}
+
+#[test]
+fn val_in_function() {
+    assert_eq!(
+        run("fn double(n) {\nval result = n * 2\nrn result\n}\nprint(double(5))"),
+        "10\n",
+    );
+}
+
+#[test]
+fn val_reassignment_in_function_is_compile_error() {
+    let result = oryn::Chunk::compile("fn bad() {\nval x = 1\nx = 2\n}");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+    );
+}

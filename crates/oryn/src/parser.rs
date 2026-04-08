@@ -37,6 +37,10 @@ pub enum Statement {
         name: String,
         value: Spanned<Expression>,
     },
+    Val {
+        name: String,
+        value: Spanned<Expression>,
+    },
     Function {
         name: String,
         params: Vec<String>,
@@ -368,6 +372,15 @@ fn program<'src>() -> impl Parser<
             })
             .labelled("assign statement");
 
+        let val_stmt = just(Token::Val)
+            .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
+            .then_ignore(just(Token::Equals))
+            .then(expr.clone())
+            .map_with(|(name, value), extra| {
+                Spanned::new(Statement::Val { name, value }, extra.span())
+            })
+            .labelled("val statement");
+
         // fn <name>(<params>) <block>
         let fn_stmt = just(Token::Fn)
             .ignore_then(select! { Token::Ident(name) => name }.labelled("function name"))
@@ -435,6 +448,7 @@ fn program<'src>() -> impl Parser<
 
         let_stmt
             .or(assign_stmt)
+            .or(val_stmt)
             .or(fn_stmt)
             .or(return_stmt)
             .or(if_stmt)

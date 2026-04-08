@@ -32,6 +32,17 @@ pub fn report_errors(filename: &str, source: &str, errors: &[OrynError]) -> io::
                     .finish()
                     .eprint((filename, src.clone()))?;
             }
+            OrynError::Compiler { span, message } => {
+                Report::build(ReportKind::Error, (filename, span.clone()))
+                    .with_message(message)
+                    .with_label(
+                        Label::new((filename, span.clone()))
+                            .with_message(message)
+                            .with_color(Color::Red),
+                    )
+                    .finish()
+                    .eprint((filename, src.clone()))?;
+            }
             OrynError::Runtime(e) => {
                 let message = e.to_string();
 

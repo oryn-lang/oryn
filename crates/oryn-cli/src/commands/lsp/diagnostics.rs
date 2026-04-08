@@ -15,6 +15,7 @@ pub fn publish_diagnostics(connection: &Connection, uri: Uri, source: &str) {
                     (span.clone(), "unexpected character".to_string())
                 }
                 oryn::OrynError::Parser { span, message } => (span.clone(), message.clone()),
+                oryn::OrynError::Compiler { span, message } => (span.clone(), message.clone()),
                 oryn::OrynError::Runtime(_) => return None,
             };
             Some(Diagnostic {
