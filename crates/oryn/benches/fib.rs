@@ -1,7 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 
 const FIB_SRC: &str = "\
-fn fib(n) {
+fn fib(n: i32) -> i32 {
     if n <= 1 { rn n }
     rn fib(n - 1) + fib(n - 2)
 }
