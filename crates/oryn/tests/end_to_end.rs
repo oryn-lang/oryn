@@ -1159,3 +1159,31 @@ fn inferred_types_work_without_annotations() {
     assert_eq!(run("let x = 3.14\nprint(x)"), "3.14\n");
     assert_eq!(run("let x = true\nprint(x)"), "true\n");
 }
+
+// --- Shadowing ---
+
+#[test]
+fn shadowing_same_type() {
+    assert_eq!(run("let x = 5\nlet x = 10\nprint(x)"), "10\n");
+}
+
+#[test]
+fn shadowing_different_type() {
+    assert_eq!(run("let x = 5\nlet x = \"hello\"\nprint(x)"), "hello\n");
+}
+
+#[test]
+fn shadowing_preserves_old_value_before_shadow() {
+    assert_eq!(
+        run("let x = 5\nprint(x)\nlet x = \"hello\"\nprint(x)"),
+        "5\nhello\n",
+    );
+}
+
+#[test]
+fn shadowing_multiple_times() {
+    assert_eq!(
+        run("let x = 1\nlet x = true\nlet x = \"done\"\nprint(x)"),
+        "done\n",
+    );
+}
