@@ -11,6 +11,81 @@ use crate::vm::value::ObjData;
 use super::chunk::Chunk;
 use super::value::{CallFrame, Value, VmState};
 
+/// Helper macro for binary arithmetic ops (Add, Sub, Mul).
+/// Pops two values, applies checked integer arithmetic or float arithmetic,
+/// and pushes the result. Reports TypeMismatch for incompatible types.
+macro_rules! arithmetic_op {
+    ($state:expr, $frames:expr, $chunk:expr, $op_str:expr, $checked_method:ident, $float_op:tt) => {{
+        let right = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+        let left = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+        match (left, right) {
+            (Value::Int(l), Value::Int(r)) => {
+                let result = l.$checked_method(r).ok_or_else(|| {
+                    RuntimeError::IntegerOverflow {
+                        span: VM::current_span_from_state($frames, $chunk),
+                    }
+                })?;
+                $state.stack.push(Value::Int(result));
+            }
+            (Value::Float(l), Value::Float(r)) => {
+                $state.stack.push(Value::Float(l $float_op r));
+            }
+            (ref l, ref r) => {
+                let span = VM::current_span_from_state($frames, $chunk);
+                return Err(RuntimeError::TypeMismatch {
+                    op: $op_str,
+                    left: ValueType::from(l),
+                    right: ValueType::from(r),
+                    span,
+                });
+            }
+        };
+    }};
+}
+
+/// Helper macro for comparison ops (Equal, NotEqual, LessThan, etc.).
+/// Pops two values, compares them, and pushes a Bool result.
+macro_rules! comparison_op {
+    ($state:expr, $op:tt) => {{
+        let right = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+        let left = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+        $state.stack.push(Value::Bool(left $op right));
+    }};
+}
+
+/// Helper macro for boolean logic ops (And, Or).
+/// Pops two values, checks both are Bool, applies the operator.
+/// Reports TypeError if either operand is not a Bool.
+macro_rules! bool_binary_op {
+    ($state:expr, $frames:expr, $chunk:expr, $op:tt) => {{
+        let right = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+        let left = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+        match (left, right) {
+            (Value::Bool(l), Value::Bool(r)) => {
+                $state.stack.push(Value::Bool(l $op r));
+            }
+            (Value::Bool(_), ref other) | (ref other, Value::Bool(_)) => {
+                let span = VM::current_span_from_state($frames, $chunk);
+                return Err(RuntimeError::TypeError {
+                    expected: ValueType::Bool,
+                    actual: ValueType::from(other),
+                    span,
+                });
+            }
+            (ref left_val, _) => {
+                let span = VM::current_span_from_state($frames, $chunk);
+                return Err(RuntimeError::TypeError {
+                    expected: ValueType::Bool,
+                    actual: ValueType::from(left_val),
+                    span,
+                });
+            }
+        }
+    }};
+}
+
 /// Stack-based virtual machine that executes compiled [`Chunk`]s.
 ///
 /// ```
@@ -196,92 +271,28 @@ impl VM {
                         continue;
                     }
                     Instruction::Equal => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        state.stack.push(Value::Bool(left == right));
+                        comparison_op!(state, ==);
                     }
                     Instruction::NotEqual => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        state.stack.push(Value::Bool(left != right));
+                        comparison_op!(state, !=);
                     }
                     Instruction::LessThan => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        state.stack.push(Value::Bool(left < right));
+                        comparison_op!(state, <);
                     }
                     Instruction::GreaterThan => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        state.stack.push(Value::Bool(left > right));
+                        comparison_op!(state, >);
                     }
                     Instruction::LessThanEquals => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        state.stack.push(Value::Bool(left <= right));
+                        comparison_op!(state, <=);
                     }
                     Instruction::GreaterThanEquals => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        state.stack.push(Value::Bool(left >= right));
+                        comparison_op!(state, >=);
                     }
                     Instruction::And => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        match (left, right) {
-                            (Value::Bool(l), Value::Bool(r)) => {
-                                state.stack.push(Value::Bool(l && r));
-                            }
-                            (Value::Bool(_), ref other) | (ref other, Value::Bool(_)) => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::Bool,
-                                    actual: ValueType::from(other),
-                                    span,
-                                });
-                            }
-                            (ref left_val, _) => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::Bool,
-                                    actual: ValueType::from(left_val),
-                                    span,
-                                });
-                            }
-                        }
+                        bool_binary_op!(state, &state.frames, chunk, &&);
                     }
                     Instruction::Or => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        match (left, right) {
-                            (Value::Bool(l), Value::Bool(r)) => {
-                                state.stack.push(Value::Bool(l || r));
-                            }
-                            (Value::Bool(_), ref other) | (ref other, Value::Bool(_)) => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::Bool,
-                                    actual: ValueType::from(other),
-                                    span,
-                                });
-                            }
-                            (ref left_val, _) => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::Bool,
-                                    actual: ValueType::from(left_val),
-                                    span,
-                                });
-                            }
-                        }
+                        bool_binary_op!(state, &state.frames, chunk, ||);
                     }
                     Instruction::Not => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
@@ -322,85 +333,13 @@ impl VM {
                         }
                     }
                     Instruction::Add => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        match (left, right) {
-                            (Value::Int(l), Value::Int(r)) => {
-                                let result = l.checked_add(r).ok_or_else(|| {
-                                    RuntimeError::IntegerOverflow {
-                                        span: Self::current_span_from_state(&state.frames, chunk),
-                                    }
-                                })?;
-                                state.stack.push(Value::Int(result));
-                            }
-                            (Value::Float(l), Value::Float(r)) => {
-                                state.stack.push(Value::Float(l + r))
-                            }
-                            (ref l, ref r) => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeMismatch {
-                                    op: "+",
-                                    left: ValueType::from(l),
-                                    right: ValueType::from(r),
-                                    span,
-                                });
-                            }
-                        };
+                        arithmetic_op!(state, &state.frames, chunk, "+", checked_add, +);
                     }
                     Instruction::Sub => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        match (left, right) {
-                            (Value::Int(l), Value::Int(r)) => {
-                                let result = l.checked_sub(r).ok_or_else(|| {
-                                    RuntimeError::IntegerOverflow {
-                                        span: Self::current_span_from_state(&state.frames, chunk),
-                                    }
-                                })?;
-                                state.stack.push(Value::Int(result));
-                            }
-                            (Value::Float(l), Value::Float(r)) => {
-                                state.stack.push(Value::Float(l - r))
-                            }
-                            (ref l, ref r) => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeMismatch {
-                                    op: "-",
-                                    left: ValueType::from(l),
-                                    right: ValueType::from(r),
-                                    span,
-                                });
-                            }
-                        };
+                        arithmetic_op!(state, &state.frames, chunk, "-", checked_sub, -);
                     }
                     Instruction::Mul => {
-                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-                        match (left, right) {
-                            (Value::Int(l), Value::Int(r)) => {
-                                let result = l.checked_mul(r).ok_or_else(|| {
-                                    RuntimeError::IntegerOverflow {
-                                        span: Self::current_span_from_state(&state.frames, chunk),
-                                    }
-                                })?;
-                                state.stack.push(Value::Int(result));
-                            }
-                            (Value::Float(l), Value::Float(r)) => {
-                                state.stack.push(Value::Float(l * r))
-                            }
-                            (ref l, ref r) => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeMismatch {
-                                    op: "*",
-                                    left: ValueType::from(l),
-                                    right: ValueType::from(r),
-                                    span,
-                                });
-                            }
-                        };
+                        arithmetic_op!(state, &state.frames, chunk, "*", checked_mul, *);
                     }
                     Instruction::Div => {
                         let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;

@@ -24,7 +24,9 @@ pub fn hover(source: &str, pos: Position, symbol_table: &SymbolTable) -> Option<
         oryn::Token::Let => Some("`let` - declare a mutable variable".to_string()),
         oryn::Token::Val => Some("`val` - declare an immutable variable".to_string()),
         oryn::Token::Obj => Some("`obj` - declare an object type".to_string()),
-        oryn::Token::Use => Some("`use` - compose fields and methods from another type".to_string()),
+        oryn::Token::Use => {
+            Some("`use` - compose fields and methods from another type".to_string())
+        }
         oryn::Token::Fn => Some("`fn` - declare a function".to_string()),
         oryn::Token::Rn => Some("`rn` - return a value from a function".to_string()),
         oryn::Token::If => Some("`if` - conditional branch".to_string()),

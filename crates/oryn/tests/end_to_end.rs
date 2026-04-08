@@ -333,7 +333,9 @@ fn recursive_function() {
 #[test]
 fn fibonacci() {
     assert_eq!(
-        run("fn fib(n: i32) -> i32 {\nif n <= 1 { rn n }\nrn fib(n - 1) + fib(n - 2)\n}\nprint(fib(10))"),
+        run(
+            "fn fib(n: i32) -> i32 {\nif n <= 1 { rn n }\nrn fib(n - 1) + fib(n - 2)\n}\nprint(fib(10))"
+        ),
         "55\n",
     );
 }
@@ -373,7 +375,8 @@ fn string_as_function_param() {
 
 #[test]
 fn arity_mismatch_is_runtime_error() {
-    let chunk = oryn::Chunk::compile("fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nadd(1)").expect("compile error");
+    let chunk = oryn::Chunk::compile("fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nadd(1)")
+        .expect("compile error");
     let mut vm = oryn::VM::new();
     let mut output = Vec::new();
 

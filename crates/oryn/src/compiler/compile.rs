@@ -176,6 +176,45 @@ fn check_types(
     }
 }
 
+/// Compile a let or val binding. Resolves the type annotation (if present),
+/// compiles the value expression, checks types, and defines the local.
+#[allow(clippy::too_many_arguments)]
+fn compile_binding(
+    output: &mut CompilerOutput,
+    fn_table: &FunctionTable,
+    obj_table: &ObjTable,
+    locals: &mut Locals,
+    name: String,
+    value: Spanned<Expression>,
+    type_ann: Option<crate::parser::TypeAnnotation>,
+    mutable: bool,
+    span: &Span,
+) {
+    let declared_type =
+        type_ann
+            .as_ref()
+            .map(|ann| match resolve_type_annotation(ann, obj_table) {
+                Ok(t) => t,
+                Err(msg) => {
+                    output.errors.push(OrynError::Compiler {
+                        span: span.clone(),
+                        message: msg,
+                    });
+                    ResolvedType::Unknown
+                }
+            });
+
+    let inferred_type = compile_expression(output, fn_table, obj_table, locals, value);
+
+    if let Some(ref decl) = declared_type {
+        check_types(output, decl, &inferred_type, span, "type mismatch");
+    }
+
+    let resolved = declared_type.unwrap_or(inferred_type);
+    let slot = locals.define(name, mutable, resolved);
+    emit(output, Instruction::SetLocal(slot), span);
+}
+
 /// Shared compilation logic for functions and methods. Reserves a slot in
 /// the function table, compiles the body with its own locals and output,
 /// then writes the result back. Returns the function table index.
@@ -292,58 +331,18 @@ fn compile_statement(
             value,
             type_ann,
         } => {
-            let declared_type =
-                type_ann
-                    .as_ref()
-                    .map(|ann| match resolve_type_annotation(ann, obj_table) {
-                        Ok(t) => t,
-                        Err(msg) => {
-                            output.errors.push(OrynError::Compiler {
-                                span: stmt_span.clone(),
-                                message: msg,
-                            });
-                            ResolvedType::Unknown
-                        }
-                    });
-
-            let inferred_type = compile_expression(output, fn_table, obj_table, locals, value);
-
-            if let Some(ref decl) = declared_type {
-                check_types(output, decl, &inferred_type, &stmt_span, "type mismatch");
-            }
-
-            let resolved = declared_type.unwrap_or(inferred_type);
-            let slot = locals.define(name, true, resolved);
-            emit(output, Instruction::SetLocal(slot), &stmt_span);
+            compile_binding(
+                output, fn_table, obj_table, locals, name, value, type_ann, true, &stmt_span,
+            );
         }
         Statement::Val {
             name,
             value,
             type_ann,
         } => {
-            let declared_type =
-                type_ann
-                    .as_ref()
-                    .map(|ann| match resolve_type_annotation(ann, obj_table) {
-                        Ok(t) => t,
-                        Err(msg) => {
-                            output.errors.push(OrynError::Compiler {
-                                span: stmt_span.clone(),
-                                message: msg,
-                            });
-                            ResolvedType::Unknown
-                        }
-                    });
-
-            let inferred_type = compile_expression(output, fn_table, obj_table, locals, value);
-
-            if let Some(ref decl) = declared_type {
-                check_types(output, decl, &inferred_type, &stmt_span, "type mismatch");
-            }
-
-            let resolved = declared_type.unwrap_or(inferred_type);
-            let slot = locals.define(name, false, resolved);
-            emit(output, Instruction::SetLocal(slot), &stmt_span);
+            compile_binding(
+                output, fn_table, obj_table, locals, name, value, type_ann, false, &stmt_span,
+            );
         }
 
         // -- Assignments --
