@@ -17,6 +17,8 @@ pub enum Token {
     Fn,
     #[token("rn")]
     Rn,
+    #[token("obj")]
+    Obj,
 
     // Literals.
     #[token("true")]
@@ -80,6 +82,8 @@ pub enum Token {
     Continue,
 
     // Punctuation.
+    #[token(".")]
+    Dot,
     #[token(":")]
     Colon,
     #[token("->")]
@@ -111,6 +115,7 @@ impl Display for Token {
             Token::Val => write!(f, "val"),
             Token::Fn => write!(f, "fn"),
             Token::Rn => write!(f, "rn"),
+            Token::Obj => write!(f, "obj"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::Float(n) => write!(f, "{n}"),
@@ -136,6 +141,7 @@ impl Display for Token {
             Token::While => write!(f, "while"),
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
+            Token::Dot => write!(f, "."),
             Token::Colon => write!(f, ":"),
             Token::Arrow => write!(f, "->"),
             Token::Comma => write!(f, ","),

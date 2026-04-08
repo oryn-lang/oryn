@@ -50,6 +50,15 @@ pub enum Statement {
         return_type: Option<TypeAnnotation>,
     },
     Return(Option<Spanned<Expression>>),
+    ObjDef {
+        name: String,
+        fields: Vec<(String, TypeAnnotation)>,
+    },
+    FieldAssignment {
+        object: Spanned<Expression>,
+        field: String,
+        value: Spanned<Expression>,
+    },
     Assignment {
         name: String,
         value: Spanned<Expression>,
@@ -77,6 +86,14 @@ pub enum Expression {
     Int(i32),
     String(String),
     Ident(String),
+    ObjLiteral {
+        type_name: String,
+        fields: Vec<(String, Spanned<Expression>)>,
+    },
+    FieldAccess {
+        object: Box<Spanned<Expression>>,
+        field: String,
+    },
     BinaryOp {
         op: BinOp,
         left: Box<Spanned<Expression>>,
@@ -178,12 +195,13 @@ fn atom<'src>(
 + Clone {
     // select! matches a single token and extracts data from it.
     let bool_lit = select! { Token::True => Expression::True, Token::False => Expression::False };
-
     let float = select! { Token::Float(n) => Expression::Float(n) };
-
     let int = select! { Token::Int(n) => Expression::Int(n) };
-
     let string = select! { Token::String(s) => Expression::String(s) };
+
+    let obj_field_value = select! { Token::Ident(name) => name }
+        .then_ignore(just(Token::Colon))
+        .then(expr.clone());
 
     // An identifier optionally followed by (args) becomes a call; otherwise
     // it stays as a plain identifier. .then(...or_not()) tries the call
@@ -196,10 +214,24 @@ fn atom<'src>(
                 .delimited_by(just(Token::LeftParen), just(Token::RightParen))
                 .or_not(),
         )
-        .map(|(name, args)| match args {
-            Some(args) => Expression::Call { name, args },
-            None => Expression::Ident(name),
-        });
+        .then(
+            obj_field_value
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LeftCurly), just(Token::RightCurly))
+                .or_not(),
+        )
+        .map(
+            |((name, call_args), obj_fields)| match (call_args, obj_fields) {
+                (Some(args), _) => Expression::Call { name, args },
+                (_, Some(fields)) => Expression::ObjLiteral {
+                    type_name: name,
+                    fields,
+                },
+                _ => Expression::Ident(name),
+            },
+        );
 
     // Parenthesized expression: just strips the parens and returns the inner expr.
     let paren = expr
@@ -227,10 +259,26 @@ fn program<'src>() -> impl Parser<
     let expr = recursive(|expr| {
         let atom = atom(expr.clone());
 
+        let postfix = atom.clone().foldl(
+            just(Token::Dot)
+                .ignore_then(select! { Token::Ident(name) => name })
+                .repeated(),
+            |object, field| {
+                let span = object.span.clone();
+                Spanned {
+                    node: Expression::FieldAccess {
+                        object: Box::new(object),
+                        field,
+                    },
+                    span,
+                }
+            },
+        );
+
         // foldl builds a left-associative chain: it parses one atom, then
         // zero or more (op, atom) pairs, folding them into nested BinaryOps.
         // * and / bind tighter, so they're parsed first as "product".
-        let product = atom.clone().foldl(
+        let product = postfix.clone().foldl(
             choice((
                 just(Token::Multiply).to(BinOp::Mul),
                 just(Token::Divide).to(BinOp::Div),
@@ -383,6 +431,23 @@ fn program<'src>() -> impl Parser<
             })
             .labelled("let statement");
 
+        let field_assign_stmt = select! { Token::Ident(name) => name }
+            .then_ignore(just(Token::Dot))
+            .then(select! { Token::Ident(field) => field })
+            .then_ignore(just(Token::Equals))
+            .then(expr.clone())
+            .map_with(|((name, field), value), extra| {
+                let name_span = extra.span();
+                Spanned::new(
+                    Statement::FieldAssignment {
+                        object: Spanned::new(Expression::Ident(name), name_span),
+                        field,
+                        value,
+                    },
+                    name_span,
+                )
+            });
+
         let assign_stmt = select! { Token::Ident(name) => name }
             .then_ignore(just(Token::Equals))
             .then(expr.clone())
@@ -407,6 +472,33 @@ fn program<'src>() -> impl Parser<
                 )
             })
             .labelled("val statement");
+
+        let obj_field = select! { Token::Ident(name) => name }
+            .then_ignore(just(Token::Colon))
+            .then(select! { Token::Ident(name) => TypeAnnotation::Named(name) });
+
+        // obj <name> { <field>, <field> } or { <field> \n <field> }
+        let field_sep = just(Token::Comma)
+            .then(newlines.clone().or_not())
+            .or(newlines.clone().map(|n| (Token::Newline, Some(n))))
+            .ignored();
+
+        let obj_stmt = just(Token::Obj)
+            .ignore_then(select! { Token::Ident(name) => name })
+            .then(
+                obj_field
+                    .separated_by(field_sep)
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(
+                        just(Token::LeftCurly).then(newlines.clone().or_not()),
+                        newlines.clone().or_not().then(just(Token::RightCurly)),
+                    ),
+            )
+            .map_with(|(name, fields), extra| {
+                Spanned::new(Statement::ObjDef { name, fields }, extra.span())
+            })
+            .labelled("object definition");
 
         // fn <name>(<params>) <block>
         let fn_stmt = just(Token::Fn)
@@ -488,8 +580,10 @@ fn program<'src>() -> impl Parser<
             .map_with(|expr, extra| Spanned::new(Statement::Expression(expr), extra.span()));
 
         let_stmt
+            .or(field_assign_stmt)
             .or(assign_stmt)
             .or(val_stmt)
+            .or(obj_stmt)
             .or(fn_stmt)
             .or(return_stmt)
             .or(if_stmt)

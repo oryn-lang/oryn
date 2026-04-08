@@ -1,5 +1,47 @@
 //! Oryn language library. Compile source code to bytecode and run it.
 //!
+//! # Pipeline
+//!
+//! ```text
+//!   source.on
+//!       |
+//!       v
+//!   +--------+     Vec<(Token, Span)>
+//!   | Lexer  | ----------------------.
+//!   | logos  |                        |
+//!   +--------+                        v
+//!       |  errors              +-----------+     Vec<Statement>
+//!       |  (bad tokens)        |  Parser   | -----------------.
+//!       v                      | chumsky   |                  |
+//!   OrynError::Lexer           +-----------+                  v
+//!                                  |  errors          +-----------+
+//!                                  |  (syntax)        | Compiler  |
+//!                                  v                  +-----------+
+//!                              OrynError::Parser          |
+//!                                                         | instructions
+//!                                                         | obj_defs
+//!                                                         | functions
+//!                                         errors          | errors
+//!                                   (undefined vars,      v
+//!                                    val reassign,   +---------+
+//!                                    bad fields)     |  Chunk  |
+//!                                                    +---------+
+//!                              OrynError::Compiler        |
+//!                                                         v
+//!                                                    +----------+     output
+//!                                                    |   VM     | ---------->
+//!                                                    | gc-arena |
+//!                                                    +----------+
+//!                                                         |
+//!                                                         v
+//!                                                  RuntimeError
+//!                                               (type mismatch,
+//!                                                div by zero,
+//!                                                stack underflow)
+//! ```
+//!
+//! # Usage
+//!
 //! ```
 //! let chunk = oryn::Chunk::compile("let x = 5\nprint(x)").unwrap();
 //! let mut vm = oryn::VM::new();

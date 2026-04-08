@@ -82,6 +82,7 @@ pub enum ValueType {
     Bool,
     Float,
     Int,
+    Object,
     String,
 }
 
@@ -92,6 +93,7 @@ impl From<&Value<'_>> for ValueType {
             Value::Bool(_) => ValueType::Bool,
             Value::Float(_) => ValueType::Float,
             Value::Int(_) => ValueType::Int,
+            Value::Object(_) => ValueType::Object,
             Value::String(_) => ValueType::String,
         }
     }
@@ -103,6 +105,7 @@ impl fmt::Display for ValueType {
             ValueType::Bool => write!(f, "bool"),
             ValueType::Float => write!(f, "float"),
             ValueType::Int => write!(f, "int"),
+            ValueType::Object => write!(f, "object"),
             ValueType::String => write!(f, "string"),
         }
     }

@@ -1,10 +1,12 @@
 use std::io::Write;
 use std::ops::Range;
 
+use gc_arena::lock::RefLock;
 use gc_arena::{Arena, Gc, Rootable};
 
 use crate::compiler::Instruction;
 use crate::errors::{RuntimeError, ValueType};
+use crate::vm::value::ObjData;
 
 use super::chunk::Chunk;
 use super::value::{CallFrame, Value, VmState};
@@ -128,8 +130,69 @@ impl VM {
 
                         frame.locals[*slot] = value;
                     }
+                    Instruction::NewObject(type_idx, num_fields) => {
+                        // The compiler pushed field values in definition
+                        // order. split_off pops them as a contiguous slice
+                        // so field indices line up with the ObjDefInfo.
+                        let num_fields = *num_fields;
+                        let fields: Vec<Value> =
+                            state.stack.split_off(state.stack.len() - num_fields);
+                        let obj = ObjData {
+                            type_idx: *type_idx,
+                            fields,
+                        };
+
+                        state
+                            .stack
+                            .push(Value::Object(Gc::new(mc, RefLock::new(obj))));
+                    }
+                    Instruction::GetField(field_idx) => {
+                        let obj = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        match obj {
+                            Value::Object(obj_ref) => {
+                                let data = obj_ref.borrow();
+                                let value = data.fields[*field_idx].clone();
+
+                                state.stack.push(value);
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Object,
+                                    actual: ValueType::from(&obj),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    Instruction::SetField(field_idx) => {
+                        // Stack order: object was pushed first, then value.
+                        // Pop in reverse: value first, then object.
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let obj = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        match obj {
+                            Value::Object(obj_ref) => {
+                                // borrow_mut requires the GC mutation context
+                                // to maintain gc-arena's write barrier invariant.
+                                obj_ref.borrow_mut(mc).fields[*field_idx] = value;
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Object,
+                                    actual: ValueType::from(&obj),
+                                    span,
+                                });
+                            }
+                        }
+                    }
                     Instruction::Return => {
                         state.frames.pop();
+
                         continue;
                     }
                     Instruction::Equal => {
@@ -334,6 +397,12 @@ impl VM {
                                         }
                                         Value::Int(n) => n.to_string(),
                                         Value::Bool(b) => b.to_string(),
+                                        Value::Object(obj_ref) => {
+                                            let data = obj_ref.borrow();
+                                            let type_name = &chunk.obj_defs[data.type_idx].name;
+
+                                            format!("<{type_name} instance>")
+                                        }
                                         Value::String(s) => s.as_str().to_string(),
                                     })
                                     .collect();
@@ -452,6 +521,7 @@ mod tests {
             instructions,
             spans: vec![0..0; len],
             functions: vec![],
+            obj_defs: vec![],
         }
     }
 

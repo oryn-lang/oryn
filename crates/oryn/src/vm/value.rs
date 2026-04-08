@@ -1,4 +1,4 @@
-use gc_arena::{Collect, Gc};
+use gc_arena::{Collect, Gc, lock::RefLock};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Collect)]
 #[collect(no_drop)]
@@ -10,7 +10,24 @@ pub(crate) enum Value<'gc> {
     Bool(bool),
     Float(f32),
     Int(i32),
+    // RefLock is gc-arena's GC-aware RefCell. It provides interior
+    // mutability for field writes: .borrow() to read, .borrow_mut(mc)
+    // to write (requires the mutation context from arena.mutate_root).
+    // Gc wraps the whole thing so objects are heap-allocated, reference-
+    // counted, and collected by the GC. Cloning a Value::Object copies
+    // the Gc pointer (alias), not the underlying data.
+    Object(Gc<'gc, RefLock<ObjData<'gc>>>),
     String(Gc<'gc, String>),
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Collect)]
+#[collect(no_drop)]
+pub(crate) struct ObjData<'gc> {
+    // Index into Chunk.obj_defs for the type name and field layout.
+    pub type_idx: usize,
+    // Field values in definition order. Field index is resolved at
+    // compile time, so access is a direct array index with no hashing.
+    pub fields: Vec<Value<'gc>>,
 }
 
 /// A call frame on the VM's call stack. Each function invocation

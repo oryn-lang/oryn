@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::compiler;
+use crate::compiler::{self, ObjDefInfo};
 use crate::compiler::{CompiledFunction, Instruction};
 use crate::errors::OrynError;
 use crate::lexer;
@@ -19,6 +19,7 @@ pub struct Chunk {
     pub(crate) instructions: Vec<Instruction>,
     pub(crate) spans: Vec<Range<usize>>,
     pub(crate) functions: Vec<CompiledFunction>,
+    pub(crate) obj_defs: Vec<ObjDefInfo>,
 }
 
 impl Chunk {
@@ -53,6 +54,7 @@ impl Chunk {
             instructions: output.instructions,
             spans: output.spans,
             functions: output.functions,
+            obj_defs: output.obj_defs,
         })
     }
 
@@ -115,6 +117,11 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::PushString(s) => format!("PushString {s}"),
             Instruction::GetLocal(slot) => format!("GetLocal {slot}"),
             Instruction::SetLocal(slot) => format!("SetLocal {slot}"),
+            Instruction::NewObject(type_idx, num_fields) => {
+                format!("NewObject {type_idx} {num_fields}")
+            }
+            Instruction::GetField(field_idx) => format!("GetField {field_idx}"),
+            Instruction::SetField(field_idx) => format!("SetField {field_idx}"),
             Instruction::Return => "Return".to_string(),
             Instruction::Equal => "Equal".to_string(),
             Instruction::NotEqual => "NotEqual".to_string(),

@@ -609,10 +609,7 @@ fn function_with_return_type() {
 
 #[test]
 fn mixed_annotated_and_unannotated() {
-    assert_eq!(
-        run("let x: i32 = 10\nlet y = 20\nprint(x + y)"),
-        "30\n",
-    );
+    assert_eq!(run("let x: i32 = 10\nlet y = 20\nprint(x + y)"), "30\n",);
 }
 
 #[test]
@@ -620,5 +617,127 @@ fn function_with_some_typed_params() {
     assert_eq!(
         run("fn add(a: i32, b) {\nrn a + b\n}\nprint(add(2, 3))"),
         "5\n",
+    );
+}
+
+// --- Objects ---
+
+#[test]
+fn object_definition_and_instantiation() {
+    assert_eq!(
+        run("obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.x)"),
+        "1\n",
+    );
+}
+
+#[test]
+fn object_field_read_second_field() {
+    assert_eq!(
+        run("obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.y)"),
+        "2\n",
+    );
+}
+
+#[test]
+fn object_field_mutation() {
+    assert_eq!(
+        run("obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }\nv.x = 99\nprint(v.x)"),
+        "99\n",
+    );
+}
+
+#[test]
+fn object_reference_aliasing() {
+    assert_eq!(
+        run(
+            "obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }\nlet w = v\nw.y = 50\nprint(v.y)"
+        ),
+        "50\n",
+    );
+}
+
+#[test]
+fn object_fields_out_of_order() {
+    assert_eq!(
+        run("obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { y: 20, x: 10 }\nprint(v.x)\nprint(v.y)"),
+        "10\n20\n",
+    );
+}
+
+#[test]
+fn object_print_shows_instance() {
+    assert_eq!(
+        run("obj Foo {\nx: i32\n}\nlet f = Foo { x: 1 }\nprint(f)"),
+        "<Foo instance>\n",
+    );
+}
+
+#[test]
+fn val_prevents_field_mutation() {
+    let result = oryn::Chunk::compile("obj Foo {\nx: i32\n}\nval f = Foo { x: 1 }\nf.x = 2");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("val"))
+    }));
+}
+
+#[test]
+fn undefined_type_is_compile_error() {
+    let result = oryn::Chunk::compile("let f = Unknown { x: 1 }");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined type"))
+    }));
+}
+
+#[test]
+fn unknown_field_is_compile_error() {
+    let result = oryn::Chunk::compile("obj Foo {\nx: i32\n}\nlet f = Foo { x: 1, z: 2 }");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("unknown field"))
+    }));
+}
+
+#[test]
+fn missing_field_is_compile_error() {
+    let result = oryn::Chunk::compile("obj Foo {\nx: i32\ny: i32\n}\nlet f = Foo { x: 1 }");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("missing field"))
+    }));
+}
+
+#[test]
+fn object_inline_definition() {
+    assert_eq!(
+        run("obj Vec2 { x: i32, y: i32 }\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.x)"),
+        "1\n",
+    );
+}
+
+#[test]
+fn object_with_float_fields() {
+    assert_eq!(
+        run("obj Point {\nx: f32\ny: f32\n}\nlet p = Point { x: 3.14, y: 2.71 }\nprint(p.x)"),
+        "3.14\n",
+    );
+}
+
+#[test]
+fn object_in_function() {
+    assert_eq!(
+        run(
+            "obj Vec2 {\nx: i32\ny: i32\n}\nfn get_x(v: Vec2) {\nrn v.x\n}\nlet v = Vec2 { x: 42, y: 0 }\nprint(get_x(v))"
+        ),
+        "42\n",
     );
 }

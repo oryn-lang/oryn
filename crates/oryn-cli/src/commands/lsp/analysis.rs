@@ -205,6 +205,13 @@ fn walk_statement(
         Statement::Expression(expr) => {
             walk_expression(idents, table, scopes, expr);
         }
+        Statement::ObjDef { .. } => {
+            // TODO: register object type as a symbol
+        }
+        Statement::FieldAssignment { object, value, .. } => {
+            walk_expression(idents, table, scopes, object);
+            walk_expression(idents, table, scopes, value);
+        }
         Statement::Break | Statement::Continue | Statement::Return(None) => {}
     }
 }
@@ -251,6 +258,14 @@ fn walk_expression(
                 walk_statement(idents, table, scopes, stmt);
             }
             scopes.pop();
+        }
+        Expression::ObjLiteral { fields, .. } => {
+            for (_, value) in fields {
+                walk_expression(idents, table, scopes, value);
+            }
+        }
+        Expression::FieldAccess { object, .. } => {
+            walk_expression(idents, table, scopes, object);
         }
         // Literals have no names to resolve.
         Expression::True
