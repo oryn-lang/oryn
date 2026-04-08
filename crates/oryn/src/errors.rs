@@ -65,6 +65,15 @@ pub enum RuntimeError {
         actual: usize,
         span: Option<Range<usize>>,
     },
+    TypeMismatch {
+        op: &'static str,
+        left: ValueType,
+        right: ValueType,
+        span: Option<Range<usize>>,
+    },
+    DivisionByZero {
+        span: Option<Range<usize>>,
+    },
 }
 
 /// The type of a value.
@@ -79,6 +88,7 @@ pub enum ValueType {
 impl From<&Value<'_>> for ValueType {
     fn from(value: &Value<'_>) -> Self {
         match value {
+            Value::Uninitialized => ValueType::Int, // Should never happen - compiler prevents it
             Value::Bool(_) => ValueType::Bool,
             Value::Float(_) => ValueType::Float,
             Value::Int(_) => ValueType::Int,
@@ -135,6 +145,12 @@ impl fmt::Display for RuntimeError {
             } => {
                 write!(f, "{name} expects {expected} argument(s), got {actual}")
             }
+            RuntimeError::TypeMismatch {
+                op, left, right, ..
+            } => {
+                write!(f, "cannot apply `{op}` to {left} and {right}")
+            }
+            RuntimeError::DivisionByZero { .. } => write!(f, "division by zero"),
         }
     }
 }
@@ -149,6 +165,8 @@ impl RuntimeError {
             RuntimeError::IoError(_) => None,
             RuntimeError::TypeError { span, .. } => span.as_ref(),
             RuntimeError::ArityMismatch { span, .. } => span.as_ref(),
+            RuntimeError::TypeMismatch { span, .. } => span.as_ref(),
+            RuntimeError::DivisionByZero { span } => span.as_ref(),
         }
     }
 }

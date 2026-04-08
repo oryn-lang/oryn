@@ -183,9 +183,10 @@ fn compile_statement(
 
                 emit(output, Instruction::SetLocal(slot), &stmt_span);
             } else {
-                let slot = locals.define(name, true);
-
-                emit(output, Instruction::SetLocal(slot), &stmt_span);
+                output.errors.push(OrynError::Compiler {
+                    span: stmt_span.clone(),
+                    message: format!("undefined variable `{name}`"),
+                });
             }
         }
         Statement::Function { name, params, body } => {
@@ -390,8 +391,13 @@ fn compile_expression(
             if let Some(slot) = locals.resolve(&name) {
                 emit(output, Instruction::GetLocal(slot.0), &span);
             } else {
-                let slot = locals.define(name, true);
-                emit(output, Instruction::GetLocal(slot), &span);
+                output.errors.push(OrynError::Compiler {
+                    span: span.clone(),
+                    message: format!("undefined variable `{name}`"),
+                });
+                // Emit a placeholder so the rest of the compilation
+                // can continue without cascading errors.
+                emit(output, Instruction::PushInt(0), &span);
             }
         }
         Expression::BinaryOp { op, left, right } => {

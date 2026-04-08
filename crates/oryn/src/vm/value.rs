@@ -3,6 +3,10 @@ use gc_arena::{Collect, Gc};
 #[derive(Debug, Clone, PartialEq, PartialOrd, Collect)]
 #[collect(no_drop)]
 pub(crate) enum Value<'gc> {
+    /// Sentinel for local variable slots that haven't been written to yet.
+    /// A GetLocal hitting this is a compiler bug (the compiler rejects
+    /// reads of undefined variables), so the VM treats it as a fatal error.
+    Uninitialized,
     Bool(bool),
     Float(f32),
     Int(i32),

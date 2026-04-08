@@ -106,6 +106,14 @@ impl VM {
                         let frame = state.frames.last().unwrap();
                         let value = frame.locals[*slot].clone();
 
+                        if matches!(value, Value::Uninitialized) {
+                            let span = Self::current_span_from_state(&state.frames, chunk);
+                            return Err(RuntimeError::UndefinedVariable {
+                                name: format!("local#{slot}"),
+                                span,
+                            });
+                        }
+
                         state.stack.push(value);
                     }
                     Instruction::SetLocal(slot) => {
@@ -115,7 +123,7 @@ impl VM {
                         let frame = state.frames.last_mut().unwrap();
 
                         if *slot >= frame.locals.len() {
-                            frame.locals.resize(*slot + 1, Value::Int(0));
+                            frame.locals.resize(*slot + 1, Value::Uninitialized);
                         }
 
                         frame.locals[*slot] = value;
@@ -161,32 +169,56 @@ impl VM {
                         state.stack.push(Value::Bool(left >= right));
                     }
                     Instruction::And => {
-                        let Value::Bool(right) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
-                        let Value::Bool(left) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
+                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
-                        state.stack.push(Value::Bool(left && right));
+                        match (left, right) {
+                            (Value::Bool(l), Value::Bool(r)) => {
+                                state.stack.push(Value::Bool(l && r));
+                            }
+                            (Value::Bool(_), ref other) | (ref other, Value::Bool(_)) => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Bool,
+                                    actual: ValueType::from(other),
+                                    span,
+                                });
+                            }
+                            (ref left_val, _) => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Bool,
+                                    actual: ValueType::from(left_val),
+                                    span,
+                                });
+                            }
+                        }
                     }
                     Instruction::Or => {
-                        let Value::Bool(right) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
-                        let Value::Bool(left) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
+                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
-                        state.stack.push(Value::Bool(left || right));
+                        match (left, right) {
+                            (Value::Bool(l), Value::Bool(r)) => {
+                                state.stack.push(Value::Bool(l || r));
+                            }
+                            (Value::Bool(_), ref other) | (ref other, Value::Bool(_)) => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Bool,
+                                    actual: ValueType::from(other),
+                                    span,
+                                });
+                            }
+                            (ref left_val, _) => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Bool,
+                                    actual: ValueType::from(left_val),
+                                    span,
+                                });
+                            }
+                        }
                     }
                     Instruction::Not => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
@@ -204,12 +236,12 @@ impl VM {
                             (Value::Float(l), Value::Float(r)) => {
                                 state.stack.push(Value::Float(l + r))
                             }
-                            _ => {
+                            (ref l, ref r) => {
                                 let span = Self::current_span_from_state(&state.frames, chunk);
-
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::Int,
-                                    actual: ValueType::Float,
+                                return Err(RuntimeError::TypeMismatch {
+                                    op: "+",
+                                    left: ValueType::from(l),
+                                    right: ValueType::from(r),
                                     span,
                                 });
                             }
@@ -224,12 +256,12 @@ impl VM {
                             (Value::Float(l), Value::Float(r)) => {
                                 state.stack.push(Value::Float(l - r))
                             }
-                            _ => {
+                            (ref l, ref r) => {
                                 let span = Self::current_span_from_state(&state.frames, chunk);
-
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::Int,
-                                    actual: ValueType::Float,
+                                return Err(RuntimeError::TypeMismatch {
+                                    op: "-",
+                                    left: ValueType::from(l),
+                                    right: ValueType::from(r),
                                     span,
                                 });
                             }
@@ -244,12 +276,12 @@ impl VM {
                             (Value::Float(l), Value::Float(r)) => {
                                 state.stack.push(Value::Float(l * r))
                             }
-                            _ => {
+                            (ref l, ref r) => {
                                 let span = Self::current_span_from_state(&state.frames, chunk);
-
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::Int,
-                                    actual: ValueType::Float,
+                                return Err(RuntimeError::TypeMismatch {
+                                    op: "*",
+                                    left: ValueType::from(l),
+                                    right: ValueType::from(r),
                                     span,
                                 });
                             }
@@ -260,16 +292,24 @@ impl VM {
                         let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
                         match (left, right) {
+                            (Value::Int(_), Value::Int(0)) => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::DivisionByZero { span });
+                            }
+                            (Value::Float(_), Value::Float(0.0)) => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::DivisionByZero { span });
+                            }
                             (Value::Int(l), Value::Int(r)) => state.stack.push(Value::Int(l / r)),
                             (Value::Float(l), Value::Float(r)) => {
                                 state.stack.push(Value::Float(l / r))
                             }
-                            _ => {
+                            (ref l, ref r) => {
                                 let span = Self::current_span_from_state(&state.frames, chunk);
-
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::Int,
-                                    actual: ValueType::Float,
+                                return Err(RuntimeError::TypeMismatch {
+                                    op: "/",
+                                    left: ValueType::from(l),
+                                    right: ValueType::from(r),
                                     span,
                                 });
                             }
@@ -286,6 +326,7 @@ impl VM {
                                 let output: Vec<String> = args
                                     .iter()
                                     .map(|a| match a {
+                                        Value::Uninitialized => "<uninitialized>".to_string(),
                                         Value::Float(f) => {
                                             let s = f.to_string();
 
@@ -338,7 +379,7 @@ impl VM {
                         state.frames.push(CallFrame {
                             function_idx: Some(func_idx),
                             ip: 0,
-                            locals: vec![Value::Int(0); func.num_locals],
+                            locals: vec![Value::Uninitialized; func.num_locals],
                         });
 
                         continue;

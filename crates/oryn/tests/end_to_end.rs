@@ -501,3 +501,80 @@ fn val_reassignment_in_function_is_compile_error() {
             .any(|e| matches!(e, oryn::OrynError::Compiler { .. }))
     );
 }
+
+// --- Compiler hardening ---
+
+#[test]
+fn undefined_variable_is_compile_error() {
+    let result = oryn::Chunk::compile("print(typo)");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined variable"))
+    }));
+}
+
+#[test]
+fn assignment_to_undefined_is_compile_error() {
+    let result = oryn::Chunk::compile("x = 5");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined variable"))
+    }));
+}
+
+#[test]
+fn and_with_non_bool_is_type_error() {
+    let chunk = oryn::Chunk::compile("print(5 and true)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::TypeError { .. }));
+}
+
+#[test]
+fn or_with_non_bool_is_type_error() {
+    let chunk = oryn::Chunk::compile("print(true or 5)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::TypeError { .. }));
+}
+
+#[test]
+fn mixed_type_arithmetic_reports_real_types() {
+    let chunk = oryn::Chunk::compile("print(true + 1)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(
+        err,
+        oryn::RuntimeError::TypeMismatch { op: "+", .. }
+    ));
+}
+
+#[test]
+fn integer_division_by_zero_is_error() {
+    let chunk = oryn::Chunk::compile("print(1 / 0)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::DivisionByZero { .. }));
+}
+
+#[test]
+fn float_division_by_zero_is_error() {
+    let chunk = oryn::Chunk::compile("print(1.0 / 0.0)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
+    assert!(matches!(err, oryn::RuntimeError::DivisionByZero { .. }));
+}
