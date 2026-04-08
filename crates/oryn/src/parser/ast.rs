@@ -45,6 +45,7 @@ pub enum Statement {
         name: String,
         fields: Vec<(String, TypeAnnotation)>,
         methods: Vec<ObjMethod>,
+        uses: Vec<String>,
     },
     FieldAssignment {
         object: Spanned<Expression>,

@@ -332,9 +332,48 @@ fn compile_statement(
             name,
             fields,
             methods,
+            uses,
         } => {
-            let field_names: Vec<String> = fields.into_iter().map(|(name, _)| name).collect();
+            let mut field_names: Vec<String> = Vec::new();
             let mut method_indices: HashMap<String, usize> = HashMap::new();
+
+            for used_type in &uses {
+                if let Some((_, def)) = obj_table.resolve(used_type) {
+                    for field in &def.fields {
+                        if field_names.contains(field) {
+                            output.errors.push(OrynError::Compiler {
+                                span: stmt_span.clone(),
+                                message: format!("field `{field}` conflicts in `use {used_type}`"),
+                            });
+                        } else {
+                            field_names.push(field.clone());
+                        }
+                    }
+
+                    for (method_name, &func_idx) in &def.methods {
+                        if method_indices.contains_key(method_name) {
+                            output.errors.push(OrynError::Compiler {
+                                span: stmt_span.clone(),
+                                message: format!(
+                                    "method `{method_name}` conflicts in `use {used_type}`"
+                                ),
+                            });
+                        } else {
+                            method_indices.insert(method_name.clone(), func_idx);
+                        }
+                    }
+                } else {
+                    output.errors.push(OrynError::Compiler {
+                        span: stmt_span.clone(),
+                        message: format!("undefined type `{used_type}` in use declaration"),
+                    });
+                }
+            }
+
+            // Then append this obj's own fields.
+            for (name, _) in fields {
+                field_names.push(name);
+            }
 
             // Build a temporary ObjTable that includes the current type
             // so method bodies can resolve self.field accesses.

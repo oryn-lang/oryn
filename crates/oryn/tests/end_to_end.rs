@@ -847,3 +847,68 @@ fn undefined_method_is_runtime_error() {
     let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
     assert!(matches!(err, oryn::RuntimeError::UndefinedFunction { .. }));
 }
+
+// --- Use composition ---
+
+#[test]
+fn use_inherits_fields() {
+    assert_eq!(
+        run(
+            "obj Health { hp: i32 }\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 100, name: \"Alice\" }\nprint(p.hp)"
+        ),
+        "100\n",
+    );
+}
+
+#[test]
+fn use_inherits_methods() {
+    assert_eq!(
+        run(
+            "obj Health {\nhp: i32\nfn heal(self, amount: i32) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 50, name: \"Bob\" }\np.heal(20)\nprint(p.hp)"
+        ),
+        "70\n",
+    );
+}
+
+#[test]
+fn use_multiple_types() {
+    assert_eq!(
+        run(
+            "obj Health { hp: i32 }\nobj Named { name: String }\nobj Player {\nuse Health\nuse Named\n}\nlet p = Player { hp: 100, name: \"Alice\" }\nprint(p.hp)\nprint(p.name)"
+        ),
+        "100\nAlice\n",
+    );
+}
+
+#[test]
+fn use_field_conflict_is_compile_error() {
+    let result =
+        oryn::Chunk::compile("obj A { x: i32 }\nobj B { x: i32 }\nobj C {\nuse A\nuse B\n}");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("conflicts"))
+    }));
+}
+
+#[test]
+fn use_undefined_type_is_compile_error() {
+    let result = oryn::Chunk::compile("obj Foo {\nuse Nonexistent\n}");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined type"))
+    }));
+}
+
+#[test]
+fn use_own_fields_after_composed() {
+    assert_eq!(
+        run(
+            "obj Position { x: i32, y: i32 }\nobj Entity {\nuse Position\nname: String\n}\nlet e = Entity { x: 5, y: 10, name: \"thing\" }\nprint(e.x)\nprint(e.name)"
+        ),
+        "5\nthing\n",
+    );
+}

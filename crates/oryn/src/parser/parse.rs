@@ -385,10 +385,14 @@ fn program<'src>() -> impl Parser<
         enum ObjItem {
             Field(String, TypeAnnotation),
             Method(ObjMethod),
+            Use(String),
         }
+
+        let use_item = just(Token::Use).ignore_then(select! { Token::Ident(name) => name });
 
         let obj_item = obj_method
             .map(ObjItem::Method)
+            .or(use_item.map(ObjItem::Use))
             .or(obj_field.map(|(name, ty)| ObjItem::Field(name, ty)));
 
         // obj <name> { <field>, <field> } or { <field> \n <field> }
@@ -412,11 +416,13 @@ fn program<'src>() -> impl Parser<
             .map_with(|(name, items), extra| {
                 let mut fields = Vec::new();
                 let mut methods = Vec::new();
+                let mut uses = Vec::new();
 
                 for item in items {
                     match item {
                         ObjItem::Field(name, ty) => fields.push((name, ty)),
                         ObjItem::Method(m) => methods.push(m),
+                        ObjItem::Use(name) => uses.push(name),
                     }
                 }
 
@@ -425,6 +431,7 @@ fn program<'src>() -> impl Parser<
                         name,
                         fields,
                         methods,
+                        uses,
                     },
                     extra.span(),
                 )

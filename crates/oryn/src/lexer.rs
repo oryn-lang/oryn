@@ -19,6 +19,8 @@ pub enum Token {
     Rn,
     #[token("obj")]
     Obj,
+    #[token("use")]
+    Use,
 
     // Literals.
     #[token("true")]
@@ -116,6 +118,7 @@ impl Display for Token {
             Token::Fn => write!(f, "fn"),
             Token::Rn => write!(f, "rn"),
             Token::Obj => write!(f, "obj"),
+            Token::Use => write!(f, "use"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::Float(n) => write!(f, "{n}"),
