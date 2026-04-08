@@ -89,6 +89,9 @@ impl VM {
                     Instruction::PushBool(b) => {
                         state.stack.push(Value::Bool(*b));
                     }
+                    Instruction::PushFloat(n) => {
+                        state.stack.push(Value::Float(*n));
+                    }
                     Instruction::PushInt(n) => {
                         state.stack.push(Value::Int(*n));
                     }
@@ -187,60 +190,84 @@ impl VM {
                             .push(Value::Bool(!matches!(value, Value::Bool(true))));
                     }
                     Instruction::Add => {
-                        let Value::Int(right) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
-                        let Value::Int(left) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
+                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
-                        state.stack.push(Value::Int(left + right));
+                        match (left, right) {
+                            (Value::Int(l), Value::Int(r)) => state.stack.push(Value::Int(l + r)),
+                            (Value::Float(l), Value::Float(r)) => {
+                                state.stack.push(Value::Float(l + r))
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Int,
+                                    actual: ValueType::Float,
+                                    span,
+                                });
+                            }
+                        };
                     }
                     Instruction::Sub => {
-                        let Value::Int(right) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
-                        let Value::Int(left) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
+                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
-                        state.stack.push(Value::Int(left - right));
+                        match (left, right) {
+                            (Value::Int(l), Value::Int(r)) => state.stack.push(Value::Int(l - r)),
+                            (Value::Float(l), Value::Float(r)) => {
+                                state.stack.push(Value::Float(l - r))
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Int,
+                                    actual: ValueType::Float,
+                                    span,
+                                });
+                            }
+                        };
                     }
                     Instruction::Mul => {
-                        let Value::Int(right) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
-                        let Value::Int(left) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
+                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
-                        state.stack.push(Value::Int(left * right));
+                        match (left, right) {
+                            (Value::Int(l), Value::Int(r)) => state.stack.push(Value::Int(l * r)),
+                            (Value::Float(l), Value::Float(r)) => {
+                                state.stack.push(Value::Float(l * r))
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Int,
+                                    actual: ValueType::Float,
+                                    span,
+                                });
+                            }
+                        };
                     }
                     Instruction::Div => {
-                        let Value::Int(right) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
-                        let Value::Int(left) =
-                            state.stack.pop().ok_or(RuntimeError::StackUnderflow)?
-                        else {
-                            return Err(RuntimeError::StackUnderflow);
-                        };
+                        let right = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let left = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
-                        state.stack.push(Value::Int(left / right));
+                        match (left, right) {
+                            (Value::Int(l), Value::Int(r)) => state.stack.push(Value::Int(l / r)),
+                            (Value::Float(l), Value::Float(r)) => {
+                                state.stack.push(Value::Float(l / r))
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Int,
+                                    actual: ValueType::Float,
+                                    span,
+                                });
+                            }
+                        };
                     }
                     Instruction::CallBuiltin(name, arity) => {
                         let arity = *arity;
@@ -253,6 +280,11 @@ impl VM {
                                 let output: Vec<String> = args
                                     .iter()
                                     .map(|a| match a {
+                                        Value::Float(f) => {
+                                            let s = f.to_string();
+
+                                            if s.contains('.') { s } else { format!("{s}.0") }
+                                        }
                                         Value::Int(n) => n.to_string(),
                                         Value::Bool(b) => b.to_string(),
                                         Value::String(s) => s.as_str().to_string(),

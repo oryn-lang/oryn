@@ -251,7 +251,11 @@ fn walk_expression(
             scopes.pop();
         }
         // Literals have no names to resolve.
-        Expression::True | Expression::False | Expression::Int(_) | Expression::String(_) => {}
+        Expression::True
+        | Expression::False
+        | Expression::Float(_)
+        | Expression::Int(_)
+        | Expression::String(_) => {}
     }
 }
 

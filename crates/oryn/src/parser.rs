@@ -66,6 +66,7 @@ pub enum Statement {
 pub enum Expression {
     True,
     False,
+    Float(f32),
     Int(i32),
     String(String),
     Ident(String),
@@ -166,6 +167,8 @@ fn atom<'src>(
     // select! matches a single token and extracts data from it.
     let bool_lit = select! { Token::True => Expression::True, Token::False => Expression::False };
 
+    let float = select! { Token::Float(n) => Expression::Float(n) };
+
     let int = select! { Token::Int(n) => Expression::Int(n) };
 
     let string = select! { Token::String(s) => Expression::String(s) };
@@ -192,6 +195,7 @@ fn atom<'src>(
         .map(|spanned| spanned.node);
 
     bool_lit
+        .or(float)
         .or(int)
         .or(string)
         .or(ident_or_call)

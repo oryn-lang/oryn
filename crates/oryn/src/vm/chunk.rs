@@ -100,6 +100,7 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
     for (i, instr) in instructions.iter().enumerate() {
         let formatted = match instr {
             Instruction::PushBool(b) => format!("PushBool {b}"),
+            Instruction::PushFloat(n) => format!("PushFloat {n}"),
             Instruction::PushInt(n) => format!("PushInt {n}"),
             Instruction::PushString(s) => format!("PushString {s}"),
             Instruction::GetLocal(slot) => format!("GetLocal {slot}"),

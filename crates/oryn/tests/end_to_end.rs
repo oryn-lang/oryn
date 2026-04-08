@@ -386,3 +386,67 @@ fn arity_mismatch_is_runtime_error() {
         }
     ));
 }
+
+// --- Floats ---
+
+#[test]
+fn float_literal() {
+    assert_eq!(run("print(3.14)"), "3.14\n");
+}
+
+#[test]
+fn float_binding() {
+    assert_eq!(run("let x = 1.5\nprint(x)"), "1.5\n");
+}
+
+#[test]
+fn float_addition() {
+    assert_eq!(run("print(1.5 + 2.5)"), "4.0\n");
+}
+
+#[test]
+fn float_subtraction() {
+    assert_eq!(run("print(10.5 - 3.5)"), "7.0\n");
+}
+
+#[test]
+fn float_multiplication() {
+    assert_eq!(run("print(2.5 * 4.0)"), "10.0\n");
+}
+
+#[test]
+fn float_division() {
+    assert_eq!(run("print(7.5 / 2.5)"), "3.0\n");
+}
+
+#[test]
+fn float_comparison() {
+    assert_eq!(run("print(3.14 > 2.71)"), "true\n");
+    assert_eq!(run("print(1.0 == 1.0)"), "true\n");
+    assert_eq!(run("print(1.0 != 2.0)"), "true\n");
+    assert_eq!(run("print(1.5 < 2.5)"), "true\n");
+    assert_eq!(run("print(3.0 <= 3.0)"), "true\n");
+    assert_eq!(run("print(2.0 >= 3.0)"), "false\n");
+}
+
+#[test]
+fn float_in_function() {
+    assert_eq!(
+        run("fn half(x) {\nrn x / 2.0\n}\nprint(half(5.0))"),
+        "2.5\n",
+    );
+}
+
+#[test]
+fn float_precedence() {
+    assert_eq!(run("print(1.0 + 2.0 * 3.0)"), "7.0\n");
+}
+
+#[test]
+fn mixed_int_float_is_runtime_error() {
+    let chunk = oryn::Chunk::compile("print(1 + 1.5)").expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut output = Vec::new();
+
+    assert!(vm.run_with_writer(&chunk, &mut output).is_err());
+}

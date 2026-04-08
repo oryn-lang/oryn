@@ -21,6 +21,8 @@ pub enum Token {
     True,
     #[token("false")]
     False,
+    #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f32>().ok())]
+    Float(f32),
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i32>().ok())]
     Int(i32),
     #[regex(r#""[^"]*""#, |lex| {
@@ -104,6 +106,7 @@ impl Display for Token {
             Token::Rn => write!(f, "rn"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
+            Token::Float(n) => write!(f, "{n}"),
             Token::Int(n) => write!(f, "{n}"),
             Token::String(s) => write!(f, "{s}"),
             Token::Equals => write!(f, "="),

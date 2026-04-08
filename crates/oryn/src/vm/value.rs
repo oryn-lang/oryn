@@ -4,6 +4,7 @@ use gc_arena::{Collect, Gc};
 #[collect(no_drop)]
 pub(crate) enum Value<'gc> {
     Bool(bool),
+    Float(f32),
     Int(i32),
     String(Gc<'gc, String>),
 }

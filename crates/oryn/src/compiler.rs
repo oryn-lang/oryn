@@ -9,6 +9,7 @@ use crate::parser::{BinOp, Expression, Span, Spanned, Statement, UnaryOp};
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Instruction {
     PushBool(bool),
+    PushFloat(f32),
     PushInt(i32),
     PushString(String),
     GetLocal(usize),
@@ -342,6 +343,9 @@ fn compile_expression(
         }
         Expression::False => {
             emit(output, Instruction::PushBool(false), &span);
+        }
+        Expression::Float(n) => {
+            emit(output, Instruction::PushFloat(n), &span);
         }
         Expression::Int(n) => {
             emit(output, Instruction::PushInt(n), &span);
