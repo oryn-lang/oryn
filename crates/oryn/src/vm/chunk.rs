@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use crate::compiler::{self, ObjDefInfo};
-use crate::compiler::{CompiledFunction, Instruction};
+use crate::compiler;
+use crate::compiler::{CompiledFunction, Instruction, ObjDefInfo};
 use crate::errors::OrynError;
 use crate::lexer;
 use crate::parser;
