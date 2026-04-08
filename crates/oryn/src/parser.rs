@@ -36,15 +36,18 @@ pub enum Statement {
     Let {
         name: String,
         value: Spanned<Expression>,
+        type_ann: Option<TypeAnnotation>,
     },
     Val {
         name: String,
         value: Spanned<Expression>,
+        type_ann: Option<TypeAnnotation>,
     },
     Function {
         name: String,
-        params: Vec<String>,
+        params: Vec<(String, Option<TypeAnnotation>)>,
         body: Spanned<Expression>,
+        return_type: Option<TypeAnnotation>,
     },
     Return(Option<Spanned<Expression>>),
     Assignment {
@@ -111,6 +114,11 @@ pub enum BinOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Not,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeAnnotation {
+    Named(String),
 }
 
 /// Parses a token stream into an AST. Returns the statements and any
@@ -344,6 +352,9 @@ fn program<'src>() -> impl Parser<
     let newlines = just(Token::Newline).repeated();
 
     let stmt = recursive(|stmt| {
+        let type_annotation = just(Token::Colon)
+            .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) });
+
         let block = stmt
             .clone()
             .separated_by(newlines.clone())
@@ -357,10 +368,18 @@ fn program<'src>() -> impl Parser<
 
         let let_stmt = just(Token::Let)
             .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
+            .then(type_annotation.clone().or_not())
             .then_ignore(just(Token::Equals))
             .then(expr.clone())
-            .map_with(|(name, value), extra| {
-                Spanned::new(Statement::Let { name, value }, extra.span())
+            .map_with(|((name, type_ann), value), extra| {
+                Spanned::new(
+                    Statement::Let {
+                        name,
+                        type_ann,
+                        value,
+                    },
+                    extra.span(),
+                )
             })
             .labelled("let statement");
 
@@ -374,10 +393,18 @@ fn program<'src>() -> impl Parser<
 
         let val_stmt = just(Token::Val)
             .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
+            .then(type_annotation.clone().or_not())
             .then_ignore(just(Token::Equals))
             .then(expr.clone())
-            .map_with(|(name, value), extra| {
-                Spanned::new(Statement::Val { name, value }, extra.span())
+            .map_with(|((name, type_ann), value), extra| {
+                Spanned::new(
+                    Statement::Val {
+                        name,
+                        type_ann,
+                        value,
+                    },
+                    extra.span(),
+                )
             })
             .labelled("val statement");
 
@@ -386,13 +413,27 @@ fn program<'src>() -> impl Parser<
             .ignore_then(select! { Token::Ident(name) => name }.labelled("function name"))
             .then(
                 select! { Token::Ident(name) => name }
+                    .then(type_annotation.clone().or_not())
                     .separated_by(just(Token::Comma))
                     .collect::<Vec<_>>()
                     .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
             )
+            .then(
+                just(Token::Arrow)
+                    .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
+                    .or_not(),
+            )
             .then(block.clone())
-            .map_with(|((name, params), body), extra| {
-                Spanned::new(Statement::Function { name, params, body }, extra.span())
+            .map_with(|(((name, params), return_type), body), extra| {
+                Spanned::new(
+                    Statement::Function {
+                        name,
+                        params,
+                        body,
+                        return_type,
+                    },
+                    extra.span(),
+                )
             })
             .labelled("function");
 

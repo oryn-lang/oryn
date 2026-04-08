@@ -156,14 +156,14 @@ fn compile_statement(
 ) {
     let stmt_span = stmt.span.clone();
     match stmt.node {
-        Statement::Let { name, value } => {
+        Statement::Let { name, value, .. } => {
             compile_expression(output, fn_table, locals, value);
 
             let slot = locals.define(name, true);
 
             emit(output, Instruction::SetLocal(slot), &stmt_span);
         }
-        Statement::Val { name, value } => {
+        Statement::Val { name, value, .. } => {
             compile_expression(output, fn_table, locals, value);
 
             let slot = locals.define(name, false);
@@ -189,7 +189,9 @@ fn compile_statement(
                 });
             }
         }
-        Statement::Function { name, params, body } => {
+        Statement::Function {
+            name, params, body, ..
+        } => {
             // Reserve the function's index so recursive calls and
             // later calls resolve correctly.
             let func_idx = output.functions.len();
@@ -205,7 +207,7 @@ fn compile_statement(
             output.functions.push(CompiledFunction {
                 name: name.clone(),
                 arity: params.len(),
-                params: params.clone(),
+                params: params.clone().into_iter().map(|p| p.0).collect(),
                 num_locals: 0,
                 instructions: Vec::new(),
                 spans: Vec::new(),
@@ -221,13 +223,13 @@ fn compile_statement(
             let mut func_locals = Locals::new();
             for param in &params {
                 // Parameters are immutable, so we define them as such.
-                func_locals.define(param.clone(), false);
+                func_locals.define(param.0.clone(), false);
             }
 
             for param in params.iter().rev() {
                 // SAFETY: We just defined every param in the loop above,
                 // so resolve is guaranteed to succeed.
-                let slot = func_locals.resolve(param).unwrap();
+                let slot = func_locals.resolve(param.0.as_str()).unwrap();
 
                 emit(&mut func_output, Instruction::SetLocal(slot.0), &stmt_span);
             }
@@ -255,7 +257,7 @@ fn compile_statement(
             output.functions[func_idx] = CompiledFunction {
                 name: name.clone(),
                 arity: params.len(),
-                params,
+                params: params.into_iter().map(|p| p.0).collect(),
                 num_locals: func_locals.count,
                 instructions: func_output.instructions,
                 spans: func_output.spans,

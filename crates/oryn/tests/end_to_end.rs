@@ -578,3 +578,47 @@ fn float_division_by_zero_is_error() {
     let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
     assert!(matches!(err, oryn::RuntimeError::DivisionByZero { .. }));
 }
+
+// --- Type annotations (parsed, not enforced) ---
+
+#[test]
+fn let_with_type_annotation() {
+    assert_eq!(run("let x: i32 = 5\nprint(x)"), "5\n");
+}
+
+#[test]
+fn val_with_type_annotation() {
+    assert_eq!(run("val x: f32 = 3.14\nprint(x)"), "3.14\n");
+}
+
+#[test]
+fn function_with_param_types() {
+    assert_eq!(
+        run("fn add(a: i32, b: i32) {\nrn a + b\n}\nprint(add(2, 3))"),
+        "5\n",
+    );
+}
+
+#[test]
+fn function_with_return_type() {
+    assert_eq!(
+        run("fn double(x: i32) -> i32 {\nrn x * 2\n}\nprint(double(5))"),
+        "10\n",
+    );
+}
+
+#[test]
+fn mixed_annotated_and_unannotated() {
+    assert_eq!(
+        run("let x: i32 = 10\nlet y = 20\nprint(x + y)"),
+        "30\n",
+    );
+}
+
+#[test]
+fn function_with_some_typed_params() {
+    assert_eq!(
+        run("fn add(a: i32, b) {\nrn a + b\n}\nprint(add(2, 3))"),
+        "5\n",
+    );
+}

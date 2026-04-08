@@ -80,6 +80,10 @@ pub enum Token {
     Continue,
 
     // Punctuation.
+    #[token(":")]
+    Colon,
+    #[token("->")]
+    Arrow,
     #[token(",")]
     Comma,
     #[token("(")]
@@ -132,6 +136,8 @@ impl Display for Token {
             Token::While => write!(f, "while"),
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
+            Token::Colon => write!(f, ":"),
+            Token::Arrow => write!(f, "->"),
             Token::Comma => write!(f, ","),
             Token::LeftParen => write!(f, "("),
             Token::RightParen => write!(f, ")"),

@@ -109,7 +109,7 @@ fn walk_statement(
     stmt: &Spanned<Statement>,
 ) {
     match &stmt.node {
-        Statement::Let { name, value } | Statement::Val { name, value } => {
+        Statement::Let { name, value, .. } | Statement::Val { name, value, .. } => {
             // The name token is the first ident matching `name` in the statement span.
             if let Some(name_span) = find_ident(idents, name, &stmt.span) {
                 let idx = table.definitions.len();
@@ -129,7 +129,9 @@ fn walk_statement(
             // Walk the value expression for references.
             walk_expression(idents, table, scopes, value);
         }
-        Statement::Function { name, params, body } => {
+        Statement::Function {
+            name, params, body, ..
+        } => {
             // Register the function name as a definition.
             if let Some(name_span) = find_ident(idents, name, &stmt.span) {
                 let idx = table.definitions.len();
@@ -138,7 +140,7 @@ fn walk_statement(
                     name_span,
                     full_span: stmt.span.clone(),
                     kind: SymbolKind::Function,
-                    params: Some(params.clone()),
+                    params: Some(params.clone().into_iter().map(|p| p.0).collect()),
                     scope_depth: scopes.len() - 1,
                 });
                 if let Some(scope) = scopes.last_mut() {
@@ -150,11 +152,11 @@ fn walk_statement(
             scopes.push(HashMap::new());
 
             // Register parameters as definitions in the function scope.
-            for param in params {
-                if let Some(param_span) = find_ident(idents, param, &stmt.span) {
+            for (param_name, _type_ann) in params {
+                if let Some(param_span) = find_ident(idents, param_name, &stmt.span) {
                     let idx = table.definitions.len();
                     table.definitions.push(SymbolInfo {
-                        name: param.clone(),
+                        name: param_name.clone(),
                         name_span: param_span,
                         full_span: stmt.span.clone(),
                         kind: SymbolKind::Parameter,
@@ -162,7 +164,7 @@ fn walk_statement(
                         scope_depth: scopes.len() - 1,
                     });
                     if let Some(scope) = scopes.last_mut() {
-                        scope.insert(param.clone(), idx);
+                        scope.insert(param_name.clone(), idx);
                     }
                 }
             }
