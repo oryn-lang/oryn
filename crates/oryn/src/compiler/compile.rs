@@ -21,14 +21,7 @@ struct LoopContext {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn compile(statements: Vec<Spanned<Statement>>) -> CompilerOutput {
-    let mut output = CompilerOutput {
-        instructions: Vec::new(),
-        spans: Vec::new(),
-        functions: Vec::new(),
-        obj_defs: Vec::new(),
-        errors: Vec::new(),
-    };
-
+    let mut output = CompilerOutput::default();
     let mut loops: Vec<LoopContext> = Vec::new();
     let mut locals = Locals::new();
     let mut fn_table = FunctionTable::new();
@@ -101,10 +94,7 @@ fn resolve_field(
     let type_name = match obj_type {
         ResolvedType::Object(name) => name,
         _ => {
-            output.errors.push(OrynError::Compiler {
-                span: span.clone(),
-                message: "cannot access field on non-object".into(),
-            });
+            output.errors.push(OrynError::compiler(span.clone(), "cannot access field on non-object"));
             return None;
         }
     };
@@ -112,10 +102,7 @@ fn resolve_field(
     let (_, def) = match obj_table.resolve(type_name) {
         Some(pair) => pair,
         None => {
-            output.errors.push(OrynError::Compiler {
-                span: span.clone(),
-                message: format!("undefined type `{type_name}`"),
-            });
+            output.errors.push(OrynError::compiler(span.clone(), format!("undefined type `{type_name}`")));
             return None;
         }
     };
@@ -123,10 +110,7 @@ fn resolve_field(
     match def.fields.iter().position(|f| f == field) {
         Some(idx) => Some(idx),
         None => {
-            output.errors.push(OrynError::Compiler {
-                span: span.clone(),
-                message: format!("unknown field `{field}` on type `{type_name}`"),
-            });
+            output.errors.push(OrynError::compiler(span.clone(), format!("unknown field `{field}` on type `{type_name}`")));
             None
         }
     }
@@ -164,15 +148,15 @@ fn check_types(
 ) {
     if *expected != ResolvedType::Unknown && *actual != ResolvedType::Unknown && expected != actual
     {
-        output.errors.push(OrynError::Compiler {
-            span: span.clone(),
-            message: format!(
+        output.errors.push(OrynError::compiler(
+            span.clone(),
+            format!(
                 "{}: expected `{}`, got `{}`",
                 message,
                 expected.display_name(),
                 actual.display_name()
             ),
-        });
+        ));
     }
 }
 
@@ -196,10 +180,7 @@ fn compile_binding(
             .map(|ann| match resolve_type_annotation(ann, obj_table) {
                 Ok(t) => t,
                 Err(msg) => {
-                    output.errors.push(OrynError::Compiler {
-                        span: span.clone(),
-                        message: msg,
-                    });
+                    output.errors.push(OrynError::compiler(span.clone(), msg));
                     ResolvedType::Unknown
                 }
             });
@@ -249,14 +230,7 @@ fn compile_function_body(
         spans: Vec::new(),
     });
 
-    let mut func_output = CompilerOutput {
-        instructions: Vec::new(),
-        spans: Vec::new(),
-        functions: Vec::new(),
-        obj_defs: Vec::new(),
-        errors: Vec::new(),
-    };
-
+    let mut func_output = CompilerOutput::default();
     let mut func_locals = Locals::new();
     for param in params {
         let (mutable, obj_type) = param_local_fn(&param.0, &param.1);
@@ -351,10 +325,7 @@ fn compile_statement(
 
             if let Some((slot, mutable, stored_type)) = locals.resolve(&name) {
                 if !mutable {
-                    output.errors.push(OrynError::Compiler {
-                        span: stmt_span.clone(),
-                        message: format!("cannot reassign val binding `{name}`"),
-                    });
+                    output.errors.push(OrynError::compiler(stmt_span.clone(), format!("cannot reassign val binding `{name}`")));
                 }
 
                 check_types(
@@ -367,10 +338,7 @@ fn compile_statement(
 
                 emit(output, Instruction::SetLocal(slot), &stmt_span);
             } else {
-                output.errors.push(OrynError::Compiler {
-                    span: stmt_span.clone(),
-                    message: format!("undefined variable `{name}`"),
-                });
+                output.errors.push(OrynError::compiler(stmt_span.clone(), format!("undefined variable `{name}`")));
             }
         }
         Statement::FieldAssignment {
@@ -387,10 +355,7 @@ fn compile_statement(
             };
 
             if !mutable {
-                output.errors.push(OrynError::Compiler {
-                    span: stmt_span.clone(),
-                    message: "cannot mutate field on val binding".into(),
-                });
+                output.errors.push(OrynError::compiler(stmt_span.clone(), "cannot mutate field on val binding"));
             }
 
             compile_expression(output, fn_table, obj_table, locals, object);
@@ -434,10 +399,7 @@ fn compile_statement(
 
             for (param_name, ann) in &params {
                 if ann.is_none() {
-                    output.errors.push(OrynError::Compiler {
-                        span: stmt_span.clone(),
-                        message: format!("parameter `{param_name}` requires a type annotation"),
-                    });
+                    output.errors.push(OrynError::compiler(stmt_span.clone(), format!("parameter `{param_name}` requires a type annotation")));
                 }
             }
 
@@ -517,10 +479,7 @@ fn compile_statement(
 
                     for field in &def.fields {
                         if field_names.contains(field) {
-                            output.errors.push(OrynError::Compiler {
-                                span: stmt_span.clone(),
-                                message: format!("field `{field}` conflicts in `use {used_type}`"),
-                            });
+                            output.errors.push(OrynError::compiler(stmt_span.clone(), format!("field `{field}` conflicts in `use {used_type}`")));
                         } else {
                             field_names.push(field.clone());
                         }
@@ -528,21 +487,15 @@ fn compile_statement(
 
                     for (method_name, &func_idx) in &def.methods {
                         if method_indices.contains_key(method_name) {
-                            output.errors.push(OrynError::Compiler {
-                                span: stmt_span.clone(),
-                                message: format!(
+                            output.errors.push(OrynError::compiler(stmt_span.clone(), format!(
                                     "method `{method_name}` conflicts in `use {used_type}`"
-                                ),
-                            });
+                                )));
                         } else {
                             method_indices.insert(method_name.clone(), func_idx);
                         }
                     }
                 } else {
-                    output.errors.push(OrynError::Compiler {
-                        span: stmt_span.clone(),
-                        message: format!("undefined type `{used_type}` in use declaration"),
-                    });
+                    output.errors.push(OrynError::compiler(stmt_span.clone(), format!("undefined type `{used_type}` in use declaration")));
                 }
             }
 
@@ -553,10 +506,7 @@ fn compile_statement(
                 match resolve_type_annotation(&type_ann, obj_table) {
                     Ok(t) => field_types.push(t),
                     Err(msg) => {
-                        output.errors.push(OrynError::Compiler {
-                            span: field_span,
-                            message: format!("field `{field_name}`: {msg}"),
-                        });
+                        output.errors.push(OrynError::compiler(field_span, format!("field `{field_name}`: {msg}")));
 
                         field_types.push(ResolvedType::Unknown);
                     }
@@ -625,10 +575,7 @@ fn compile_statement(
             // Check: every required method from used types must be satisfied.
             for req in &all_required {
                 if !method_indices.contains_key(req) {
-                    output.errors.push(OrynError::Compiler {
-                        span: stmt_span.clone(),
-                        message: format!("object `{name}` is missing required method `{req}`"),
-                    });
+                    output.errors.push(OrynError::compiler(stmt_span.clone(), format!("object `{name}` is missing required method `{req}`")));
                 }
             }
 
@@ -714,20 +661,14 @@ fn compile_statement(
                 emit(output, Instruction::Jump(0), &stmt_span);
                 loop_ctx.break_patches.push(idx);
             } else {
-                output.errors.push(OrynError::Compiler {
-                    span: stmt_span,
-                    message: "break outside of loop".into(),
-                });
+                output.errors.push(OrynError::compiler(stmt_span, "break outside of loop"));
             }
         }
         Statement::Continue => {
             if let Some(loop_ctx) = loops.last() {
                 emit(output, Instruction::Jump(loop_ctx.start), &stmt_span);
             } else {
-                output.errors.push(OrynError::Compiler {
-                    span: stmt_span,
-                    message: "continue outside of loop".into(),
-                });
+                output.errors.push(OrynError::compiler(stmt_span, "continue outside of loop"));
             }
         }
 
@@ -810,10 +751,7 @@ fn compile_expression(
 
                 resolved_type
             } else {
-                output.errors.push(OrynError::Compiler {
-                    span: span.clone(),
-                    message: format!("undefined variable `{name}`"),
-                });
+                output.errors.push(OrynError::compiler(span.clone(), format!("undefined variable `{name}`")));
 
                 emit(output, Instruction::PushInt(0), &span);
 
@@ -833,10 +771,7 @@ fn compile_expression(
 
                 for (name, _) in &fields {
                     if !def_fields.contains(name) {
-                        output.errors.push(OrynError::Compiler {
-                            span: span.clone(),
-                            message: format!("unknown field `{name}` on type `{type_name}`"),
-                        });
+                        output.errors.push(OrynError::compiler(span.clone(), format!("unknown field `{name}` on type `{type_name}`")));
                     }
                 }
 
@@ -847,12 +782,9 @@ fn compile_expression(
                     if let Some(value) = field_map.remove(def_field) {
                         compile_expression(output, fn_table, obj_table, locals, value);
                     } else {
-                        output.errors.push(OrynError::Compiler {
-                            span: span.clone(),
-                            message: format!(
+                        output.errors.push(OrynError::compiler(span.clone(), format!(
                                 "missing field `{def_field}` in `{type_name}` literal"
-                            ),
-                        });
+                            )));
 
                         emit(output, Instruction::PushInt(0), &span);
                     }
@@ -862,10 +794,7 @@ fn compile_expression(
 
                 ResolvedType::Object(type_name)
             } else {
-                output.errors.push(OrynError::Compiler {
-                    span: span.clone(),
-                    message: format!("undefined type `{type_name}`"),
-                });
+                output.errors.push(OrynError::compiler(span.clone(), format!("undefined type `{type_name}`")));
 
                 emit(output, Instruction::PushInt(0), &span);
 

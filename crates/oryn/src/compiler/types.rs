@@ -53,6 +53,7 @@ pub enum Instruction {
 // ---------------------------------------------------------------------------
 
 /// Compiled output: instructions paired with a parallel span table.
+#[derive(Default)]
 pub struct CompilerOutput {
     pub instructions: Vec<Instruction>,
     pub spans: Vec<Range<usize>>,

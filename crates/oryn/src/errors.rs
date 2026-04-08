@@ -179,6 +179,15 @@ impl RuntimeError {
     }
 }
 
+impl OrynError {
+    pub fn compiler(span: Range<usize>, message: impl Into<String>) -> Self {
+        OrynError::Compiler {
+            span,
+            message: message.into(),
+        }
+    }
+}
+
 impl From<RuntimeError> for OrynError {
     fn from(e: RuntimeError) -> Self {
         OrynError::Runtime(e)
