@@ -154,9 +154,12 @@ impl VM {
     pub fn new() -> Self {
         Self {
             arena: Arena::new(|_| VmState {
-                stack: Vec::new(),
-                locals: Vec::new(),
-                frames: Vec::new(),
+                // Keep modest upfront capacity so the common case does not
+                // immediately reallocate on first use, while still relying on
+                // normal Vec growth for larger programs.
+                stack: Vec::with_capacity(256),
+                locals: Vec::with_capacity(128),
+                frames: Vec::with_capacity(64),
             }),
         }
     }
@@ -197,26 +200,29 @@ impl VM {
                 local_base: 0,
             });
 
-            while let Some(frame) = state.frames.last() {
+            while !state.frames.is_empty() {
+                // Snapshot the current frame metadata once per iteration.
+                // Most instructions only need the instruction pointer,
+                // current function body, and the frame's locals window base.
+                let frame_idx = state.frames.len() - 1;
+                let frame = &state.frames[frame_idx];
+                let function_idx = frame.function_idx;
+                let local_base = frame.local_base;
+                let ip = frame.ip;
                 let (instructions, _spans): (&[Instruction], &[Range<usize>]) =
-                    match frame.function_idx {
-                        None => (&chunk.instructions, &chunk.spans),
-                        Some(idx) => (
-                            &chunk.functions[idx].instructions,
-                            &chunk.functions[idx].spans,
-                        ),
-                    };
+                    Self::code_for(function_idx, chunk);
 
-                if frame.ip >= instructions.len() {
-                    if frame.function_idx.is_none() {
+                if ip >= instructions.len() {
+                    if function_idx.is_none() {
                         break;
                     }
                     state.stack.push(Value::Int(0));
-                    state.frames.pop();
+                    if let Some(frame) = state.frames.pop() {
+                        state.locals.truncate(frame.local_base);
+                    }
                     continue;
                 }
 
-                let ip = frame.ip;
                 let instruction = &instructions[ip];
 
                 match instruction {
@@ -265,11 +271,10 @@ impl VM {
                         // execution loop, and frames are only popped on
                         // Return (which continues past ip advancement).
                         // The frame stack is never empty during dispatch.
-                        let frame = state.frames.last().unwrap();
                         // Locals live in a single VM-wide stack. Each frame
                         // points at its window with local_base, and compiler
                         // slots are offsets within that window.
-                        let value = state.locals[frame.local_base + *slot].clone();
+                        let value = state.locals[local_base + *slot].clone();
 
                         if matches!(value, Value::Uninitialized) {
                             let span = Self::current_span_from_state(&state.frames, chunk);
@@ -283,10 +288,7 @@ impl VM {
                     }
                     Instruction::SetLocal(slot) => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        // SAFETY: Same invariant as GetLocal - frame stack
-                        // is never empty during instruction dispatch.
-                        let frame = state.frames.last_mut().unwrap();
-                        let local_idx = frame.local_base + *slot;
+                        let local_idx = local_base + *slot;
 
                         // Top-level code grows the shared locals stack lazily.
                         // Function frames pre-reserve their entire locals
@@ -538,7 +540,7 @@ impl VM {
 
                         // SAFETY: Same frame-stack invariant. We advance the
                         // caller's ip before pushing the callee's frame.
-                        state.frames.last_mut().unwrap().ip += 1;
+                        state.frames[frame_idx].ip += 1;
 
                         let local_base = state.locals.len();
                         // Reserve the callee's entire locals window up front.
@@ -606,7 +608,7 @@ impl VM {
                         }
 
                         // SAFETY: Same frame-stack invariant.
-                        state.frames.last_mut().unwrap().ip += 1;
+                        state.frames[frame_idx].ip += 1;
 
                         let local_base = state.locals.len();
                         // Methods use the same locals layout as functions;
@@ -641,14 +643,12 @@ impl VM {
                         };
 
                         if !condition {
-                            // SAFETY: Same frame-stack invariant.
-                            state.frames.last_mut().unwrap().ip = *target;
+                            state.frames[frame_idx].ip = *target;
                             continue;
                         }
                     }
                     Instruction::Jump(target) => {
-                        // SAFETY: Same frame-stack invariant.
-                        state.frames.last_mut().unwrap().ip = *target;
+                        state.frames[frame_idx].ip = *target;
                         continue;
                     }
                     Instruction::RangeHasNext => {
@@ -706,11 +706,21 @@ impl VM {
                     }
                 }
 
-                state.frames.last_mut().unwrap().ip += 1;
+                state.frames[frame_idx].ip += 1;
             }
 
             Ok(())
         })
+    }
+
+    fn code_for(function_idx: Option<usize>, chunk: &Chunk) -> (&[Instruction], &[Range<usize>]) {
+        match function_idx {
+            None => (&chunk.instructions, &chunk.spans),
+            Some(idx) => (
+                &chunk.functions[idx].instructions,
+                &chunk.functions[idx].spans,
+            ),
+        }
     }
 
     fn current_span_from_state(
@@ -718,11 +728,7 @@ impl VM {
         chunk: &Chunk,
     ) -> Option<std::ops::Range<usize>> {
         let frame = frames.last()?;
-
-        let spans = match frame.function_idx {
-            None => &chunk.spans,
-            Some(idx) => &chunk.functions[idx].spans,
-        };
+        let (_instructions, spans) = Self::code_for(frame.function_idx, chunk);
 
         spans.get(frame.ip).cloned()
     }
