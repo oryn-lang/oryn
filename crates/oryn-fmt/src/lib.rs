@@ -327,20 +327,7 @@ impl Formatter {
 
     fn write_block_expression(&mut self, expr: &Spanned<Expression>) {
         match &expr.node {
-            Expression::Block(stmts) => {
-                self.out.push_str("{\n");
-                self.indent += 1;
-                for (i, stmt) in stmts.iter().enumerate() {
-                    if i > 0 {
-                        self.out.push('\n');
-                    }
-                    self.write_statement(stmt);
-                }
-                self.indent -= 1;
-                self.out.push('\n');
-                self.write_indent();
-                self.out.push('}');
-            }
+            Expression::Block(stmts) => self.write_block_statements(stmts),
             _ => {
                 self.out.push_str("{\n");
                 self.indent += 1;
@@ -352,6 +339,21 @@ impl Formatter {
                 self.out.push('}');
             }
         }
+    }
+
+    fn write_block_statements(&mut self, stmts: &[Spanned<Statement>]) {
+        self.out.push_str("{\n");
+        self.indent += 1;
+        for (i, stmt) in stmts.iter().enumerate() {
+            if i > 0 {
+                self.out.push('\n');
+            }
+            self.write_statement(stmt);
+        }
+        self.indent -= 1;
+        self.out.push('\n');
+        self.write_indent();
+        self.out.push('}');
     }
 
     fn write_if_chain(
@@ -474,12 +476,7 @@ impl Formatter {
                 self.write_args(args);
                 self.out.push(')');
             }
-            Expression::Block(stmts) => {
-                self.write_block_expression(&Spanned {
-                    node: Expression::Block(stmts.clone_for_formatter()),
-                    span: expr.span.clone(),
-                });
-            }
+            Expression::Block(stmts) => self.write_block_statements(stmts),
         }
 
         if needs_parens {
@@ -573,181 +570,12 @@ fn statement_is_declaration(stmt: &Statement) -> bool {
 }
 
 fn extract_elif_stmt(expr: &Spanned<Expression>) -> Option<&Spanned<Statement>> {
-    match &expr.node {
-        Expression::Block(stmts)
-            if stmts.len() == 1 && matches!(stmts[0].node, Statement::If { .. }) =>
-        {
-            Some(&stmts[0])
-        }
-        _ => None,
-    }
-}
-
-trait CloneForFormatter {
-    fn clone_for_formatter(&self) -> Vec<Spanned<Statement>>;
-}
-
-impl CloneForFormatter for [Spanned<Statement>] {
-    fn clone_for_formatter(&self) -> Vec<Spanned<Statement>> {
-        self.iter()
-            .map(|stmt| Spanned {
-                node: clone_statement(&stmt.node),
-                span: stmt.span.clone(),
-            })
-            .collect()
-    }
-}
-
-fn clone_statement(stmt: &Statement) -> Statement {
-    match stmt {
-        Statement::Let {
-            name,
-            value,
-            type_ann,
-        } => Statement::Let {
-            name: name.clone(),
-            value: clone_expr_spanned(value),
-            type_ann: type_ann.clone(),
-        },
-        Statement::Val {
-            name,
-            value,
-            type_ann,
-        } => Statement::Val {
-            name: name.clone(),
-            value: clone_expr_spanned(value),
-            type_ann: type_ann.clone(),
-        },
-        Statement::Function {
-            name,
-            params,
-            body,
-            return_type,
-        } => Statement::Function {
-            name: name.clone(),
-            params: params.clone(),
-            body: clone_expr_spanned(body),
-            return_type: return_type.clone(),
-        },
-        Statement::Return(expr) => Statement::Return(expr.as_ref().map(clone_expr_spanned)),
-        Statement::ObjDef {
-            name,
-            fields,
-            methods,
-            uses,
-        } => Statement::ObjDef {
-            name: name.clone(),
-            fields: fields.clone(),
-            methods: methods
-                .iter()
-                .map(|m| ObjMethod {
-                    name: m.name.clone(),
-                    params: m.params.clone(),
-                    body: m.body.as_ref().map(clone_expr_spanned),
-                    return_type: m.return_type.clone(),
-                })
-                .collect(),
-            uses: uses.clone(),
-        },
-        Statement::FieldAssignment {
-            object,
-            field,
-            value,
-        } => Statement::FieldAssignment {
-            object: clone_expr_spanned(object),
-            field: field.clone(),
-            value: clone_expr_spanned(value),
-        },
-        Statement::Assignment { name, value } => Statement::Assignment {
-            name: name.clone(),
-            value: clone_expr_spanned(value),
-        },
-        Statement::If {
-            condition,
-            body,
-            else_body,
-        } => Statement::If {
-            condition: clone_expr_spanned(condition),
-            body: clone_expr_spanned(body),
-            else_body: else_body.as_ref().map(clone_expr_spanned),
-        },
-        Statement::While { condition, body } => Statement::While {
-            condition: clone_expr_spanned(condition),
-            body: clone_expr_spanned(body),
-        },
-        Statement::For {
-            name,
-            iterable,
-            body,
-        } => Statement::For {
-            name: name.clone(),
-            iterable: clone_expr_spanned(iterable),
-            body: clone_expr_spanned(body),
-        },
-        Statement::Break => Statement::Break,
-        Statement::Continue => Statement::Continue,
-        Statement::Expression(expr) => Statement::Expression(clone_expr_spanned(expr)),
-    }
-}
-
-fn clone_expr_spanned(expr: &Spanned<Expression>) -> Spanned<Expression> {
-    Spanned {
-        node: clone_expression(&expr.node),
-        span: expr.span.clone(),
-    }
-}
-
-fn clone_expression(expr: &Expression) -> Expression {
     match expr {
-        Expression::True => Expression::True,
-        Expression::False => Expression::False,
-        Expression::Float(n) => Expression::Float(*n),
-        Expression::Int(n) => Expression::Int(*n),
-        Expression::String(s) => Expression::String(s.clone()),
-        Expression::Ident(name) => Expression::Ident(name.clone()),
-        Expression::ObjLiteral { type_name, fields } => Expression::ObjLiteral {
-            type_name: type_name.clone(),
-            fields: fields
-                .iter()
-                .map(|(name, expr)| (name.clone(), clone_expr_spanned(expr)))
-                .collect(),
-        },
-        Expression::FieldAccess { object, field } => Expression::FieldAccess {
-            object: Box::new(clone_expr_spanned(object)),
-            field: field.clone(),
-        },
-        Expression::MethodCall {
-            object,
-            method,
-            args,
-        } => Expression::MethodCall {
-            object: Box::new(clone_expr_spanned(object)),
-            method: method.clone(),
-            args: args.iter().map(clone_expr_spanned).collect(),
-        },
-        Expression::BinaryOp { op, left, right } => Expression::BinaryOp {
-            op: op.clone(),
-            left: Box::new(clone_expr_spanned(left)),
-            right: Box::new(clone_expr_spanned(right)),
-        },
-        Expression::Range {
-            start,
-            end,
-            inclusive,
-        } => Expression::Range {
-            start: Box::new(clone_expr_spanned(start)),
-            end: Box::new(clone_expr_spanned(end)),
-            inclusive: *inclusive,
-        },
-        Expression::UnaryOp { op, expr } => Expression::UnaryOp {
-            op: op.clone(),
-            expr: Box::new(clone_expr_spanned(expr)),
-        },
-        Expression::Call { name, args } => Expression::Call {
-            name: name.clone(),
-            args: args.iter().map(clone_expr_spanned).collect(),
-        },
-        Expression::Block(stmts) => Expression::Block(stmts.clone_for_formatter()),
+        Spanned {
+            node: Expression::Block(stmts),
+            ..
+        } if stmts.len() == 1 && matches!(stmts[0].node, Statement::If { .. }) => Some(&stmts[0]),
+        _ => None,
     }
 }
 
