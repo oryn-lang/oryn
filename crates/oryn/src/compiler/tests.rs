@@ -20,12 +20,7 @@ fn flattens_ast_to_instructions() {
 
     assert_eq!(
         output.instructions,
-        vec![
-            Instruction::PushInt(1),
-            Instruction::PushInt(2),
-            Instruction::Add,
-            Instruction::Pop,
-        ]
+        vec![Instruction::PushInt(3), Instruction::Pop,]
     );
     assert_eq!(output.instructions.len(), output.spans.len());
 }

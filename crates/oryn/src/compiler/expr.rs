@@ -133,6 +133,38 @@ impl Compiler {
 
             // -- Operators --
             Expression::BinaryOp { op, left, right } => {
+                match (&left.node, &right.node) {
+                    (Expression::Int(l), Expression::Int(r)) => {
+                        let folded = match &op {
+                            BinOp::Add => l.checked_add(*r),
+                            BinOp::Sub => l.checked_sub(*r),
+                            BinOp::Mul => l.checked_mul(*r),
+                            BinOp::Div if *r != 0 => l.checked_div(*r),
+                            _ => None,
+                        };
+
+                        if let Some(result) = folded {
+                            self.emit(Instruction::PushInt(result), &span);
+                            return ResolvedType::Int;
+                        }
+                    }
+                    (Expression::Float(l), Expression::Float(r)) => {
+                        let folded = match &op {
+                            BinOp::Add => Some(*l + *r),
+                            BinOp::Sub => Some(*l - *r),
+                            BinOp::Mul => Some(*l * *r),
+                            BinOp::Div => Some(*l / *r),
+                            _ => None,
+                        };
+
+                        if let Some(result) = folded.filter(|v| v.is_finite()) {
+                            self.emit(Instruction::PushFloat(result), &span);
+                            return ResolvedType::Float;
+                        }
+                    }
+                    _ => {}
+                }
+
                 let left_type = self.compile_expr(*left);
                 self.compile_expr(*right);
 
