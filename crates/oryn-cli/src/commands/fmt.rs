@@ -18,6 +18,11 @@ pub fn run(target: &str) {
 
             std::process::exit(1);
         }
+        Err(FormatPathError::NoMatches { target }) => {
+            eprintln!("error: no .on files matched `{target}`");
+
+            std::process::exit(1);
+        }
         Err(FormatPathError::Format {
             path,
             source,

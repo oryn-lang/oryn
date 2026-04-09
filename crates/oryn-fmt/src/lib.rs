@@ -21,8 +21,15 @@ pub fn format_source(source: &str) -> Result<String, Vec<OrynError>> {
 }
 
 pub fn format_target(target: &str) -> Result<Vec<PathBuf>, FormatPathError> {
+    let paths = resolve_targets(target)?;
+    if paths.is_empty() {
+        return Err(FormatPathError::NoMatches {
+            target: target.to_string(),
+        });
+    }
+
     let mut formatted = Vec::new();
-    for path in resolve_targets(target)? {
+    for path in paths {
         format_file(&path)?;
         formatted.push(path);
     }
@@ -113,6 +120,9 @@ pub enum FormatPathError {
     Glob {
         pattern: String,
         source: glob::GlobError,
+    },
+    NoMatches {
+        target: String,
     },
     Format {
         path: PathBuf,
@@ -258,26 +268,7 @@ impl Formatter {
                 condition,
                 body,
                 else_body,
-            } => {
-                self.out.push_str("if ");
-                self.write_expression(condition, 0);
-                self.out.push(' ');
-                self.write_block_expression(body);
-
-                if let Some(else_body) = else_body {
-                    self.out.push(' ');
-                    self.out.push_str("else ");
-                    match &else_body.node {
-                        Expression::Block(stmts)
-                            if stmts.len() == 1
-                                && matches!(stmts[0].node, Statement::If { .. }) =>
-                        {
-                            self.write_statement_inline(&stmts[0]);
-                        }
-                        _ => self.write_block_expression(else_body),
-                    }
-                }
-            }
+            } => self.write_if_chain(condition, body, else_body.as_ref(), false),
             Statement::While { condition, body } => {
                 self.out.push_str("while ");
                 self.write_expression(condition, 0);
@@ -299,18 +290,6 @@ impl Formatter {
             Statement::Break => self.out.push_str("break"),
             Statement::Continue => self.out.push_str("continue"),
             Statement::Expression(expr) => self.write_expression(expr, 0),
-        }
-    }
-
-    fn write_statement_inline(&mut self, stmt: &Spanned<Statement>) {
-        match &stmt.node {
-            Statement::If { .. } => {
-                let saved_indent = self.indent;
-                self.indent = 0;
-                self.write_statement(stmt);
-                self.indent = saved_indent;
-            }
-            _ => self.write_statement(stmt),
         }
     }
 
@@ -371,6 +350,39 @@ impl Formatter {
                 self.out.push('\n');
                 self.write_indent();
                 self.out.push('}');
+            }
+        }
+    }
+
+    fn write_if_chain(
+        &mut self,
+        condition: &Spanned<Expression>,
+        body: &Spanned<Expression>,
+        else_body: Option<&Spanned<Expression>>,
+        is_elif: bool,
+    ) {
+        self.out.push_str(if is_elif { "elif " } else { "if " });
+        self.write_expression(condition, 0);
+        self.out.push(' ');
+        self.write_block_expression(body);
+
+        if let Some(else_body) = else_body {
+            if let Some(nested_if) = extract_elif_stmt(else_body) {
+                match &nested_if.node {
+                    Statement::If {
+                        condition,
+                        body,
+                        else_body,
+                    } => {
+                        self.out.push(' ');
+                        self.write_if_chain(condition, body, else_body.as_ref(), true);
+                    }
+                    _ => unreachable!("extract_elif_stmt only returns if statements"),
+                }
+            } else {
+                self.out.push(' ');
+                self.out.push_str("else ");
+                self.write_block_expression(else_body);
             }
         }
     }
@@ -558,6 +570,17 @@ fn needs_blank_line_between(prev: &Statement, next: &Statement) -> bool {
 
 fn statement_is_declaration(stmt: &Statement) -> bool {
     matches!(stmt, Statement::Function { .. } | Statement::ObjDef { .. })
+}
+
+fn extract_elif_stmt(expr: &Spanned<Expression>) -> Option<&Spanned<Statement>> {
+    match &expr.node {
+        Expression::Block(stmts)
+            if stmts.len() == 1 && matches!(stmts[0].node, Statement::If { .. }) =>
+        {
+            Some(&stmts[0])
+        }
+        _ => None,
+    }
 }
 
 trait CloneForFormatter {
@@ -760,5 +783,16 @@ mod tests {
         let formatted = format_source(source).unwrap();
 
         assert_eq!(formatted, "for i in 0..=3 {\n    print(i)\n}\n");
+    }
+
+    #[test]
+    fn preserves_elif_syntax() {
+        let source = "if a { print(1) } elif b { print(2) } else { print(3) }";
+        let formatted = format_source(source).unwrap();
+
+        assert_eq!(
+            formatted,
+            "if a {\n    print(1)\n} elif b {\n    print(2)\n} else {\n    print(3)\n}\n"
+        );
     }
 }

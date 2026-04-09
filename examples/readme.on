@@ -1,0 +1,22 @@
+obj Health {
+    hp: i32
+
+    fn heal(self, amount: i32) {
+        self.hp = self.hp + amount
+    }
+
+    fn is_alive(self) -> bool {
+        rn self.hp > 0
+    }
+}
+
+obj Player {
+    use Health
+    name: String
+}
+
+let player = Player { hp: 100, name: "Alice" }
+
+player.heal(20)
+print(player.hp)
+print(player.is_alive())
