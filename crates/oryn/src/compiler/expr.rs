@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::OrynError;
 use crate::compiler::types::ResolvedType;
-use crate::parser::{BinOp, Expression, Spanned, UnaryOp};
+use crate::parser::{BinOp, Expression, Spanned, StringPart, UnaryOp};
 
 use super::block::BlockMode;
 use super::compile::Compiler;
@@ -20,22 +20,47 @@ impl Compiler {
             // -- Literals --
             Expression::True => {
                 self.emit(Instruction::PushBool(true), &span);
+
                 ResolvedType::Bool
             }
             Expression::False => {
                 self.emit(Instruction::PushBool(false), &span);
+
                 ResolvedType::Bool
             }
             Expression::Float(n) => {
                 self.emit(Instruction::PushFloat(n), &span);
+
                 ResolvedType::Float
             }
             Expression::Int(n) => {
                 self.emit(Instruction::PushInt(n), &span);
+
                 ResolvedType::Int
             }
             Expression::String(s) => {
                 self.emit(Instruction::PushString(s), &span);
+
+                ResolvedType::Str
+            }
+            Expression::StringInterp(parts) => {
+                let num_parts = parts.len();
+                for part in parts {
+                    match part {
+                        StringPart::Literal(s) => {
+                            self.emit(Instruction::PushString(s), &span);
+                        }
+                        StringPart::Interp(expr) => {
+                            let returned_type = self.compile_expr(expr);
+
+                            // We don't need to convert to string if the result is already a string.
+                            if returned_type != ResolvedType::Str {
+                                self.emit(Instruction::ToString, &span);
+                            }
+                        }
+                    }
+                }
+                self.emit(Instruction::Concat(num_parts as u8), &span);
                 ResolvedType::Str
             }
 
@@ -43,13 +68,16 @@ impl Compiler {
             Expression::Ident(name) => {
                 if let Some((slot, _, resolved_type)) = self.locals.resolve(&name) {
                     self.emit(Instruction::GetLocal(slot), &span);
+
                     resolved_type
                 } else {
                     self.output.errors.push(OrynError::compiler(
                         span.clone(),
                         format!("undefined variable `{name}`"),
                     ));
+
                     self.emit(Instruction::PushInt(0), &span);
+
                     ResolvedType::Unknown
                 }
             }

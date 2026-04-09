@@ -4,7 +4,7 @@ use chumsky::input::{Input as _, MappedInput};
 use chumsky::prelude::{Rich, SimpleSpan, choice, extra, just, recursive, select};
 
 use crate::errors::OrynError;
-use crate::lexer::Token;
+use crate::lexer::{self, Token};
 
 use super::ast::*;
 
@@ -73,7 +73,11 @@ fn atom<'src>(
     let bool_lit = select! { Token::True => Expression::True, Token::False => Expression::False };
     let float = select! { Token::Float(n) => Expression::Float(n) };
     let int = select! { Token::Int(n) => Expression::Int(n) };
-    let string = select! { Token::String(s) => Expression::String(s) };
+    let string = select! { Token::String(s) => s }.map_with(|s, extra| {
+        let span: SimpleSpan = extra.span();
+        // +1 for the opening quote character stripped by the lexer.
+        parse_string_content(s, span.start + 1)
+    });
 
     // Object literal field: "name: expr"
     let obj_field_value = select! { Token::Ident(name) => name }
@@ -214,15 +218,18 @@ fn program<'src>() -> impl Parser<
         );
 
         // + and -
-        let sum = product.clone().foldl(
-            choice((
-                just(Token::Plus).to(BinOp::Add),
-                just(Token::Minus).to(BinOp::Sub),
-            ))
-            .then(product)
-            .repeated(),
-            binop_fold,
-        );
+        let sum = product
+            .clone()
+            .foldl(
+                choice((
+                    just(Token::Plus).to(BinOp::Add),
+                    just(Token::Minus).to(BinOp::Sub),
+                ))
+                .then(product)
+                .repeated(),
+                binop_fold,
+            )
+            .boxed();
 
         // ..
         let range = sum
@@ -269,7 +276,7 @@ fn program<'src>() -> impl Parser<
         // not (prefix, right-associative)
         let not = just(Token::Not)
             .repeated()
-            .foldr(comparison, |_op, expr| {
+            .foldr(comparison.boxed(), |_op, expr| {
                 let span = expr.span.clone();
                 Spanned {
                     node: Expression::UnaryOp {
@@ -347,8 +354,8 @@ fn program<'src>() -> impl Parser<
                 .labelled(label)
         };
 
-        let let_stmt = binding_stmt(Token::Let, "let statement", true);
-        let val_stmt = binding_stmt(Token::Val, "val statement", false);
+        let let_stmt = binding_stmt(Token::Let, "let statement", true).boxed();
+        let val_stmt = binding_stmt(Token::Val, "val statement", false).boxed();
 
         // -- Assignments --
 
@@ -368,7 +375,8 @@ fn program<'src>() -> impl Parser<
                     },
                     name_span,
                 )
-            });
+            })
+            .boxed();
 
         // x = expr
         let assign_stmt = select! { Token::Ident(name) => name }
@@ -377,7 +385,8 @@ fn program<'src>() -> impl Parser<
             .map_with(|(name, value), extra| {
                 Spanned::new(Statement::Assignment { name, value }, extra.span())
             })
-            .labelled("assign statement");
+            .labelled("assign statement")
+            .boxed();
 
         // -- Objects --
 
@@ -469,7 +478,8 @@ fn program<'src>() -> impl Parser<
                     extra.span(),
                 )
             })
-            .labelled("object definition");
+            .labelled("object definition")
+            .boxed();
 
         // -- Functions --
 
@@ -487,7 +497,8 @@ fn program<'src>() -> impl Parser<
                     extra.span(),
                 )
             })
-            .labelled("function");
+            .labelled("function")
+            .boxed();
 
         let return_stmt = just(Token::Rn)
             .ignore_then(expr.clone().or_not())
@@ -496,30 +507,33 @@ fn program<'src>() -> impl Parser<
 
         // -- Control flow --
 
-        let if_stmt = just(Token::If).ignore_then(recursive(|if_body| {
-            let else_branch = just(Token::Else)
-                .ignore_then(block.clone())
-                .or(just(Token::Elif).ignore_then(if_body).map_with(
-                    |elif_stmt: Spanned<Statement>, extra| {
-                        // Desugar `elif` into an else-block containing a single if statement.
-                        Spanned::new(Expression::Block(vec![elif_stmt]), extra.span())
-                    },
-                ));
+        let if_stmt = just(Token::If)
+            .ignore_then(recursive(|if_body| {
+                let else_branch =
+                    just(Token::Else)
+                        .ignore_then(block.clone())
+                        .or(just(Token::Elif).ignore_then(if_body).map_with(
+                            |elif_stmt: Spanned<Statement>, extra| {
+                                // Desugar `elif` into an else-block containing a single if statement.
+                                Spanned::new(Expression::Block(vec![elif_stmt]), extra.span())
+                            },
+                        ));
 
-            expr.clone()
-                .then(block.clone())
-                .then(else_branch.or_not())
-                .map_with(|((condition, body), else_body), extra| {
-                    Spanned::new(
-                        Statement::If {
-                            condition,
-                            body,
-                            else_body,
-                        },
-                        extra.span(),
-                    )
-                })
-        }));
+                expr.clone()
+                    .then(block.clone())
+                    .then(else_branch.or_not())
+                    .map_with(|((condition, body), else_body), extra| {
+                        Spanned::new(
+                            Statement::If {
+                                condition,
+                                body,
+                                else_body,
+                            },
+                            extra.span(),
+                        )
+                    })
+            }))
+            .boxed();
 
         let while_stmt = just(Token::While)
             .ignore_then(expr.clone())
@@ -544,7 +558,8 @@ fn program<'src>() -> impl Parser<
                     extra.span(),
                 )
             })
-            .labelled("for statement");
+            .labelled("for statement")
+            .boxed();
 
         let break_stmt =
             just(Token::Break).map_with(|_, extra| Spanned::new(Statement::Break, extra.span()));
@@ -587,4 +602,138 @@ fn program<'src>() -> impl Parser<
         .clone()
         .or_not()
         .ignore_then(stmt.separated_by(newlines).allow_trailing().collect())
+}
+
+/// Split a string token's content into literal and interpolation parts.
+/// `base_offset` is the byte offset in the original source where the
+/// string content begins (after the opening `"`), used to produce
+/// correct spans for interpolated expressions.
+fn parse_string_content(input: String, base_offset: usize) -> Expression {
+    let mut parts = Vec::new();
+    let mut literal_buffer = String::new();
+    let mut expr_buffer = String::new();
+    let mut brace_depth: u32 = 0;
+    // Byte position within `input`, used to compute source offsets.
+    let mut byte_pos: usize = 0;
+    // Byte position where the current interpolation's content starts
+    // (after the opening `{`).
+    let mut expr_start: usize = 0;
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        let char_len = c.len_utf8();
+
+        if brace_depth > 0 {
+            // Inside an interpolation expression.
+            if c == '{' {
+                brace_depth += 1;
+                expr_buffer.push(c);
+            } else if c == '}' {
+                brace_depth -= 1;
+                if brace_depth == 0 {
+                    // End of interpolation — parse the collected expression.
+                    let offset = base_offset + expr_start;
+                    if let Some(expr) = parse_interp_expression(&expr_buffer, offset) {
+                        parts.push(StringPart::Interp(expr));
+                    } else {
+                        // Failed to parse — preserve the original text as a literal
+                        // so nothing silently disappears.
+                        literal_buffer.push('{');
+                        literal_buffer.push_str(&expr_buffer);
+                        literal_buffer.push('}');
+                    }
+                    expr_buffer.clear();
+                } else {
+                    expr_buffer.push(c);
+                }
+            } else {
+                expr_buffer.push(c);
+            }
+        } else if c == '\\' {
+            // Escape sequences in literal mode.
+            if let Some(&next) = chars.peek() {
+                let next_len = next.len_utf8();
+                match next {
+                    '\\' | '{' | '}' => {
+                        literal_buffer.push(next);
+                        chars.next();
+                        byte_pos += next_len;
+                    }
+                    _ => {
+                        // Unknown escape — preserve both characters verbatim.
+                        literal_buffer.push('\\');
+                        literal_buffer.push(next);
+                        chars.next();
+                        byte_pos += next_len;
+                    }
+                }
+            } else {
+                // Trailing backslash at end of string — preserve it.
+                literal_buffer.push('\\');
+            }
+        } else if c == '{' {
+            // Start of interpolation.
+            if !literal_buffer.is_empty() {
+                parts.push(StringPart::Literal(std::mem::take(&mut literal_buffer)));
+            }
+            brace_depth = 1;
+            // The expression content starts at the next byte after `{`.
+            expr_start = byte_pos + char_len;
+        } else {
+            literal_buffer.push(c);
+        }
+
+        byte_pos += char_len;
+    }
+
+    // Unclosed interpolation — preserve as literal text so nothing disappears.
+    if brace_depth > 0 {
+        literal_buffer.push('{');
+        literal_buffer.push_str(&expr_buffer);
+    }
+
+    if !literal_buffer.is_empty() {
+        parts.push(StringPart::Literal(literal_buffer));
+    }
+
+    if parts.len() == 1
+        && let StringPart::Literal(s) = &parts[0]
+    {
+        return Expression::String(s.clone());
+    }
+
+    Expression::StringInterp(parts)
+}
+
+/// Lex and parse a single expression from a string interpolation fragment.
+/// `base_offset` is the byte offset in the original source where the
+/// expression text begins, used to shift spans so error messages and
+/// LSP features point to the correct source location.
+fn parse_interp_expression(source: &str, base_offset: usize) -> Option<Spanned<Expression>> {
+    let (tokens, lex_errors) = lexer::lex(source);
+
+    if !lex_errors.is_empty() || tokens.is_empty() {
+        return None;
+    }
+
+    // Offset token spans to their position in the original source.
+    let tokens: Vec<_> = tokens
+        .into_iter()
+        .map(|(tok, span)| (tok, (span.start + base_offset)..(span.end + base_offset)))
+        .collect();
+
+    let (stmts, parse_errors) = parse(tokens);
+
+    if !parse_errors.is_empty() {
+        return None;
+    }
+
+    // We expect exactly one statement: an expression statement.
+    if stmts.len() == 1
+        && let Statement::Expression(expr) = stmts.into_iter().next()?.node
+    {
+        return Some(expr);
+    }
+
+    None
 }

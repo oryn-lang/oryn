@@ -83,6 +83,7 @@ pub enum Expression {
     Float(f32),
     Int(i32),
     String(String),
+    StringInterp(Vec<StringPart>),
     Ident(String),
     ObjLiteral {
         type_name: String,
@@ -153,4 +154,10 @@ pub struct ObjMethod {
     pub params: Vec<(String, Option<TypeAnnotation>)>,
     pub body: Option<Spanned<Expression>>,
     pub return_type: Option<TypeAnnotation>,
+}
+
+#[derive(Debug)]
+pub enum StringPart {
+    Literal(String),
+    Interp(Spanned<Expression>),
 }

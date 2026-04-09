@@ -14,6 +14,18 @@ pub fn hover(source: &str, pos: Position, symbol_table: &SymbolTable) -> Option<
         .into_iter()
         .find(|(_, span)| offset >= span.start && offset < span.end)?;
 
+    // For strings with interpolation, check if the cursor is on a
+    // symbol reference inside the string before falling back to the
+    // generic "String literal" hover.
+    if matches!(&token, oryn::Token::String(_))
+        && let Some(info) = hover_reference(offset, symbol_table)
+    {
+        return Some(Hover {
+            contents: HoverContents::Scalar(MarkedString::String(info)),
+            range: Some(span_to_range(source, span)),
+        });
+    }
+
     let contents = match &token {
         oryn::Token::Ident(name) => hover_ident(name, offset, symbol_table),
         oryn::Token::Int(n) => Some(format!("`{n}` - i32 literal")),
@@ -56,6 +68,20 @@ pub fn hover(source: &str, pos: Position, symbol_table: &SymbolTable) -> Option<
         contents: HoverContents::Scalar(MarkedString::String(contents)),
         range: Some(span_to_range(source, span)),
     })
+}
+
+/// Check if the cursor offset falls on a symbol reference (e.g. inside
+/// a string interpolation) and return hover info if so.
+fn hover_reference(offset: usize, table: &SymbolTable) -> Option<String> {
+    for reference in &table.references {
+        if offset >= reference.name_span.start
+            && offset < reference.name_span.end
+            && let Some(def_idx) = reference.definition_idx
+        {
+            return Some(format_definition(&table.definitions[def_idx]));
+        }
+    }
+    None
 }
 
 /// Build hover info for an identifier by looking it up in the symbol table.

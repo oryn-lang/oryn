@@ -16,6 +16,8 @@ pub enum Instruction {
     PushFloat(f32),
     PushInt(i32),
     PushString(String),
+    ToString,
+    Concat(u8),
     MakeRange(bool),
     GetLocal(usize),
     SetLocal(usize),

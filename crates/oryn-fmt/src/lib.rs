@@ -3,7 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use glob::glob;
-use oryn::{BinOp, Expression, ObjMethod, OrynError, Spanned, Statement, TypeAnnotation, UnaryOp};
+use oryn::{
+    BinOp, Expression, ObjMethod, OrynError, Spanned, Statement, StringPart, TypeAnnotation,
+    UnaryOp,
+};
 
 pub fn format_source(source: &str) -> Result<String, Vec<OrynError>> {
     let (tokens, lex_errors) = oryn::lex(source);
@@ -494,6 +497,20 @@ impl Formatter {
                 self.out.push(')');
             }
             Expression::Block(stmts) => self.write_block_statements(stmts),
+            Expression::StringInterp(parts) => {
+                self.out.push('"');
+                for part in parts {
+                    match part {
+                        StringPart::Literal(s) => self.out.push_str(s),
+                        StringPart::Interp(expr) => {
+                            self.out.push('{');
+                            self.write_expression(expr, 0);
+                            self.out.push('}');
+                        }
+                    }
+                }
+                self.out.push('"');
+            }
         }
 
         if needs_parens {

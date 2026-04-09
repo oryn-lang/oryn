@@ -6,7 +6,7 @@
 //! emission, etc.), then call the corresponding `walk_*` function to
 //! recurse into children.
 
-use crate::parser::{Expression, ObjMethod, Span, Spanned, Statement};
+use crate::parser::{Expression, ObjMethod, Span, Spanned, Statement, StringPart};
 
 /// Trait for walking the Oryn AST with custom side effects at each node.
 ///
@@ -162,6 +162,14 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
         | Expression::Float(_)
         | Expression::Int(_)
         | Expression::String(_) => {}
+
+        Expression::StringInterp(parts) => {
+            for part in parts {
+                if let StringPart::Interp(expr) = part {
+                    visitor.visit_expr(expr);
+                }
+            }
+        }
 
         Expression::Ident(name) => {
             visitor.on_reference(name, &expr.span);

@@ -35,7 +35,7 @@ pub enum Token {
     Float(f32),
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i32>().ok())]
     Int(i32),
-    #[regex(r#""[^"]*""#, |lex| {
+    #[regex(r#""(\\.|[^"\\])*""#, |lex| {
         let s = lex.slice();
 
         // Strip the surrounding quotes.

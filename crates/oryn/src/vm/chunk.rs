@@ -115,6 +115,8 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::PushFloat(n) => format!("PushFloat {n}"),
             Instruction::PushInt(n) => format!("PushInt {n}"),
             Instruction::PushString(s) => format!("PushString {s}"),
+            Instruction::ToString => "ToString".to_string(),
+            Instruction::Concat(n) => format!("Concat {n}"),
             Instruction::MakeRange(inclusive) => format!("MakeRange inclusive={inclusive}"),
             Instruction::GetLocal(slot) => format!("GetLocal {slot}"),
             Instruction::SetLocal(slot) => format!("SetLocal {slot}"),

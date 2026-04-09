@@ -238,6 +238,76 @@ impl VM {
                     Instruction::PushString(s) => {
                         state.stack.push(Value::String(Gc::new(mc, s.clone())));
                     }
+                    Instruction::ToString => {
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        let s = match &value {
+                            Value::Bool(b) => b.to_string(),
+                            Value::Float(f) => {
+                                let s = f.to_string();
+                                if s.contains('.') { s } else { format!("{s}.0") }
+                            }
+                            Value::Int(i) => i.to_string(),
+                            Value::String(s) => s.as_str().to_string(),
+                            Value::Object(obj_ref) => {
+                                let data = obj_ref.borrow();
+                                let type_name = &chunk.obj_defs[data.type_idx].name;
+                                format!("<{type_name} instance>")
+                            }
+                            Value::Range(range_ref) => {
+                                let range = range_ref.borrow();
+                                let op = if range.inclusive { "..=" } else { ".." };
+                                format!("{}{}{}", range.current, op, range.end)
+                            }
+                            Value::Uninitialized => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::String,
+                                    actual: ValueType::from(&value),
+                                    span: Self::current_span_from_state(&state.frames, chunk),
+                                });
+                            }
+                        };
+
+                        state.stack.push(Value::String(Gc::new(mc, s)));
+                    }
+                    Instruction::Concat(n) => {
+                        let n = *n as usize;
+                        if n == 0 {
+                            state.stack.push(Value::String(Gc::new(mc, String::new())));
+                        } else {
+                            // Parts are on the stack in order: first-pushed is deepest.
+                            // Split off the top N values to preserve ordering.
+                            let start = state.stack.len().saturating_sub(n);
+                            let parts = state.stack.split_off(start);
+
+                            let total_len: usize = parts
+                                .iter()
+                                .map(|v| match v {
+                                    Value::String(s) => s.len(),
+                                    _ => 0,
+                                })
+                                .sum();
+                            let mut result = String::with_capacity(total_len);
+
+                            for value in &parts {
+                                match value {
+                                    Value::String(s) => result.push_str(s),
+                                    _ => {
+                                        return Err(RuntimeError::TypeError {
+                                            expected: ValueType::String,
+                                            actual: ValueType::from(value),
+                                            span: Self::current_span_from_state(
+                                                &state.frames,
+                                                chunk,
+                                            ),
+                                        });
+                                    }
+                                }
+                            }
+
+                            state.stack.push(Value::String(Gc::new(mc, result)));
+                        }
+                    }
                     Instruction::MakeRange(inclusive) => {
                         let end = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
                         let start = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
