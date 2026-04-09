@@ -1,0 +1,17 @@
+obj Counter {
+    value: i32
+
+    fn inc(self) {
+        self.value = self.value + 1
+    }
+}
+
+let c = Counter { value: 0 }
+let i = 0
+
+while i < 200000 {
+    c.inc()
+    i = i + 1
+}
+
+print(c.value)

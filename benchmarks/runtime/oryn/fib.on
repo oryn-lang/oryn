@@ -1,0 +1,14 @@
+fn fib(n: i32) -> i32 {
+    if n <= 1 { rn n }
+    rn fib(n - 1) + fib(n - 2)
+}
+
+let i = 0
+let total = 0
+
+while i < 10 {
+    total = total + fib(28)
+    i = i + 1
+}
+
+print(total)

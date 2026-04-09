@@ -1,7 +1,0 @@
-obj Position {
-    x: i32
-    y: i32
-}
-
-let position = Position { x: 1, y: 2 }
-print(position.y)

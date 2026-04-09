@@ -6,6 +6,12 @@
 
 Early development.
 
+## [Benchmarks](./benchmarks/report.md)
+
+- Overall: across 12 benchmarks, Oryn is about 1.23x slower than Lua and 6.69x slower than LuaJIT.
+- Source: across 6 benchmarks, Oryn is about 2.05x slower than Lua and 5.27x slower than LuaJIT.
+- Runtime: across 6 benchmarks, Oryn is about 0.74x slower than Lua and 8.51x slower than LuaJIT.
+
 ## Example
 
 ```oryn

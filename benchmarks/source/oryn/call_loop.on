@@ -1,0 +1,13 @@
+fn add_one(n: i32) -> i32 {
+    rn n + 1
+}
+
+let i = 0
+let total = 0
+
+while i < 200000 {
+    total = add_one(total)
+    i = i + 1
+}
+
+print(total)

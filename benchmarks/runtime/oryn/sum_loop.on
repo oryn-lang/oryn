@@ -1,0 +1,9 @@
+let i = 0
+let total = 0
+
+while i < 400000 {
+    total = total + (i / 100)
+    i = i + 1
+}
+
+print(total)
