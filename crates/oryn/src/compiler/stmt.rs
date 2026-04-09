@@ -258,7 +258,7 @@ impl Compiler {
                 self.emit(Instruction::JumpIfFalse(0), &stmt_span);
 
                 self.loops.push(LoopContext {
-                    start: loop_start,
+                    continue_target: loop_start,
                     break_patches: Vec::new(),
                 });
 
@@ -274,6 +274,56 @@ impl Compiler {
                     self.output.instructions[patch_idx] = Instruction::Jump(end);
                 }
             }
+            Statement::For {
+                name,
+                iterable,
+                body,
+            } => {
+                self.with_scope(|this| {
+                    let iterable_type = this.compile_expr(iterable);
+
+                    this.check_types(
+                        &ResolvedType::Range,
+                        &iterable_type,
+                        &stmt_span,
+                        "for loop iterable type mismatch",
+                    );
+
+                    let range_slot =
+                        this.locals
+                            .define("@for_range".to_string(), false, ResolvedType::Range);
+                    this.emit(Instruction::SetLocal(range_slot), &stmt_span);
+
+                    let item_slot = this.locals.define(name, false, ResolvedType::Int);
+
+                    let loop_start = this.output.instructions.len();
+                    this.emit(Instruction::GetLocal(range_slot), &stmt_span);
+                    this.emit(Instruction::RangeHasNext, &stmt_span);
+
+                    let exit_jump_idx = this.output.instructions.len();
+                    this.emit(Instruction::JumpIfFalse(0), &stmt_span);
+
+                    this.emit(Instruction::GetLocal(range_slot), &stmt_span);
+                    this.emit(Instruction::RangeNext, &stmt_span);
+                    this.emit(Instruction::SetLocal(item_slot), &stmt_span);
+
+                    this.loops.push(LoopContext {
+                        continue_target: loop_start,
+                        break_patches: Vec::new(),
+                    });
+
+                    this.compile_body_expr(body);
+                    this.emit(Instruction::Jump(loop_start), &stmt_span);
+
+                    let end = this.output.instructions.len();
+                    this.output.instructions[exit_jump_idx] = Instruction::JumpIfFalse(end);
+
+                    let loop_ctx = this.loops.pop().expect("loop context missing");
+                    for patch_idx in loop_ctx.break_patches {
+                        this.output.instructions[patch_idx] = Instruction::Jump(end);
+                    }
+                });
+            }
             Statement::Break => {
                 if self.loops.is_empty() {
                     self.output
@@ -287,8 +337,7 @@ impl Compiler {
             }
             Statement::Continue => {
                 if let Some(loop_ctx) = self.loops.last() {
-                    let start = loop_ctx.start;
-                    self.emit(Instruction::Jump(start), &stmt_span);
+                    self.emit(Instruction::Jump(loop_ctx.continue_target), &stmt_span);
                 } else {
                     self.output
                         .errors

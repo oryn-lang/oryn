@@ -21,6 +21,10 @@ pub enum Token {
     Obj,
     #[token("use")]
     Use,
+    #[token("for")]
+    For,
+    #[token("in")]
+    In,
 
     // Literals.
     #[token("true")]
@@ -84,6 +88,10 @@ pub enum Token {
     Continue,
 
     // Punctuation.
+    #[token("..=")]
+    DotDotEquals,
+    #[token("..")]
+    DotDot,
     #[token(".")]
     Dot,
     #[token(":")]
@@ -119,6 +127,8 @@ impl Display for Token {
             Token::Rn => write!(f, "rn"),
             Token::Obj => write!(f, "obj"),
             Token::Use => write!(f, "use"),
+            Token::For => write!(f, "for"),
+            Token::In => write!(f, "in"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::Float(n) => write!(f, "{n}"),
@@ -144,6 +154,8 @@ impl Display for Token {
             Token::While => write!(f, "while"),
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
+            Token::DotDotEquals => write!(f, "..="),
+            Token::DotDot => write!(f, ".."),
             Token::Dot => write!(f, "."),
             Token::Colon => write!(f, ":"),
             Token::Arrow => write!(f, "->"),

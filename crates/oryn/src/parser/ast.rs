@@ -65,6 +65,11 @@ pub enum Statement {
         condition: Spanned<Expression>,
         body: Spanned<Expression>,
     },
+    For {
+        name: String,
+        iterable: Spanned<Expression>,
+        body: Spanned<Expression>,
+    },
     Break,
     Continue,
     Expression(Spanned<Expression>),
@@ -96,6 +101,11 @@ pub enum Expression {
         op: BinOp,
         left: Box<Spanned<Expression>>,
         right: Box<Spanned<Expression>>,
+    },
+    Range {
+        start: Box<Spanned<Expression>>,
+        end: Box<Spanned<Expression>>,
+        inclusive: bool,
     },
     UnaryOp {
         op: UnaryOp,

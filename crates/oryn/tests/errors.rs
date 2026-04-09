@@ -282,3 +282,47 @@ fn bool_ordering_is_runtime_error() {
     let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
     assert!(matches!(err, oryn::RuntimeError::TypeMismatch { .. }));
 }
+
+#[test]
+fn for_requires_range_iterable() {
+    let result = oryn::Chunk::compile("for i in 123 {\nprint(i)\n}");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("iterable type mismatch"))
+    }));
+}
+
+#[test]
+fn range_start_must_be_int() {
+    let result = oryn::Chunk::compile("print(true..3)");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("range start type mismatch"))
+    }));
+}
+
+#[test]
+fn range_end_must_be_int() {
+    let result = oryn::Chunk::compile("print(0..false)");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("range end type mismatch"))
+    }));
+}
+
+#[test]
+fn inclusive_range_end_must_be_int() {
+    let result = oryn::Chunk::compile("print(0..=false)");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("range end type mismatch"))
+    }));
+}

@@ -95,7 +95,7 @@ impl Compiler {
         let func_instructions =
             std::mem::replace(&mut self.output.instructions, parent_instructions);
         let func_spans = std::mem::replace(&mut self.output.spans, parent_spans);
-        let func_num_locals = self.locals.count;
+        let func_num_locals = self.locals.max_count;
 
         // Restore parent state.
         self.locals = parent_locals;

@@ -115,6 +115,7 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::PushFloat(n) => format!("PushFloat {n}"),
             Instruction::PushInt(n) => format!("PushInt {n}"),
             Instruction::PushString(s) => format!("PushString {s}"),
+            Instruction::MakeRange(inclusive) => format!("MakeRange inclusive={inclusive}"),
             Instruction::GetLocal(slot) => format!("GetLocal {slot}"),
             Instruction::SetLocal(slot) => format!("SetLocal {slot}"),
             Instruction::NewObject(type_idx, num_fields) => {
@@ -152,6 +153,8 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::Pop => "Pop".to_string(),
             Instruction::JumpIfFalse(target) => format!("JumpIfFalse -> {target:04}"),
             Instruction::Jump(target) => format!("Jump -> {target:04}"),
+            Instruction::RangeHasNext => "RangeHasNext".to_string(),
+            Instruction::RangeNext => "RangeNext".to_string(),
         };
 
         writeln!(out, "{i:04}  {formatted}").unwrap();

@@ -83,6 +83,36 @@ fn elif_chain() {
     );
 }
 
+#[test]
+fn block_scope_does_not_escape() {
+    let result = oryn::Chunk::compile("{\nlet x = 1\n}\nprint(x)");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined variable"))
+    }));
+}
+
+#[test]
+fn block_scope_restores_shadowed_binding() {
+    assert_eq!(
+        run("let x = 7\n{\nlet x = 9\nprint(x)\n}\nprint(x)"),
+        "9\n7\n"
+    );
+}
+
+#[test]
+fn if_scope_does_not_escape() {
+    let result = oryn::Chunk::compile("if true {\nlet x = 1\n}\nprint(x)");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined variable"))
+    }));
+}
+
 // --- While loops ---
 
 #[test]
@@ -131,5 +161,69 @@ fn break_in_nested_if() {
     assert_eq!(
         run("let x = 0\nwhile true {\nx = x + 1\nif x > 5 {\nbreak\n}\n}\nprint(x)"),
         "6\n",
+    );
+}
+
+#[test]
+fn while_scope_does_not_escape() {
+    let result = oryn::Chunk::compile("while false {\nlet x = 1\n}\nprint(x)");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined variable"))
+    }));
+}
+
+#[test]
+fn for_loop_iterates_half_open_range() {
+    assert_eq!(run("for i in 0..3 {\nprint(i)\n}"), "0\n1\n2\n");
+}
+
+#[test]
+fn for_loop_iterates_inclusive_range() {
+    assert_eq!(run("for i in 2..=5 {\nprint(i)\n}"), "2\n3\n4\n5\n");
+}
+
+#[test]
+fn for_loop_can_accumulate() {
+    assert_eq!(
+        run("let total = 0\nfor i in 1..4 {\ntotal = total + i\n}\nprint(total)"),
+        "6\n",
+    );
+}
+
+#[test]
+fn for_continue_skips_rest_of_iteration() {
+    assert_eq!(
+        run("for i in 0..5 {\nif i == 1 { continue }\nif i == 3 { continue }\nprint(i)\n}"),
+        "0\n2\n4\n",
+    );
+}
+
+#[test]
+fn for_break_exits_loop() {
+    assert_eq!(
+        run("for i in 0..5 {\nif i == 3 { break }\nprint(i)\n}"),
+        "0\n1\n2\n",
+    );
+}
+
+#[test]
+fn for_loop_variable_does_not_escape() {
+    let result = oryn::Chunk::compile("for i in 0..1 {\nprint(i)\n}\nprint(i)");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined variable"))
+    }));
+}
+
+#[test]
+fn for_loop_restores_shadowed_outer_binding() {
+    assert_eq!(
+        run("let i = 99\nfor i in 0..2 {\nprint(i)\n}\nprint(i)"),
+        "0\n1\n99\n"
     );
 }

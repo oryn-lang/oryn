@@ -10,6 +10,7 @@ pub(crate) enum Value<'gc> {
     Bool(bool),
     Float(f32),
     Int(i32),
+    Range(Gc<'gc, RefLock<RangeValue>>),
     // RefLock is gc-arena's GC-aware RefCell. It provides interior
     // mutability for field writes: .borrow() to read, .borrow_mut(mc)
     // to write (requires the mutation context from arena.mutate_root).
@@ -28,6 +29,14 @@ pub(crate) struct ObjData<'gc> {
     // Field values in definition order. Field index is resolved at
     // compile time, so access is a direct array index with no hashing.
     pub fields: Vec<Value<'gc>>,
+}
+
+#[derive(Debug, PartialEq, Collect)]
+#[collect(no_drop)]
+pub(crate) struct RangeValue {
+    pub current: i32,
+    pub end: i32,
+    pub inclusive: bool,
 }
 
 /// A call frame on the VM's call stack. Each function invocation

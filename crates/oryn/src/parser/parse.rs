@@ -224,8 +224,35 @@ fn program<'src>() -> impl Parser<
             binop_fold,
         );
 
+        // ..
+        let range = sum
+            .clone()
+            .then(
+                choice((
+                    just(Token::DotDotEquals).to(true),
+                    just(Token::DotDot).to(false),
+                ))
+                .then(sum.clone())
+                .or_not(),
+            )
+            .map(|(start, end)| match end {
+                Some((inclusive, end)) => {
+                    let span = start.span.start..end.span.end;
+                    Spanned {
+                        node: Expression::Range {
+                            start: Box::new(start),
+                            end: Box::new(end),
+                            inclusive,
+                        },
+                        span,
+                    }
+                }
+                None => start,
+            })
+            .boxed();
+
         // == != < > <= >=
-        let comparison = sum.clone().foldl(
+        let comparison = range.clone().foldl(
             choice((
                 just(Token::EqualsEquals).to(BinOp::Equals),
                 just(Token::NotEquals).to(BinOp::NotEquals),
@@ -234,7 +261,7 @@ fn program<'src>() -> impl Parser<
                 just(Token::LessThanEquals).to(BinOp::LessThanEquals),
                 just(Token::GreaterThanEquals).to(BinOp::GreaterThanEquals),
             ))
-            .then(sum)
+            .then(range)
             .repeated(),
             binop_fold,
         );
@@ -502,11 +529,32 @@ fn program<'src>() -> impl Parser<
             })
             .labelled("while statement");
 
+        let for_stmt = just(Token::For)
+            .ignore_then(select! { Token::Ident(name) => name })
+            .then_ignore(just(Token::In))
+            .then(expr.clone())
+            .then(block.clone())
+            .map_with(|((name, iterable), body), extra| {
+                Spanned::new(
+                    Statement::For {
+                        name,
+                        iterable,
+                        body,
+                    },
+                    extra.span(),
+                )
+            })
+            .labelled("for statement");
+
         let break_stmt =
             just(Token::Break).map_with(|_, extra| Spanned::new(Statement::Break, extra.span()));
 
         let continue_stmt = just(Token::Continue)
             .map_with(|_, extra| Spanned::new(Statement::Continue, extra.span()));
+
+        let block_stmt = block
+            .clone()
+            .map_with(|expr, extra| Spanned::new(Statement::Expression(expr), extra.span()));
 
         // A bare expression as a statement (e.g. a function call).
         let expr_stmt = expr
@@ -524,8 +572,10 @@ fn program<'src>() -> impl Parser<
             .or(return_stmt)
             .or(if_stmt)
             .or(while_stmt)
+            .or(for_stmt)
             .or(break_stmt)
             .or(continue_stmt)
+            .or(block_stmt)
             .or(expr_stmt)
     })
     .labelled("statement");

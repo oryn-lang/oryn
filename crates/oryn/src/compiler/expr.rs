@@ -197,6 +197,32 @@ impl Compiler {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => left_type,
                 }
             }
+            Expression::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let start_type = self.compile_expr(*start);
+                let end_type = self.compile_expr(*end);
+
+                self.check_types(
+                    &ResolvedType::Int,
+                    &start_type,
+                    &span,
+                    "range start type mismatch",
+                );
+
+                self.check_types(
+                    &ResolvedType::Int,
+                    &end_type,
+                    &span,
+                    "range end type mismatch",
+                );
+
+                self.emit(Instruction::MakeRange(inclusive), &span);
+
+                ResolvedType::Range
+            }
             Expression::UnaryOp { op, expr: operand } => {
                 let operand_type = self.compile_expr(*operand);
 

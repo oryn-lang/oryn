@@ -6,7 +6,7 @@ use gc_arena::{Arena, Gc, Rootable};
 
 use crate::compiler::Instruction;
 use crate::errors::{RuntimeError, ValueType};
-use crate::vm::value::ObjData;
+use crate::vm::value::{ObjData, RangeValue};
 
 use super::chunk::Chunk;
 use super::value::{CallFrame, Value, VmState};
@@ -225,6 +225,34 @@ impl VM {
                     }
                     Instruction::PushString(s) => {
                         state.stack.push(Value::String(Gc::new(mc, s.clone())));
+                    }
+                    Instruction::MakeRange(inclusive) => {
+                        let end = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let start = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        match (start, end) {
+                            (Value::Int(start), Value::Int(end)) => {
+                                let range = RangeValue {
+                                    current: start,
+                                    end,
+                                    inclusive: *inclusive,
+                                };
+
+                                state
+                                    .stack
+                                    .push(Value::Range(Gc::new(mc, RefLock::new(range))));
+                            }
+                            (ref left, ref right) => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeMismatch {
+                                    op: "..",
+                                    left: ValueType::from(left),
+                                    right: ValueType::from(right),
+                                    span,
+                                });
+                            }
+                        }
                     }
                     Instruction::GetLocal(slot) => {
                         // SAFETY: A main frame is always pushed before the
@@ -445,6 +473,12 @@ impl VM {
 
                                             format!("<{type_name} instance>")
                                         }
+                                        Value::Range(range_ref) => {
+                                            let range = range_ref.borrow();
+                                            let op = if range.inclusive { "..=" } else { ".." };
+
+                                            format!("{}{}{}", range.current, op, range.end)
+                                        }
                                         Value::String(s) => s.as_str().to_string(),
                                     })
                                     .collect();
@@ -582,6 +616,59 @@ impl VM {
                         // SAFETY: Same frame-stack invariant.
                         state.frames.last_mut().unwrap().ip = *target;
                         continue;
+                    }
+                    Instruction::RangeHasNext => {
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        match value {
+                            Value::Range(range_ref) => {
+                                let range = range_ref.borrow();
+
+                                let has_next = if range.inclusive {
+                                    range.current <= range.end
+                                } else {
+                                    range.current < range.end
+                                };
+
+                                state.stack.push(Value::Bool(has_next));
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Range,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    Instruction::RangeNext => {
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        match value {
+                            Value::Range(range_ref) => {
+                                let mut range = range_ref.borrow_mut(mc);
+                                let next = range.current;
+
+                                range.current = range.current.checked_add(1).ok_or_else(|| {
+                                    RuntimeError::IntegerOverflow {
+                                        span: Self::current_span_from_state(&state.frames, chunk),
+                                    }
+                                })?;
+
+                                state.stack.push(Value::Int(next));
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Range,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
                     }
                 }
 

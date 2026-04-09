@@ -119,6 +119,18 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
             visitor.visit_expr(body);
         }
 
+        Statement::For {
+            name,
+            iterable,
+            body,
+        } => {
+            visitor.visit_expr(iterable);
+            visitor.enter_scope();
+            visitor.on_define(name, &stmt.span, &stmt.span);
+            visitor.visit_expr(body);
+            visitor.exit_scope();
+        }
+
         Statement::Break | Statement::Continue => {}
 
         Statement::Expression(expr) => {
@@ -177,6 +189,11 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
             visitor.visit_expr(right);
         }
 
+        Expression::Range { start, end, .. } => {
+            visitor.visit_expr(start);
+            visitor.visit_expr(end);
+        }
+
         Expression::UnaryOp { expr: operand, .. } => {
             visitor.visit_expr(operand);
         }
@@ -222,6 +239,7 @@ mod tests {
                 Statement::ObjDef { .. } => "obj",
                 Statement::If { .. } => "if",
                 Statement::While { .. } => "while",
+                Statement::For { .. } => "for",
                 Statement::Return(_) => "return",
                 Statement::Break => "break",
                 Statement::Continue => "continue",

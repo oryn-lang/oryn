@@ -261,6 +261,21 @@ fn inferred_types_work_without_annotations() {
     assert_eq!(run("let x = true\nprint(x)"), "true\n");
 }
 
+#[test]
+fn range_value_prints() {
+    assert_eq!(run("print(2..5)"), "2..5\n");
+}
+
+#[test]
+fn inclusive_range_value_prints() {
+    assert_eq!(run("print(2..=5)"), "2..=5\n");
+}
+
+#[test]
+fn range_type_annotation_works() {
+    assert_eq!(run("let values: Range = 1..3\nprint(values)"), "1..3\n");
+}
+
 // --- Unary minus ---
 
 #[test]

@@ -19,6 +19,15 @@ pub(super) enum BlockMode {
 // ---------------------------------------------------------------------------
 
 impl Compiler {
+    pub(super) fn with_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved_locals = self.locals.snapshot();
+        let result = f(self);
+
+        self.locals.restore(saved_locals);
+
+        result
+    }
+
     /// Compile a block of statements with explicit loop-context control.
     pub(super) fn compile_block(
         &mut self,
@@ -30,15 +39,19 @@ impl Compiler {
             BlockMode::InheritLoops => None,
         };
 
-        for stmt in stmts {
-            self.compile_stmt(stmt);
-        }
+        let result = self.with_scope(|this| {
+            for stmt in stmts {
+                this.compile_stmt(stmt);
+            }
+
+            ResolvedType::Unknown
+        });
 
         if let Some(saved) = saved_loops {
             self.loops = saved;
         }
 
-        ResolvedType::Unknown
+        result
     }
 
     /// Compile a body expression (the body of if/while/function).

@@ -16,6 +16,7 @@ pub enum Instruction {
     PushFloat(f32),
     PushInt(i32),
     PushString(String),
+    MakeRange(bool),
     GetLocal(usize),
     SetLocal(usize),
     NewObject(usize, usize),
@@ -45,6 +46,8 @@ pub enum Instruction {
     Pop,
     JumpIfFalse(usize),
     Jump(usize),
+    RangeHasNext,
+    RangeNext,
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +105,7 @@ pub(crate) enum ResolvedType {
     Float,
     Bool,
     Str,
+    Range,
     Void,
     Object(String),
     Unknown,
@@ -114,6 +118,7 @@ impl ResolvedType {
             ResolvedType::Float => "f32",
             ResolvedType::Bool => "bool",
             ResolvedType::Str => "String",
+            ResolvedType::Range => "Range",
             ResolvedType::Void => "void",
             ResolvedType::Object(name) => name.as_str(),
             ResolvedType::Unknown => "unknown",

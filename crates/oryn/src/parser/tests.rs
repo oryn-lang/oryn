@@ -36,3 +36,45 @@ fn expressions_carry_spans() {
     // The whole expression "5 + 10" should span from 0..6
     assert_eq!(stmts[0].span.start, 0);
 }
+
+#[test]
+fn parses_range_expression() {
+    let stmts = parse_ok("0..10");
+
+    assert!(matches!(
+        &stmts[0].node,
+        Statement::Expression(Spanned {
+            node: Expression::Range {
+                inclusive: false,
+                ..
+            },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn parses_inclusive_range_expression() {
+    let stmts = parse_ok("0..=10");
+
+    assert!(matches!(
+        &stmts[0].node,
+        Statement::Expression(Spanned {
+            node: Expression::Range {
+                inclusive: true,
+                ..
+            },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn parses_for_statement() {
+    let stmts = parse_ok("for i in 0..3 { print(i) }");
+
+    assert!(matches!(
+        &stmts[0].node,
+        Statement::For { name, .. } if name == "i"
+    ));
+}

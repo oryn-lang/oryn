@@ -13,11 +13,19 @@ use super::types::{MethodSignature, ObjDefInfo};
 /// (if known), which enables compile-time field resolution. It's
 /// populated from ObjLiteral assignments, variable-to-variable copies,
 /// and typed function parameters.
+#[derive(Clone)]
 pub(super) struct Locals {
     // (slot, mutable, obj_type).
     slots: HashMap<String, (usize, bool, ResolvedType)>,
     pub(super) count: usize,
+    pub(super) max_count: usize,
     pub(super) return_type: Option<ResolvedType>,
+}
+
+#[derive(Clone)]
+pub(super) struct LocalsSnapshot {
+    slots: HashMap<String, (usize, bool, ResolvedType)>,
+    count: usize,
 }
 
 impl Locals {
@@ -25,6 +33,7 @@ impl Locals {
         Self {
             slots: HashMap::new(),
             count: 0,
+            max_count: 0,
             return_type: None,
         }
     }
@@ -34,12 +43,25 @@ impl Locals {
 
         self.slots.insert(name, (slot, mutable, obj_type));
         self.count += 1;
+        self.max_count = self.max_count.max(self.count);
 
         slot
     }
 
     pub(super) fn resolve(&self, name: &str) -> Option<(usize, bool, ResolvedType)> {
         self.slots.get(name).cloned()
+    }
+
+    pub(super) fn snapshot(&self) -> LocalsSnapshot {
+        LocalsSnapshot {
+            slots: self.slots.clone(),
+            count: self.count,
+        }
+    }
+
+    pub(super) fn restore(&mut self, snapshot: LocalsSnapshot) {
+        self.slots = snapshot.slots;
+        self.count = snapshot.count;
     }
 }
 

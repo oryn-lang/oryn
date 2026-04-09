@@ -10,7 +10,7 @@ use super::types::{CompilerOutput, Instruction};
 // ---------------------------------------------------------------------------
 
 pub(super) struct LoopContext {
-    pub(super) start: usize,
+    pub(super) continue_target: usize,
     pub(super) break_patches: Vec<usize>,
 }
 
@@ -72,6 +72,7 @@ pub(super) fn resolve_type(
             "f32" => Ok(ResolvedType::Float),
             "bool" => Ok(ResolvedType::Bool),
             "String" => Ok(ResolvedType::Str),
+            "Range" => Ok(ResolvedType::Range),
             other => {
                 if obj_table.resolve(other).is_some() {
                     Ok(ResolvedType::Object(other.to_string()))
