@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::OrynError;
-use crate::parser::TypeAnnotation;
 
 // ---------------------------------------------------------------------------
 // Bytecode instructions
@@ -82,9 +81,19 @@ pub struct ObjDefInfo {
     pub field_types: Vec<ResolvedType>,
     /// Method name -> function table index.
     pub methods: HashMap<String, usize>,
-    /// Method signatures (declared without a body).
-    /// Types that `use` this one must provide implementations.
-    pub signatures: Vec<String>,
+    /// Full method signatures (declared without a body).
+    /// Types that `use` this one must provide implementations
+    /// matching the complete shape (name, params, return type).
+    pub signatures: Vec<MethodSignature>,
+}
+
+/// A required method signature: name + parameter types (excluding self) + return type.
+#[derive(Debug, Clone)]
+pub struct MethodSignature {
+    pub name: String,
+    /// Parameter types in order, excluding `self`.
+    pub param_types: Vec<ResolvedType>,
+    pub return_type: ResolvedType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,18 +108,6 @@ pub(crate) enum ResolvedType {
 }
 
 impl ResolvedType {
-    pub fn from_annotation(ann: &crate::parser::TypeAnnotation) -> Self {
-        match ann {
-            crate::parser::TypeAnnotation::Named(n) => match n.as_str() {
-                "i32" => ResolvedType::Int,
-                "f32" => ResolvedType::Float,
-                "bool" => ResolvedType::Bool,
-                "String" => ResolvedType::Str,
-                other => ResolvedType::Object(other.to_string()),
-            },
-        }
-    }
-
     pub fn display_name(&self) -> &str {
         match self {
             ResolvedType::Int => "i32",
@@ -122,24 +119,4 @@ impl ResolvedType {
             ResolvedType::Unknown => "unknown",
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Compile-time helper config
-// ---------------------------------------------------------------------------
-
-/// Callback that determines (mutable, obj_type) for each parameter.
-pub(super) type ParamLocalFn = dyn Fn(&str, &Option<TypeAnnotation>) -> (bool, ResolvedType);
-
-/// Configuration for compiling a function or method body.
-pub(super) struct FunctionBodyConfig<'a> {
-    pub name: &'a str,
-    pub params: &'a [(String, Option<TypeAnnotation>)],
-    pub param_types: Vec<ResolvedType>,
-    pub param_local_fn: &'a ParamLocalFn,
-    /// If Some, registers the function under this name for recursion.
-    pub self_name: Option<&'a str>,
-    pub body: crate::parser::Spanned<crate::parser::Expression>,
-    pub return_type: Option<ResolvedType>,
-    pub span: &'a crate::parser::Span,
 }

@@ -575,6 +575,14 @@ version = "0.0.0"
 dependencies = [
  "ariadne",
  "clap",
+ "oryn",
+ "oryn-lsp",
+]
+
+[[package]]
+name = "oryn-lsp"
+version = "0.0.0"
+dependencies = [
  "lsp-server",
  "lsp-types",
  "oryn",

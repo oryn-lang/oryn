@@ -44,13 +44,64 @@ macro_rules! arithmetic_op {
     }};
 }
 
-/// Helper macro for comparison ops (Equal, NotEqual, LessThan, etc.).
-/// Pops two values, compares them, and pushes a Bool result.
-macro_rules! comparison_op {
-    ($state:expr, $op:tt) => {{
+/// Helper macro for equality ops (Equal, NotEqual).
+/// Both operands must be the same type.
+macro_rules! equality_op {
+    ($state:expr, $frames:expr, $chunk:expr, $op:tt) => {{
         let right = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
         let left = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-        $state.stack.push(Value::Bool(left $op right));
+        match (&left, &right) {
+            (Value::Int(l), Value::Int(r)) => {
+                $state.stack.push(Value::Bool(*l $op *r));
+            }
+            (Value::Float(l), Value::Float(r)) => {
+                $state.stack.push(Value::Bool(*l $op *r));
+            }
+            (Value::Bool(l), Value::Bool(r)) => {
+                $state.stack.push(Value::Bool(*l $op *r));
+            }
+            (Value::String(l), Value::String(r)) => {
+                $state.stack.push(Value::Bool(**l $op **r));
+            }
+            (l, r) => {
+                let span = VM::current_span_from_state($frames, $chunk);
+                return Err(RuntimeError::TypeMismatch {
+                    op: stringify!($op),
+                    left: ValueType::from(l),
+                    right: ValueType::from(r),
+                    span,
+                });
+            }
+        }
+    }};
+}
+
+/// Helper macro for ordering ops (LessThan, GreaterThan, etc.).
+/// Only numeric and string types support ordering.
+macro_rules! ordering_op {
+    ($state:expr, $frames:expr, $chunk:expr, $op:tt) => {{
+        let right = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+        let left = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+        match (&left, &right) {
+            (Value::Int(l), Value::Int(r)) => {
+                $state.stack.push(Value::Bool(*l $op *r));
+            }
+            (Value::Float(l), Value::Float(r)) => {
+                $state.stack.push(Value::Bool(*l $op *r));
+            }
+            (Value::String(l), Value::String(r)) => {
+                $state.stack.push(Value::Bool(**l $op **r));
+            }
+            (l, r) => {
+                let span = VM::current_span_from_state($frames, $chunk);
+                return Err(RuntimeError::TypeMismatch {
+                    op: stringify!($op),
+                    left: ValueType::from(l),
+                    right: ValueType::from(r),
+                    span,
+                });
+            }
+        }
     }};
 }
 
@@ -271,22 +322,22 @@ impl VM {
                         continue;
                     }
                     Instruction::Equal => {
-                        comparison_op!(state, ==);
+                        equality_op!(state, &state.frames, chunk, ==);
                     }
                     Instruction::NotEqual => {
-                        comparison_op!(state, !=);
+                        equality_op!(state, &state.frames, chunk, !=);
                     }
                     Instruction::LessThan => {
-                        comparison_op!(state, <);
+                        ordering_op!(state, &state.frames, chunk, <);
                     }
                     Instruction::GreaterThan => {
-                        comparison_op!(state, >);
+                        ordering_op!(state, &state.frames, chunk, >);
                     }
                     Instruction::LessThanEquals => {
-                        comparison_op!(state, <=);
+                        ordering_op!(state, &state.frames, chunk, <=);
                     }
                     Instruction::GreaterThanEquals => {
-                        comparison_op!(state, >=);
+                        ordering_op!(state, &state.frames, chunk, >=);
                     }
                     Instruction::And => {
                         bool_binary_op!(state, &state.frames, chunk, &&);

@@ -291,39 +291,37 @@ fn program<'src>() -> impl Parser<
 
         // -- Bindings --
 
-        let let_stmt = just(Token::Let)
-            .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
-            .then(type_annotation.clone().or_not())
-            .then_ignore(just(Token::Equals))
-            .then(expr.clone())
-            .map_with(|((name, type_ann), value), extra| {
-                Spanned::new(
-                    Statement::Let {
-                        name,
-                        type_ann,
-                        value,
-                    },
-                    extra.span(),
-                )
-            })
-            .labelled("let statement");
+        // Shared helper: parses `<keyword> <name> [: <type>] = <expr>` into a
+        // Statement::Let or Statement::Val depending on `mutable`.
+        let binding_stmt = |keyword: Token, label: &'static str, mutable: bool| {
+            just(keyword)
+                .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
+                .then(type_annotation.clone().or_not())
+                .then_ignore(just(Token::Equals))
+                .then(expr.clone())
+                .map_with(move |((name, type_ann), value), extra| {
+                    Spanned::new(
+                        if mutable {
+                            Statement::Let {
+                                name,
+                                type_ann,
+                                value,
+                            }
+                        } else {
+                            Statement::Val {
+                                name,
+                                type_ann,
+                                value,
+                            }
+                        },
+                        extra.span(),
+                    )
+                })
+                .labelled(label)
+        };
 
-        let val_stmt = just(Token::Val)
-            .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
-            .then(type_annotation.clone().or_not())
-            .then_ignore(just(Token::Equals))
-            .then(expr.clone())
-            .map_with(|((name, type_ann), value), extra| {
-                Spanned::new(
-                    Statement::Val {
-                        name,
-                        type_ann,
-                        value,
-                    },
-                    extra.span(),
-                )
-            })
-            .labelled("val statement");
+        let let_stmt = binding_stmt(Token::Let, "let statement", true);
+        let val_stmt = binding_stmt(Token::Val, "val statement", false);
 
         // -- Assignments --
 
@@ -364,27 +362,31 @@ fn program<'src>() -> impl Parser<
                 (name, ty, s.start..s.end)
             });
 
-        let obj_method = just(Token::Fn)
+        let param_list = select! { Token::Ident(name) => name }
+            .then(type_annotation.clone().or_not())
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LeftParen), just(Token::RightParen));
+
+        let return_type_ann = just(Token::Arrow)
+            .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
+            .or_not();
+
+        // Shared header: `fn <name> (<params>) -> <return_type>`
+        // Used by both obj_method (optional body) and fn_stmt (required body).
+        let fn_header = just(Token::Fn)
             .ignore_then(select! { Token::Ident(name) => name })
-            .then(
-                select! { Token::Ident(name) => name }
-                    .then(type_annotation.clone().or_not())
-                    .separated_by(just(Token::Comma))
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
-            )
-            .then(
-                just(Token::Arrow)
-                    .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
-                    .or_not(),
-            )
-            .then(block.clone().or_not())
-            .map(|(((name, params), return_type), body)| ObjMethod {
+            .then(param_list.clone())
+            .then(return_type_ann.clone());
+
+        let obj_method = fn_header.clone().then(block.clone().or_not()).map(
+            |(((name, params), return_type), body)| ObjMethod {
                 name,
                 params,
                 body,
                 return_type,
-            });
+            },
+        );
 
         enum ObjItem {
             Field(String, TypeAnnotation, Span),
@@ -444,20 +446,8 @@ fn program<'src>() -> impl Parser<
 
         // -- Functions --
 
-        let fn_stmt = just(Token::Fn)
-            .ignore_then(select! { Token::Ident(name) => name }.labelled("function name"))
-            .then(
-                select! { Token::Ident(name) => name }
-                    .then(type_annotation.clone().or_not())
-                    .separated_by(just(Token::Comma))
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
-            )
-            .then(
-                just(Token::Arrow)
-                    .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
-                    .or_not(),
-            )
+        let fn_stmt = fn_header
+            .clone()
             .then(block.clone())
             .map_with(|(((name, params), return_type), body), extra| {
                 Spanned::new(

@@ -1,7 +1,7 @@
 use lsp_types::{Hover, HoverContents, MarkedString, Position};
 
-use super::analysis::{SymbolKind, SymbolTable};
-use super::diagnostics::{position_to_offset, span_to_range};
+use crate::analysis::{SymbolKind, SymbolTable};
+use crate::diagnostics::{position_to_offset, span_to_range};
 
 /// Build hover info for the token at the given cursor position.
 /// Uses the symbol table for rich info on identifiers, falls back
@@ -80,7 +80,7 @@ fn hover_ident(name: &str, offset: usize, table: &SymbolTable) -> Option<String>
     Some(format!("`{name}` - identifier"))
 }
 
-fn format_definition(def: &super::analysis::SymbolInfo) -> String {
+fn format_definition(def: &crate::analysis::SymbolInfo) -> String {
     match def.kind {
         SymbolKind::Function => {
             let params = def
@@ -107,6 +107,9 @@ fn format_definition(def: &super::analysis::SymbolInfo) -> String {
                 None => String::new(),
             };
             format!("`{}{}`  - parameter", def.name, type_str)
+        }
+        SymbolKind::Object => {
+            format!("```oryn\nobj {}\n```", def.name)
         }
     }
 }

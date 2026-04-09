@@ -1,7 +1,7 @@
 use lsp_types::{DocumentSymbol, SymbolKind as LspSymbolKind};
 
-use super::analysis::{SymbolKind, SymbolTable};
-use super::diagnostics::span_to_range;
+use crate::analysis::{SymbolKind, SymbolTable};
+use crate::diagnostics::span_to_range;
 
 /// Build document symbols for the outline view. Returns top-level
 /// function and variable definitions.
@@ -11,13 +11,18 @@ pub fn document_symbols(source: &str, symbol_table: &SymbolTable) -> Vec<Documen
         .definitions
         .iter()
         .filter(|def| {
-            def.scope_depth == 0 && matches!(def.kind, SymbolKind::Function | SymbolKind::Variable)
+            def.scope_depth == 0
+                && matches!(
+                    def.kind,
+                    SymbolKind::Function | SymbolKind::Variable | SymbolKind::Object
+                )
         })
         .map(|def| {
             let kind = match def.kind {
                 SymbolKind::Function => LspSymbolKind::FUNCTION,
                 SymbolKind::Variable => LspSymbolKind::VARIABLE,
                 SymbolKind::Parameter => LspSymbolKind::VARIABLE,
+                SymbolKind::Object => LspSymbolKind::STRUCT,
             };
 
             let detail = match &def.kind {

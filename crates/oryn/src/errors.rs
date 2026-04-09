@@ -92,7 +92,9 @@ pub enum ValueType {
 impl From<&Value<'_>> for ValueType {
     fn from(value: &Value<'_>) -> Self {
         match value {
-            Value::Uninitialized => ValueType::Int, // Should never happen - compiler prevents it
+            Value::Uninitialized => {
+                unreachable!("compiler bug: uninitialized value reached type conversion")
+            }
             Value::Bool(_) => ValueType::Bool,
             Value::Float(_) => ValueType::Float,
             Value::Int(_) => ValueType::Int,

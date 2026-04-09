@@ -1,6 +1,6 @@
 use gc_arena::{Collect, Gc, lock::RefLock};
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Collect)]
+#[derive(Debug, Clone, PartialEq, Collect)]
 #[collect(no_drop)]
 pub(crate) enum Value<'gc> {
     /// Sentinel for local variable slots that haven't been written to yet.
@@ -20,7 +20,7 @@ pub(crate) enum Value<'gc> {
     String(Gc<'gc, String>),
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Collect)]
+#[derive(Debug, PartialEq, Collect)]
 #[collect(no_drop)]
 pub(crate) struct ObjData<'gc> {
     // Index into Chunk.obj_defs for the type name and field layout.

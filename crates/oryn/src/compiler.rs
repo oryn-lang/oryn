@@ -1,4 +1,9 @@
+mod block;
 mod compile;
+mod expr;
+mod func;
+mod obj;
+mod stmt;
 mod tables;
 mod types;
 
@@ -7,7 +12,5 @@ mod tests;
 
 pub(crate) use compile::compile;
 pub(crate) use types::CompiledFunction;
-#[allow(unused_imports)]
-pub(crate) use types::CompilerOutput;
 pub(crate) use types::Instruction;
 pub(crate) use types::ObjDefInfo;

@@ -1,7 +1,7 @@
 use lsp_types::{Location, Position, Uri};
 
-use super::analysis::SymbolTable;
-use super::diagnostics::{position_to_offset, span_to_range};
+use crate::analysis::SymbolTable;
+use crate::diagnostics::{position_to_offset, span_to_range};
 
 /// Find all references to the symbol under the cursor.
 pub fn find_references(

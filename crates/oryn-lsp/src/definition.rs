@@ -1,7 +1,7 @@
 use lsp_types::{GotoDefinitionResponse, Location, Position, Uri};
 
-use super::analysis::SymbolTable;
-use super::diagnostics::{position_to_offset, span_to_range};
+use crate::analysis::SymbolTable;
+use crate::diagnostics::{position_to_offset, span_to_range};
 
 /// Find the definition of the symbol under the cursor.
 pub fn goto_definition(
