@@ -1,8 +1,6 @@
 mod commands;
 mod errors;
 
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -14,8 +12,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Run { file: PathBuf },
-    Disasm { file: PathBuf },
+    Run { file: std::path::PathBuf },
+    Disasm { file: std::path::PathBuf },
+    Fmt { path: String },
     Lsp,
 }
 
@@ -25,6 +24,7 @@ fn main() {
     match cli.command {
         Command::Run { file } => commands::run::run(&file),
         Command::Disasm { file } => commands::disasm::run(&file),
+        Command::Fmt { path } => commands::fmt::run(&path),
         Command::Lsp => commands::lsp::run(),
     }
 }
