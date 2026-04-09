@@ -213,34 +213,51 @@ impl Formatter {
                 self.out.push_str(" {\n");
                 self.indent += 1;
 
-                let mut first = true;
-                for used in uses {
-                    if !first {
-                        self.out.push('\n');
+                let mut wrote_group = false;
+
+                if !uses.is_empty() {
+                    for (i, used) in uses.iter().enumerate() {
+                        if i > 0 {
+                            self.out.push('\n');
+                        }
+                        self.write_indent();
+                        self.out.push_str("use ");
+                        self.out.push_str(used);
                     }
-                    first = false;
-                    self.write_indent();
-                    self.out.push_str("use ");
-                    self.out.push_str(used);
+                    wrote_group = true;
                 }
 
-                for (field_name, ann, _) in fields {
-                    if !first {
+                if !fields.is_empty() {
+                    if wrote_group {
+                        self.out.push('\n');
                         self.out.push('\n');
                     }
-                    first = false;
-                    self.write_indent();
-                    self.out.push_str(field_name);
-                    self.out.push_str(": ");
-                    self.write_type_name(ann);
+
+                    for (i, (field_name, ann, _)) in fields.iter().enumerate() {
+                        if i > 0 {
+                            self.out.push('\n');
+                        }
+                        self.write_indent();
+                        self.out.push_str(field_name);
+                        self.out.push_str(": ");
+                        self.write_type_name(ann);
+                    }
+                    wrote_group = true;
                 }
 
-                for method in methods {
-                    if !first {
+                if !methods.is_empty() {
+                    if wrote_group {
+                        self.out.push('\n');
                         self.out.push('\n');
                     }
-                    first = false;
-                    self.write_object_method(method);
+
+                    for (i, method) in methods.iter().enumerate() {
+                        if i > 0 {
+                            self.out.push('\n');
+                            self.out.push('\n');
+                        }
+                        self.write_object_method(method);
+                    }
                 }
 
                 self.indent -= 1;
@@ -601,7 +618,7 @@ mod tests {
 
         assert_eq!(
             formatted,
-            "obj Vec2 {\n    x: i32\n    y: i32\n    fn zero() -> Vec2 {\n        rn Vec2 { x: 0, y: 0 }\n    }\n}\n"
+            "obj Vec2 {\n    x: i32\n    y: i32\n\n    fn zero() -> Vec2 {\n        rn Vec2 { x: 0, y: 0 }\n    }\n}\n"
         );
     }
 

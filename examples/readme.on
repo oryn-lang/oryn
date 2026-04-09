@@ -12,11 +12,11 @@ obj Health {
 
 obj Player {
     use Health
+
     name: String
 }
 
 let player = Player { hp: 100, name: "Alice" }
-
 player.heal(20)
 print(player.hp)
 print(player.is_alive())
