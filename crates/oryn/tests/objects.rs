@@ -208,6 +208,46 @@ fn undefined_method_is_runtime_error() {
     assert!(matches!(err, oryn::RuntimeError::UndefinedFunction { .. }));
 }
 
+#[test]
+fn static_method_no_params() {
+    assert_eq!(
+        run(
+            "obj Vec2 {\nx: i32\ny: i32\nfn zero() -> Vec2 {\nrn Vec2 { x: 0, y: 0 }\n}\n}\nlet v = Vec2.zero()\nprint(v.x)\nprint(v.y)"
+        ),
+        "0\n0\n",
+    );
+}
+
+#[test]
+fn static_method_with_params() {
+    assert_eq!(
+        run(
+            "obj Counter {\ncount: i32\nfn make(n: i32) -> Counter {\nrn Counter { count: n }\n}\n}\nlet c = Counter.make(10)\nprint(c.count)"
+        ),
+        "10\n",
+    );
+}
+
+#[test]
+fn static_method_can_call_other_static_method() {
+    assert_eq!(
+        run(
+            "obj Vec2 {\nx: i32\ny: i32\nfn zero() -> Vec2 {\nrn Vec2 { x: 0, y: 0 }\n}\nfn unit_x() -> Vec2 {\nrn Vec2.zero()\n}\n}\nlet v = Vec2.unit_x()\nprint(v.x)\nprint(v.y)"
+        ),
+        "0\n0\n",
+    );
+}
+
+#[test]
+fn use_inherits_static_methods() {
+    assert_eq!(
+        run(
+            "obj Factory {\nfn answer() -> i32 {\nrn 42\n}\n}\nobj Wrapper {\nuse Factory\n}\nprint(Wrapper.answer())"
+        ),
+        "42\n",
+    );
+}
+
 // --- Use composition ---
 
 #[test]

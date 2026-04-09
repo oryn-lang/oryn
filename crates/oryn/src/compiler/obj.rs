@@ -24,6 +24,7 @@ impl Compiler {
         let mut field_names: Vec<String> = Vec::new();
         let mut field_types: Vec<ResolvedType> = Vec::new();
         let mut method_indices: HashMap<String, usize> = HashMap::new();
+        let mut static_method_indices: HashMap<String, usize> = HashMap::new();
         let mut all_required: Vec<MethodSignature> = Vec::new();
 
         for used_type in &uses {
@@ -53,6 +54,17 @@ impl Compiler {
                         ));
                     } else {
                         method_indices.insert(method_name.clone(), func_idx);
+                    }
+                }
+
+                for (method_name, &func_idx) in &def.static_methods {
+                    if static_method_indices.contains_key(method_name) {
+                        self.output.errors.push(OrynError::compiler(
+                            stmt_span.clone(),
+                            format!("static method `{method_name}` conflicts in `use {used_type}`"),
+                        ));
+                    } else {
+                        static_method_indices.insert(method_name.clone(), func_idx);
                     }
                 }
             } else {
@@ -87,6 +99,7 @@ impl Compiler {
             field_names.clone(),
             field_types.clone(),
             HashMap::new(),
+            HashMap::new(),
             Vec::new(),
         );
 
@@ -96,10 +109,11 @@ impl Compiler {
             .iter()
             .filter(|m| m.body.is_none())
             .map(|m| {
+                let is_static = !m.params.iter().any(|(pname, _)| pname == "self");
                 let param_types: Vec<ResolvedType> = m
                     .params
                     .iter()
-                    .filter(|(pname, _)| pname != "self")
+                    .filter(|(pname, _)| is_static || pname != "self")
                     .map(|(_, ann)| {
                         ann.as_ref()
                             .map(|a| {
@@ -116,6 +130,7 @@ impl Compiler {
 
                 MethodSignature {
                     name: m.name.clone(),
+                    is_static,
                     param_types,
                     return_type,
                 }
@@ -129,6 +144,7 @@ impl Compiler {
         for method in methods {
             if let Some(body) = method.body {
                 let obj_name = name.clone();
+                let is_static = !method.params.iter().any(|(pname, _)| pname == "self");
 
                 // Resolve param types once, derive both HashMap and Vec.
                 let resolved_params: HashMap<String, ResolvedType> = method
@@ -165,11 +181,10 @@ impl Compiler {
                     None => ResolvedType::Void,
                 };
 
-                // Store the non-self param types and return type for shape checking.
-                let non_self_params: Vec<ResolvedType> = method
+                let sig_params: Vec<ResolvedType> = method
                     .params
                     .iter()
-                    .filter(|(pname, _)| pname != "self")
+                    .filter(|(pname, _)| is_static || pname != "self")
                     .map(|(pname, _)| {
                         resolved_params
                             .get(pname)
@@ -177,10 +192,8 @@ impl Compiler {
                             .unwrap_or(ResolvedType::Unknown)
                     })
                     .collect();
-                compiled_signatures.insert(
-                    method.name.clone(),
-                    (non_self_params, return_resolved.clone()),
-                );
+                compiled_signatures
+                    .insert(method.name.clone(), (sig_params, return_resolved.clone()));
 
                 let obj_name_for_closure = obj_name.clone();
                 let param_fn = move |pname: &str, _ann: &Option<TypeAnnotation>| {
@@ -206,7 +219,14 @@ impl Compiler {
                     return_type: Some(return_resolved),
                 });
 
-                method_indices.insert(method.name.clone(), func_idx);
+                if is_static {
+                    static_method_indices.insert(method.name.clone(), func_idx);
+                    if let Some(def) = self.obj_table.defs.last_mut() {
+                        def.static_methods.insert(method.name.clone(), func_idx);
+                    }
+                } else {
+                    method_indices.insert(method.name.clone(), func_idx);
+                }
             }
         }
 
@@ -216,10 +236,24 @@ impl Compiler {
         // Check: every required method from used types must be satisfied
         // with matching shape (param types + return type).
         for req in &all_required {
-            if !method_indices.contains_key(&req.name) {
+            let has_impl = if req.is_static {
+                static_method_indices.contains_key(&req.name)
+            } else {
+                method_indices.contains_key(&req.name)
+            };
+
+            if !has_impl {
                 self.output.errors.push(OrynError::compiler(
                     stmt_span.clone(),
-                    format!("object `{name}` is missing required method `{}`", req.name),
+                    format!(
+                        "object `{name}` is missing required {} `{}`",
+                        if req.is_static {
+                            "static method"
+                        } else {
+                            "method"
+                        },
+                        req.name
+                    ),
                 ));
             } else if let Some((impl_params, impl_return)) = compiled_signatures.get(&req.name) {
                 // Check parameter count.
@@ -277,7 +311,13 @@ impl Compiler {
 
         let mut final_required: Vec<MethodSignature> = Vec::new();
         for req in own_required {
-            if !method_indices.contains_key(&req.name) {
+            let has_impl = if req.is_static {
+                static_method_indices.contains_key(&req.name)
+            } else {
+                method_indices.contains_key(&req.name)
+            };
+
+            if !has_impl {
                 final_required.push(req);
             }
         }
@@ -287,6 +327,7 @@ impl Compiler {
             fields: field_names,
             field_types,
             methods: method_indices,
+            static_methods: static_method_indices,
             signatures: final_required,
         });
     }

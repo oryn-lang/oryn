@@ -190,6 +190,7 @@ impl Compiler {
                 self.output.obj_defs[i].fields.clone(),
                 self.output.obj_defs[i].field_types.clone(),
                 self.output.obj_defs[i].methods.clone(),
+                self.output.obj_defs[i].static_methods.clone(),
                 self.output.obj_defs[i].signatures.clone(),
             );
         }

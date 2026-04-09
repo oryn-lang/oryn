@@ -128,6 +128,7 @@ impl ObjTable {
         fields: Vec<String>,
         field_types: Vec<ResolvedType>,
         methods: HashMap<String, usize>,
+        static_methods: HashMap<String, usize>,
         signatures: Vec<MethodSignature>,
     ) -> usize {
         let idx = self.defs.len();
@@ -138,6 +139,7 @@ impl ObjTable {
             fields,
             field_types,
             methods,
+            static_methods,
             signatures,
         });
 

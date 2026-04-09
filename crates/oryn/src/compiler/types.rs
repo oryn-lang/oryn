@@ -84,6 +84,8 @@ pub struct ObjDefInfo {
     pub field_types: Vec<ResolvedType>,
     /// Method name -> function table index.
     pub methods: HashMap<String, usize>,
+    /// Static method name -> function table index.
+    pub static_methods: HashMap<String, usize>,
     /// Full method signatures (declared without a body).
     /// Types that `use` this one must provide implementations
     /// matching the complete shape (name, params, return type).
@@ -94,6 +96,7 @@ pub struct ObjDefInfo {
 #[derive(Debug, Clone)]
 pub struct MethodSignature {
     pub name: String,
+    pub is_static: bool,
     /// Parameter types in order, excluding `self`.
     pub param_types: Vec<ResolvedType>,
     pub return_type: ResolvedType,

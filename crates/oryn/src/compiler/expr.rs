@@ -120,15 +120,70 @@ impl Compiler {
                 method,
                 args,
             } => {
-                self.compile_expr(*object);
-
                 let arity = args.len();
-                for arg in args {
-                    self.compile_expr(arg);
-                }
+                let static_call = match &object.node {
+                    Expression::Ident(type_name)
+                        if self.locals.resolve(type_name).is_none()
+                            && self.obj_table.resolve(type_name).is_some() =>
+                    {
+                        Some((
+                            type_name.clone(),
+                            self.obj_table
+                                .resolve(type_name)
+                                .and_then(|(_, def)| def.static_methods.get(&method).copied()),
+                        ))
+                    }
+                    _ => None,
+                };
 
-                self.emit(Instruction::CallMethod(method, arity), &span);
-                ResolvedType::Unknown
+                if let Some((type_name, static_info)) = static_call {
+                    if let Some(func_idx) = static_info {
+                        let (param_types, return_type) = {
+                            let func = &self.output.functions[func_idx];
+
+                            (func.param_types.clone(), func.return_type.clone())
+                        };
+
+                        let mut arg_types = Vec::new();
+                        for arg in args {
+                            arg_types.push(self.compile_expr(arg));
+                        }
+
+                        for (i, (arg_type, param_type)) in
+                            arg_types.iter().zip(&param_types).enumerate()
+                        {
+                            self.check_types(
+                                param_type,
+                                arg_type,
+                                &span,
+                                &format!("argument {} type mismatch", i + 1),
+                            );
+                        }
+
+                        self.emit(Instruction::Call(func_idx, arity), &span);
+
+                        return_type.unwrap_or(ResolvedType::Unknown)
+                    } else {
+                        self.output.errors.push(OrynError::compiler(
+                            span.clone(),
+                            format!("undefined static method `{}.{method}`", type_name),
+                        ));
+
+                        self.emit(Instruction::PushInt(0), &span);
+
+                        ResolvedType::Unknown
+                    }
+                } else {
+                    self.compile_expr(*object);
+
+                    for arg in args {
+                        self.compile_expr(arg);
+                    }
+
+                    self.emit(Instruction::CallMethod(method, arity), &span);
+
+                    ResolvedType::Unknown
+                }
             }
 
             // -- Operators --

@@ -164,6 +164,30 @@ fn method_too_many_args_is_runtime_error() {
 }
 
 #[test]
+fn undefined_static_method_is_compile_error() {
+    let result = oryn::Chunk::compile("obj Foo {\n}\nFoo.nope()");
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined static method"))
+    }));
+}
+
+#[test]
+fn static_method_argument_type_mismatch_is_compile_error() {
+    let result = oryn::Chunk::compile(
+        "obj Foo {\nfn make(x: i32) -> Foo {\nrn Foo { }\n}\n}\nFoo.make(\"nope\")",
+    );
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("argument 1 type mismatch"))
+    }));
+}
+
+#[test]
 fn break_outside_loop_is_compile_error() {
     let result = oryn::Chunk::compile("break");
 
