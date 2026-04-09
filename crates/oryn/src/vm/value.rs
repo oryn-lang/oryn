@@ -41,21 +41,30 @@ pub(crate) struct RangeValue {
 
 /// A call frame on the VM's call stack. Each function invocation
 /// (including top-level code) gets its own frame with an instruction
-/// pointer and a fixed-size array of local variable slots.
+/// pointer and a base offset into the VM's shared locals stack.
+///
+/// The compiler assigns local slots per function body, so at runtime
+/// a local access is just `frame.local_base + slot`. This avoids
+/// allocating a fresh Vec for every call; nested calls carve out a
+/// new window at the end of VmState.locals and Return truncates it.
 #[derive(Debug, Collect)]
 #[collect(no_drop)]
-pub(super) struct CallFrame<'gc> {
+pub(super) struct CallFrame {
     pub function_idx: Option<usize>,
     pub ip: usize,
-    // Local variables indexed by slot number. Slot indices are
-    // assigned at compile time so access is O(1) with no hashing.
-    pub locals: Vec<Value<'gc>>,
+    // Base offset into VmState.locals for this frame's local slots.
+    pub local_base: usize,
 }
 
-/// The GC-rooted state of the VM: the value stack and the call stack.
+/// The GC-rooted state of the VM.
+///
+/// `stack` is the operand/value stack used by bytecode execution.
+/// `locals` is a shared storage area for all active call frames.
+/// `frames` tracks the current call stack and each frame's locals window.
 #[derive(Collect)]
 #[collect(no_drop)]
 pub(super) struct VmState<'gc> {
     pub stack: Vec<Value<'gc>>,
-    pub frames: Vec<CallFrame<'gc>>,
+    pub locals: Vec<Value<'gc>>,
+    pub frames: Vec<CallFrame>,
 }

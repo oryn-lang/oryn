@@ -155,6 +155,7 @@ impl VM {
         Self {
             arena: Arena::new(|_| VmState {
                 stack: Vec::new(),
+                locals: Vec::new(),
                 frames: Vec::new(),
             }),
         }
@@ -182,13 +183,18 @@ impl VM {
         writer: &mut impl Write,
     ) -> Result<(), RuntimeError> {
         self.arena.mutate_root(|mc, state| {
+            // A VM instance is reusable across runs, so reset the live
+            // execution state but keep the underlying allocations.
             state.stack.clear();
+            state.locals.clear();
             state.frames.clear();
 
+            // Top-level code runs in a synthetic frame whose locals
+            // window starts at offset 0 in the shared locals stack.
             state.frames.push(CallFrame {
                 function_idx: None,
                 ip: 0,
-                locals: Vec::new(),
+                local_base: 0,
             });
 
             while let Some(frame) = state.frames.last() {
@@ -260,7 +266,10 @@ impl VM {
                         // Return (which continues past ip advancement).
                         // The frame stack is never empty during dispatch.
                         let frame = state.frames.last().unwrap();
-                        let value = frame.locals[*slot].clone();
+                        // Locals live in a single VM-wide stack. Each frame
+                        // points at its window with local_base, and compiler
+                        // slots are offsets within that window.
+                        let value = state.locals[frame.local_base + *slot].clone();
 
                         if matches!(value, Value::Uninitialized) {
                             let span = Self::current_span_from_state(&state.frames, chunk);
@@ -277,12 +286,17 @@ impl VM {
                         // SAFETY: Same invariant as GetLocal - frame stack
                         // is never empty during instruction dispatch.
                         let frame = state.frames.last_mut().unwrap();
+                        let local_idx = frame.local_base + *slot;
 
-                        if *slot >= frame.locals.len() {
-                            frame.locals.resize(*slot + 1, Value::Uninitialized);
+                        // Top-level code grows the shared locals stack lazily.
+                        // Function frames pre-reserve their entire locals
+                        // window at call time, so this branch is effectively
+                        // for script-level locals only.
+                        if local_idx >= state.locals.len() {
+                            state.locals.resize(local_idx + 1, Value::Uninitialized);
                         }
 
-                        frame.locals[*slot] = value;
+                        state.locals[local_idx] = value;
                     }
                     Instruction::NewObject(type_idx, num_fields) => {
                         // The compiler pushed field values in definition
@@ -345,7 +359,12 @@ impl VM {
                         }
                     }
                     Instruction::Return => {
-                        state.frames.pop();
+                        if let Some(frame) = state.frames.pop() {
+                            // Discard the returning frame's locals window.
+                            // Nested callers keep their locals because their
+                            // slots live below frame.local_base.
+                            state.locals.truncate(frame.local_base);
+                        }
 
                         continue;
                     }
@@ -521,10 +540,18 @@ impl VM {
                         // caller's ip before pushing the callee's frame.
                         state.frames.last_mut().unwrap().ip += 1;
 
+                        let local_base = state.locals.len();
+                        // Reserve the callee's entire locals window up front.
+                        // Function prologues populate parameter slots with
+                        // SetLocal, and later locals reuse compiler-assigned
+                        // slots inside this fixed-size region.
+                        state
+                            .locals
+                            .resize(local_base + func.num_locals, Value::Uninitialized);
                         state.frames.push(CallFrame {
                             function_idx: Some(func_idx),
                             ip: 0,
-                            locals: vec![Value::Uninitialized; func.num_locals],
+                            local_base,
                         });
 
                         continue;
@@ -581,10 +608,17 @@ impl VM {
                         // SAFETY: Same frame-stack invariant.
                         state.frames.last_mut().unwrap().ip += 1;
 
+                        let local_base = state.locals.len();
+                        // Methods use the same locals layout as functions;
+                        // `self` is just parameter slot 0 in the callee's
+                        // pre-reserved locals window.
+                        state
+                            .locals
+                            .resize(local_base + func.num_locals, Value::Uninitialized);
                         state.frames.push(CallFrame {
                             function_idx: Some(func_idx),
                             ip: 0,
-                            locals: vec![Value::Uninitialized; func.num_locals],
+                            local_base,
                         });
 
                         continue;
