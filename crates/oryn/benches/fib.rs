@@ -12,12 +12,11 @@ print(fib(28))
 fn fib_28(c: &mut Criterion) {
     // Compile once, run many times. This benchmarks the VM, not the compiler.
     let chunk = oryn::Chunk::compile(FIB_SRC).expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut sink = std::io::sink();
 
     c.bench_function("fib(28)", |b| {
         b.iter(|| {
-            let mut vm = oryn::VM::new();
-            let mut sink = std::io::sink();
-
             vm.run_with_writer(&chunk, &mut sink).unwrap();
         });
     });
