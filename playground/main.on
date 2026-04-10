@@ -1,3 +1,12 @@
+// Entry point. Demonstrates everything the module system can do:
+//   - Flat imports          (import physics)
+//   - Nested imports        (import math.vec2)
+//   - Module constants      (math.vec2.ORIGIN_X)
+//   - Qualified literals    (math.vec2.Vec2 { ... })
+//   - Qualified types       (let v: math.vec2.Vec2 = ...)
+//   - Static constructors   (math.colors.Color.rgb(...))
+//   - Cross-module method calls
+
 import math.vec2
 import math.colors
 import physics
@@ -8,17 +17,22 @@ print(math.colors.MAX_CHANNEL)
 print(physics.GRAVITY)
 
 print("--- qualified object literal ---")
+// All Vec2 fields are pub, so we can construct directly.
 let v: math.vec2.Vec2 = math.vec2.Vec2 { x: 3.0, y: 4.0 }
 print(v.x)
 print(v.y)
 print(v.length_sq())
 
 print("--- static constructor on imported type ---")
+// Color has a private `alpha` field, so we have to use the constructor.
 let red = math.colors.Color.rgb(255, 0, 0)
 print(red.r)
 print(red.opacity())
 
 print("--- cross-module function call ---")
+// Calling a function from physics that takes and returns a Vec2 from
+// math.vec2. Notice main.on must import math.vec2 itself even though
+// physics.on already imports it (non-transitive imports).
 let stepped = physics.step(v, 0.5)
 print(stepped.x)
 print(stepped.y)

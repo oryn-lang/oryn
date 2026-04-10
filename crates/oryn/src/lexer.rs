@@ -7,6 +7,7 @@ use crate::errors::OrynError;
 /// A single lexical token produced by [`lex`].
 #[derive(Debug, PartialEq, Clone, Logos)]
 #[logos(skip r"[ \t]+")]
+#[logos(skip(r"//[^\n]*", allow_greedy = true))]
 pub enum Token {
     // Keywords.
     #[token("let")]
@@ -230,5 +231,37 @@ mod tests {
         let (_, errors) = lex("let x = @");
 
         assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn skips_line_comments() {
+        let (tokens, errors) = lex("// leading comment\nlet x = 5 // trailing\nprint(x)");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Newline,
+                Token::Let,
+                Token::Ident("x".into()),
+                Token::Equals,
+                Token::Int(5),
+                Token::Newline,
+                Token::Ident("print".into()),
+                Token::LeftParen,
+                Token::Ident("x".into()),
+                Token::RightParen,
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_only_lines_are_skipped() {
+        let (tokens, errors) = lex("// just a comment");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+
+        assert!(errors.is_empty());
+        assert!(kinds.is_empty());
     }
 }

@@ -1,3 +1,7 @@
+// Color type with one private field and a constructor.
+// Demonstrates: types with private fields can't be constructed via
+// literal from outside the module — you have to call the constructor.
+
 pub val MAX_CHANNEL = 255
 
 pub obj Color {
@@ -6,6 +10,8 @@ pub obj Color {
     pub b: i32
     alpha: i32
 
+    // Static constructor — the only way for outsiders to make a Color
+    // because the `alpha` field is private.
     pub fn rgb(r: i32, g: i32, b: i32) -> Color {
         rn Color { r: r, g: g, b: b, alpha: MAX_CHANNEL }
     }

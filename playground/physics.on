@@ -1,3 +1,8 @@
+// A flat (non-nested) module that itself imports a nested module.
+// Shows that modules can import other modules, and that imports are
+// non-transitive: main.on can't see math.vec2 just because physics.on
+// imports it — main has to import it itself.
+
 import math.vec2
 
 pub val GRAVITY = -9.8
@@ -6,6 +11,7 @@ pub fn fall_distance(seconds: f32) -> f32 {
     rn 0.5 * GRAVITY * seconds * seconds
 }
 
+// Returns a Vec2 from another module — qualified return type.
 pub fn step(start: math.vec2.Vec2, dt: f32) -> math.vec2.Vec2 {
     rn start.scaled(dt)
 }
