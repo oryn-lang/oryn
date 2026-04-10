@@ -7,7 +7,7 @@ use crate::compiler::{
     self, CompiledFunction, CompilerOutput, Instruction, ModuleExports, ModuleTable, ObjDefInfo,
     TypeMap,
 };
-use crate::errors::OrynError;
+use crate::errors::{FileDiagnostics, OrynError};
 use crate::lexer;
 use crate::modules::{find_project_root, load_module, resolve_import};
 use crate::parser;
@@ -83,19 +83,45 @@ impl Chunk {
     /// containing only its direct imports, matching Rust/Zig's
     /// non-transitive module visibility.
     pub fn compile_file(path: &Path) -> Result<Self, Vec<OrynError>> {
+        Self::compile_file_sourced(path).map_err(|diagnostics| {
+            diagnostics
+                .into_iter()
+                .flat_map(|d| d.errors)
+                .collect::<Vec<_>>()
+        })
+    }
+
+    /// Like [`Chunk::compile_file`], but returns errors grouped by the
+    /// file they originated from. Each [`FileDiagnostics`] carries the
+    /// file path, its full source text, and the errors whose spans
+    /// index into that source.
+    ///
+    /// Prefer this over [`Chunk::compile_file`] when rendering
+    /// diagnostics: errors from imported modules would otherwise be
+    /// rendered against the importer's file and land on the wrong
+    /// lines.
+    pub fn compile_file_sourced(path: &Path) -> Result<Self, Vec<FileDiagnostics>> {
         let parent = path.parent().unwrap_or(path);
         let project_root = find_project_root(parent).ok_or_else(|| {
-            vec![OrynError::Module {
-                path: path.to_string_lossy().into_owned(),
-                message: "no package.on found in parent directories".to_string(),
+            vec![FileDiagnostics {
+                file: path.to_path_buf(),
+                source: String::new(),
+                errors: vec![OrynError::Module {
+                    path: path.to_string_lossy().into_owned(),
+                    message: "no package.on found in parent directories".to_string(),
+                }],
             }]
         })?;
 
         // Read the entry file
         let source = std::fs::read_to_string(path).map_err(|e| {
-            vec![OrynError::Module {
-                path: path.to_string_lossy().into_owned(),
-                message: e.to_string(),
+            vec![FileDiagnostics {
+                file: path.to_path_buf(),
+                source: String::new(),
+                errors: vec![OrynError::Module {
+                    path: path.to_string_lossy().into_owned(),
+                    message: e.to_string(),
+                }],
             }]
         })?;
 
@@ -104,7 +130,11 @@ impl Chunk {
         let (statements, parse_errors) = parser::parse(tokens);
         let errors: Vec<OrynError> = lex_errors.into_iter().chain(parse_errors).collect();
         if !errors.is_empty() {
-            return Err(errors);
+            return Err(vec![FileDiagnostics {
+                file: path.to_path_buf(),
+                source,
+                errors,
+            }]);
         }
 
         // Collect imports from the AST
@@ -127,8 +157,10 @@ impl Chunk {
         // Module table that the entry file will be compiled with.
         let mut module_table = ModuleTable::default();
 
-        // Recursively compile every imported module
-        let mut errors: Vec<OrynError> = Vec::new();
+        // Recursively compile every imported module. Errors from failing
+        // modules accumulate as file-scoped [`FileDiagnostics`] batches so
+        // callers know which file's source each span indexes into.
+        let mut diagnostics: Vec<FileDiagnostics> = Vec::new();
         for import in &imports {
             match compile_module(
                 &project_root,
@@ -143,11 +175,11 @@ impl Chunk {
                     let module_name = import.join(".");
                     module_table.modules.insert(module_name, exports);
                 }
-                Err(errs) => errors.extend(errs),
+                Err(diags) => diagnostics.extend(diags),
             }
         }
-        if !errors.is_empty() {
-            return Err(errors);
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
         }
 
         // Compile the entry file with offsets pointing past all merged modules.
@@ -160,7 +192,11 @@ impl Chunk {
         let entry_output =
             compiler::compile(statements, module_table, fn_offset, obj_offset, vec![]);
         if !entry_output.errors.is_empty() {
-            return Err(entry_output.errors);
+            return Err(vec![FileDiagnostics {
+                file: path.to_path_buf(),
+                source,
+                errors: entry_output.errors,
+            }]);
         }
 
         merged.instructions = entry_output.instructions;
@@ -265,7 +301,17 @@ impl Chunk {
                     Ok(exports) => {
                         module_table.modules.insert(import.join("."), exports);
                     }
-                    Err(errs) => errors.extend(errs),
+                    Err(diags) => {
+                        // `check_file` returns a flat error list, so flatten
+                        // per-file diagnostics back to individual errors.
+                        // The LSP renders against the entry file's buffer,
+                        // which means module-origin spans may still land on
+                        // the wrong lines — that's a separate, known
+                        // limitation of this flat API.
+                        for diag in diags {
+                            errors.extend(diag.errors);
+                        }
+                    }
                 }
             }
 
@@ -339,7 +385,7 @@ fn compile_module(
     compiling: &mut HashSet<PathBuf>,
     merged: &mut CompilerOutput,
     compiled_modules: &mut HashMap<PathBuf, ModuleExports>,
-) -> Result<ModuleExports, Vec<OrynError>> {
+) -> Result<ModuleExports, Vec<FileDiagnostics>> {
     let file_path = resolve_import(project_root, import_path);
     let canonical = file_path
         .canonicalize()
@@ -352,9 +398,13 @@ fn compile_module(
 
     // ---- Cycle detection ----
     if compiling.contains(&canonical) {
-        return Err(vec![OrynError::Module {
-            path: file_path.to_string_lossy().into_owned(),
-            message: "circular import detected".to_string(),
+        return Err(vec![FileDiagnostics {
+            file: file_path.clone(),
+            source: String::new(),
+            errors: vec![OrynError::Module {
+                path: file_path.to_string_lossy().into_owned(),
+                message: "circular import detected".to_string(),
+            }],
         }]);
     }
     compiling.insert(canonical.clone());
@@ -364,7 +414,11 @@ fn compile_module(
         Ok(s) => s,
         Err(e) => {
             compiling.remove(&canonical);
-            return Err(vec![e]);
+            return Err(vec![FileDiagnostics {
+                file: file_path.clone(),
+                source: String::new(),
+                errors: vec![e],
+            }]);
         }
     };
 
@@ -374,7 +428,11 @@ fn compile_module(
     let errors: Vec<OrynError> = lex_errors.into_iter().chain(parse_errors).collect();
     if !errors.is_empty() {
         compiling.remove(&canonical);
-        return Err(errors);
+        return Err(vec![FileDiagnostics {
+            file: file_path.clone(),
+            source,
+            errors,
+        }]);
     }
 
     // ---- Validate definitions-only ----
@@ -397,7 +455,11 @@ fn compile_module(
     }
     if !errors.is_empty() {
         compiling.remove(&canonical);
-        return Err(errors);
+        return Err(vec![FileDiagnostics {
+            file: file_path.clone(),
+            source,
+            errors,
+        }]);
     }
 
     // ---- Collect this module's own imports ----
@@ -423,9 +485,9 @@ fn compile_module(
                 let sub_name = sub_import.join(".");
                 module_table.modules.insert(sub_name, sub_exports);
             }
-            Err(errs) => {
+            Err(diagnostics) => {
                 compiling.remove(&canonical);
-                return Err(errs);
+                return Err(diagnostics);
             }
         }
     }
@@ -446,7 +508,11 @@ fn compile_module(
     );
     if !module_output.errors.is_empty() {
         compiling.remove(&canonical);
-        return Err(module_output.errors);
+        return Err(vec![FileDiagnostics {
+            file: file_path.clone(),
+            source,
+            errors: module_output.errors,
+        }]);
     }
 
     // Build exports (only pub items) before consuming the output.

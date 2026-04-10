@@ -12,11 +12,14 @@ pub fn run(file: &Path) {
 
     let filename = file.display().to_string();
 
-    let chunk = match oryn::Chunk::compile_file(file) {
+    let chunk = match oryn::Chunk::compile_file_sourced(file) {
         Ok(chunk) => chunk,
-        Err(errors) => {
-            if let Err(e) = crate::errors::report_errors(&filename, &source, &errors) {
-                eprintln!("error: failed to print diagnostics: {e}");
+        Err(diagnostics) => {
+            for diag in &diagnostics {
+                let origin = diag.file.display().to_string();
+                if let Err(e) = crate::errors::report_errors(&origin, &diag.source, &diag.errors) {
+                    eprintln!("error: failed to print diagnostics: {e}");
+                }
             }
             std::process::exit(1);
         }

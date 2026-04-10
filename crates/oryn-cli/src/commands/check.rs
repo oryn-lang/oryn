@@ -85,7 +85,7 @@ pub fn run(paths: &[PathBuf]) {
     for file in &entry_points {
         let sp = ui::file_spinner(&file.display().to_string());
 
-        match oryn::Chunk::compile_file(file) {
+        match oryn::Chunk::compile_file_sourced(file) {
             Ok(_) => {
                 sp.finish_and_clear();
                 println!(
@@ -95,11 +95,15 @@ pub fn run(paths: &[PathBuf]) {
                 );
                 passed += 1;
             }
-            Err(errors) => {
+            Err(diagnostics) => {
                 sp.finish_and_clear();
                 println!("    {} {}", style("✗").red().bold(), file.display());
-                let source = std::fs::read_to_string(file).unwrap_or_default();
-                error_reports.push((file.display().to_string(), source, errors));
+                // Preserve the origin file of each error batch so spans
+                // render against the file they came from (an imported
+                // module, not the entry file that pulled it in).
+                for diag in diagnostics {
+                    error_reports.push((diag.file.display().to_string(), diag.source, diag.errors));
+                }
                 failed += 1;
             }
         }

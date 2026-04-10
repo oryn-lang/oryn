@@ -390,6 +390,59 @@ fn module_non_literal_binding_is_compile_error() {
 }
 
 #[test]
+fn module_error_is_reported_against_module_file_not_entry() {
+    // When an imported module has a compile error, the returned
+    // FileDiagnostics must carry the *module's* path and source, not
+    // the entry file's. Without this, ariadne renders module spans
+    // against the wrong file and lands on random lines.
+    let p = TempProject::new();
+    p.write(
+        "colors.on",
+        "// padding\n// padding\npub val MAX = UNDEFINED_THING\n",
+    );
+    p.write("main.on", "import colors\nprint(colors.MAX)");
+
+    let entry = p.root.join("main.on");
+    let diagnostics = oryn::Chunk::compile_file_sourced(&entry)
+        .expect_err("expected compile failure from broken module");
+
+    // Exactly one file batch, and it points at colors.on (not main.on).
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "expected one FileDiagnostics batch, got {}: {diagnostics:?}",
+        diagnostics.len(),
+    );
+    let diag = &diagnostics[0];
+    assert!(
+        diag.file.ends_with("colors.on"),
+        "diagnostic file should point at colors.on, got {:?}",
+        diag.file,
+    );
+    assert!(
+        diag.source.contains("UNDEFINED_THING"),
+        "diagnostic source should be colors.on's text, got {:?}",
+        diag.source,
+    );
+    // Every span in every error must fall inside colors.on's source.
+    for err in &diag.errors {
+        let span = match err {
+            oryn::OrynError::Compiler { span, .. } => Some(span.clone()),
+            oryn::OrynError::Parser { span, .. } => Some(span.clone()),
+            oryn::OrynError::Lexer { span } => Some(span.clone()),
+            _ => None,
+        };
+        if let Some(span) = span {
+            assert!(
+                span.end <= diag.source.len(),
+                "span {span:?} is out of bounds for {} byte source",
+                diag.source.len(),
+            );
+        }
+    }
+}
+
+#[test]
 fn multiple_pub_constants_of_different_types() {
     let p = TempProject::new();
     p.write(

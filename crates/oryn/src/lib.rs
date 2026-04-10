@@ -60,7 +60,7 @@ mod vm;
 
 pub use compiler::TypeMap;
 pub use docs::DocTable;
-pub use errors::{OrynError, RuntimeError};
+pub use errors::{FileDiagnostics, OrynError, RuntimeError};
 pub use lexer::{Token, lex, lex_all};
 pub use modules::{find_project_root, resolve_import};
 pub use parser::{

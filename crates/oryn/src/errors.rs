@@ -1,7 +1,26 @@
 use std::fmt;
 use std::ops::Range;
+use std::path::PathBuf;
 
 use crate::vm::value::Value;
+
+/// A batch of errors from a single source file, paired with the file's
+/// path and source text so diagnostics render against the correct
+/// location. Returned by [`crate::Chunk::compile_file_sourced`], which
+/// multi-file compilation uses so errors from imported modules don't
+/// get mis-rendered against the entry file.
+#[derive(Debug)]
+pub struct FileDiagnostics {
+    /// Path of the file these errors originated from.
+    pub file: PathBuf,
+    /// Full source text of `file`, used by ariadne to render the span
+    /// snippets. Empty for errors that carry no span (e.g. module
+    /// resolution failures reported against a missing file).
+    pub source: String,
+    /// The errors themselves. Every span in every error here indexes
+    /// into `source`.
+    pub errors: Vec<OrynError>,
+}
 
 /// An error from any phase of the pipeline: lexing, parsing, or runtime.
 ///
