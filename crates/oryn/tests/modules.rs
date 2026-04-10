@@ -176,6 +176,48 @@ print(v.y)",
 }
 
 #[test]
+fn qualified_object_literal_field_type_mismatch_rejected() {
+    let p = TempProject::new();
+    p.write(
+        "geom.on",
+        "pub obj Vec2 {
+    pub x: float
+    pub y: float
+}",
+    );
+    p.write(
+        "main.on",
+        "import geom
+let v = geom.Vec2 { x: \"oops\", y: 2.5 }
+print(v.x)",
+    );
+
+    let err = p.run("main.on").unwrap_err();
+    assert_compile_error_contains(&err, "field `x` type mismatch");
+}
+
+#[test]
+fn qualified_object_literal_duplicate_field_rejected() {
+    let p = TempProject::new();
+    p.write(
+        "geom.on",
+        "pub obj Vec2 {
+    pub x: float
+    pub y: float
+}",
+    );
+    p.write(
+        "main.on",
+        "import geom
+let v = geom.Vec2 { x: 1.5, x: 2.5, y: 3.5 }
+print(v.x)",
+    );
+
+    let err = p.run("main.on").unwrap_err();
+    assert_compile_error_contains(&err, "duplicate field `x`");
+}
+
+#[test]
 fn qualified_object_literal_with_private_field_rejected() {
     let p = TempProject::new();
     p.write(

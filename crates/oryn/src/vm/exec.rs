@@ -473,13 +473,22 @@ impl VM {
                             .stack
                             .push(Value::Object(Gc::new(mc, RefLock::new(obj))));
                     }
-                    Instruction::GetField(field_idx) => {
+                    Instruction::GetField(field_name) => {
                         let obj = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
                         match obj {
                             Value::Object(obj_ref) => {
                                 let data = obj_ref.borrow();
-                                let value = data.fields[*field_idx].clone();
+                                let obj_def = &chunk.obj_defs[data.type_idx];
+                                let field_idx = obj_def
+                                    .fields
+                                    .iter()
+                                    .position(|field| field == field_name)
+                                    .ok_or_else(|| RuntimeError::UndefinedVariable {
+                                        name: format!("{}.{}", obj_def.name, field_name),
+                                        span: Self::current_span_from_state(&state.frames, chunk),
+                                    })?;
+                                let value = data.fields[field_idx].clone();
 
                                 state.stack.push(value);
                             }
@@ -494,7 +503,7 @@ impl VM {
                             }
                         }
                     }
-                    Instruction::SetField(field_idx) => {
+                    Instruction::SetField(field_name) => {
                         // Stack order: object was pushed first, then value.
                         // Pop in reverse: value first, then object.
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
@@ -504,7 +513,22 @@ impl VM {
                             Value::Object(obj_ref) => {
                                 // borrow_mut requires the GC mutation context
                                 // to maintain gc-arena's write barrier invariant.
-                                obj_ref.borrow_mut(mc).fields[*field_idx] = value;
+                                let field_idx = {
+                                    let data = obj_ref.borrow();
+                                    let obj_def = &chunk.obj_defs[data.type_idx];
+                                    obj_def
+                                        .fields
+                                        .iter()
+                                        .position(|field| field == field_name)
+                                        .ok_or_else(|| RuntimeError::UndefinedVariable {
+                                            name: format!("{}.{}", obj_def.name, field_name),
+                                            span: Self::current_span_from_state(
+                                                &state.frames,
+                                                chunk,
+                                            ),
+                                        })?
+                                };
+                                obj_ref.borrow_mut(mc).fields[field_idx] = value;
                             }
                             _ => {
                                 let span = Self::current_span_from_state(&state.frames, chunk);

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::OrynError;
 use crate::compiler::types::ResolvedType;
@@ -410,9 +410,17 @@ impl Compiler {
             let local_name = &type_name[0];
             if let Some((type_idx, def)) = self.obj_table.resolve(local_name) {
                 let def_fields = def.fields.clone();
+                let def_field_types = def.field_types.clone();
                 let num_fields = def_fields.len();
 
+                let mut seen_fields = HashSet::new();
                 for (fname, _) in &fields {
+                    if !seen_fields.insert(fname.clone()) {
+                        self.output.errors.push(OrynError::compiler(
+                            span.clone(),
+                            format!("duplicate field `{fname}` in `{local_name}` literal"),
+                        ));
+                    }
                     if !def_fields.contains(fname) {
                         self.output.errors.push(OrynError::compiler(
                             span.clone(),
@@ -424,9 +432,20 @@ impl Compiler {
                 let mut field_map: HashMap<String, Spanned<Expression>> =
                     fields.into_iter().collect();
 
-                for def_field in &def_fields {
+                for (field_idx, def_field) in def_fields.iter().enumerate() {
                     if let Some(value) = field_map.remove(def_field) {
-                        self.compile_expr(value);
+                        let value_span = value.span.clone();
+                        let value_type = self.compile_expr(value);
+                        let expected_type = def_field_types
+                            .get(field_idx)
+                            .cloned()
+                            .unwrap_or(ResolvedType::Unknown);
+                        self.check_types(
+                            &expected_type,
+                            &value_type,
+                            &value_span,
+                            &format!("field `{def_field}` type mismatch"),
+                        );
                     } else {
                         self.output.errors.push(OrynError::compiler(
                             span.clone(),
@@ -494,6 +513,7 @@ impl Compiler {
 
         let def_fields = imported_def.fields.clone();
         let def_field_pub = imported_def.field_is_pub.clone();
+        let def_field_types = imported_def.field_types.clone();
         let num_fields = def_fields.len();
 
         // Cross-module construction: types with any private fields cannot
@@ -515,7 +535,14 @@ impl Compiler {
         }
 
         // Every named field in the literal must exist on the type.
+        let mut seen_fields = HashSet::new();
         for (fname, _) in &fields {
+            if !seen_fields.insert(fname.clone()) {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!("duplicate field `{fname}` in `{module_key}.{last}` literal"),
+                ));
+            }
             if !def_fields.iter().any(|f| f == fname) {
                 self.output.errors.push(OrynError::compiler(
                     span.clone(),
@@ -527,9 +554,20 @@ impl Compiler {
         // All fields must be supplied.
         let mut field_map: HashMap<String, Spanned<Expression>> = fields.into_iter().collect();
 
-        for def_field in &def_fields {
+        for (field_idx, def_field) in def_fields.iter().enumerate() {
             if let Some(value) = field_map.remove(def_field) {
-                self.compile_expr(value);
+                let value_span = value.span.clone();
+                let value_type = self.compile_expr(value);
+                let expected_type = def_field_types
+                    .get(field_idx)
+                    .cloned()
+                    .unwrap_or(ResolvedType::Unknown);
+                self.check_types(
+                    &expected_type,
+                    &value_type,
+                    &value_span,
+                    &format!("field `{def_field}` type mismatch"),
+                );
             } else {
                 self.output.errors.push(OrynError::compiler(
                     span.clone(),
@@ -583,6 +621,19 @@ impl Compiler {
         let expected_params = list_method.param_types(elem_ty);
         let arity = args.len();
 
+        if matches!(list_method, ListMethod::Push | ListMethod::Pop)
+            && let Some(name) = expression_root_name(&object.node)
+            && let Some((_, false, _)) = self.locals.resolve(name)
+        {
+            self.output.errors.push(OrynError::compiler(
+                span.clone(),
+                format!(
+                    "cannot mutate list through val binding `{name}` with `{}`",
+                    list_method.name()
+                ),
+            ));
+        }
+
         if arity != expected_params.len() {
             self.output.errors.push(OrynError::compiler(
                 span.clone(),
@@ -626,6 +677,16 @@ impl Compiler {
         );
 
         list_method.return_type(elem_ty)
+    }
+}
+
+fn expression_root_name(expr: &Expression) -> Option<&str> {
+    match expr {
+        Expression::Ident(name) => Some(name),
+        Expression::FieldAccess { object, .. } | Expression::Index { object, .. } => {
+            expression_root_name(&object.node)
+        }
+        _ => None,
     }
 }
 
@@ -746,7 +807,7 @@ impl Compiler {
                 self.compile_expr(*object);
 
                 if let Some(field_idx) = self.resolve_field(&obj_type, &field, &span) {
-                    self.emit(Instruction::GetField(field_idx), &span);
+                    self.emit(Instruction::GetField(field.clone()), &span);
                     match obj_type {
                         ResolvedType::Object {
                             ref name,

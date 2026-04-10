@@ -230,6 +230,15 @@ impl Compiler {
                 index,
                 value,
             } => {
+                if let Some(name) = field_assignment_root_name(&object.node)
+                    && let Some((_, false, _)) = self.locals.resolve(name)
+                {
+                    self.output.errors.push(OrynError::compiler(
+                        stmt_span.clone(),
+                        format!("cannot mutate list through val binding `{name}`"),
+                    ));
+                }
+
                 let object_span = object.span.clone();
                 let object_ty = self.compile_expr(object);
 
@@ -273,13 +282,14 @@ impl Compiler {
                 field,
                 value,
             } => {
-                let (obj_type, mutable) = match &object.node {
-                    Expression::Ident(name) => match self.locals.resolve(name) {
-                        Some((_, m, t)) => (t, m),
-                        None => (ResolvedType::Unknown, true),
+                let mutable = match field_assignment_root_name(&object.node) {
+                    Some(name) => match self.locals.resolve(name) {
+                        Some((_, m, _)) => m,
+                        None => true,
                     },
-                    _ => (ResolvedType::Unknown, true),
+                    None => true,
                 };
+                let obj_type = self.infer_object_type(&object.node);
 
                 if !mutable {
                     self.output.errors.push(OrynError::compiler(
@@ -291,8 +301,8 @@ impl Compiler {
                 self.compile_expr(object);
                 self.compile_expr(value);
 
-                if let Some(field_idx) = self.resolve_field(&obj_type, &field, &stmt_span) {
-                    self.emit(Instruction::SetField(field_idx), &stmt_span);
+                if self.resolve_field(&obj_type, &field, &stmt_span).is_some() {
+                    self.emit(Instruction::SetField(field), &stmt_span);
                 }
             }
 
@@ -730,5 +740,15 @@ impl Compiler {
         for patch_idx in loop_ctx.break_patches {
             self.output.instructions[patch_idx] = Instruction::Jump(end);
         }
+    }
+}
+
+fn field_assignment_root_name(expr: &Expression) -> Option<&str> {
+    match expr {
+        Expression::Ident(name) => Some(name),
+        Expression::FieldAccess { object, .. } | Expression::Index { object, .. } => {
+            field_assignment_root_name(&object.node)
+        }
+        _ => None,
     }
 }

@@ -134,6 +134,28 @@ fn obj_field_unknown_type_is_compile_error() {
     }));
 }
 
+#[test]
+fn object_literal_field_type_mismatch_is_compile_error() {
+    let result = oryn::Chunk::compile("obj Foo { x: int }\nlet f = Foo { x: \"oops\" }");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("field `x` type mismatch"))
+    }));
+}
+
+#[test]
+fn object_literal_duplicate_field_is_compile_error() {
+    let result = oryn::Chunk::compile("obj Foo { x: int }\nlet f = Foo { x: 1, x: 2 }");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("duplicate field `x`"))
+    }));
+}
+
 // --- Methods ---
 
 #[test]
@@ -241,6 +263,39 @@ fn nested_field_access_keeps_compile_time_field_resolution() {
 }
 
 #[test]
+fn nested_field_assignment_mutates_inner_object() {
+    assert_eq!(
+        run(
+            "obj Inner {\nvalue: int\n}\nobj Outer {\ninner: Inner\n}\nlet outer = Outer { inner: Inner { value: 7 } }\nouter.inner.value = 11\nprint(outer.inner.value)"
+        ),
+        "11\n",
+    );
+}
+
+#[test]
+fn indexed_object_field_assignment_mutates_element() {
+    assert_eq!(
+        run(
+            "obj Cell {\nvalue: int\n}\nlet cells: [Cell] = [Cell { value: 1 }]\ncells[0].value = 2\nprint(cells[0].value)"
+        ),
+        "2\n",
+    );
+}
+
+#[test]
+fn nested_field_assignment_through_val_root_is_compile_error() {
+    let result = oryn::Chunk::compile(
+        "obj Inner {\nvalue: int\n}\nobj Outer {\ninner: Inner\n}\nval outer = Outer { inner: Inner { value: 7 } }\nouter.inner.value = 11",
+    );
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("val"))
+    }));
+}
+
+#[test]
 fn composed_methods_are_visible_inside_composing_type_methods() {
     assert_eq!(
         run(
@@ -299,6 +354,16 @@ fn use_inherits_methods() {
             "obj Health {\nhp: int\nfn heal(self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 50, name: \"Bob\" }\np.heal(20)\nprint(p.hp)"
         ),
         "70\n",
+    );
+}
+
+#[test]
+fn inherited_methods_resolve_fields_on_composed_receiver_layout() {
+    assert_eq!(
+        run(
+            "obj Named {\nname: String\nfn rename(self, name: String) {\nself.name = name\n}\n}\nobj Position {\nx: int\ny: int\nfn move_by(self, dx: int, dy: int) {\nself.x = self.x + dx\nself.y = self.y + dy\n}\n}\nobj Entity {\nuse Named\nuse Position\n}\nlet e = Entity { name: \"start\", x: 1, y: 2 }\ne.rename(\"moved\")\ne.move_by(3, 4)\nprint(e.name)\nprint(e.x)\nprint(e.y)"
+        ),
+        "moved\n4\n6\n",
     );
 }
 

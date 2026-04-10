@@ -702,6 +702,17 @@ fn parses_list_literal_with_trailing_comma() {
 }
 
 #[test]
+fn parses_multiline_list_literal() {
+    let stmts = parse_ok("let xs: [int] = [\n1,\n2,\n3,\n]");
+    match &stmts[0].node {
+        Statement::Let { value, .. } => {
+            assert!(matches!(value.node, Expression::ListLiteral(ref v) if v.len() == 3));
+        }
+        other => panic!("expected Let with multiline ListLiteral, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_index_expression() {
     let stmts = parse_ok("let xs: [int] = [1, 2, 3]\nxs[0]");
     assert_eq!(stmts.len(), 2);
@@ -739,9 +750,44 @@ fn parses_index_assignment() {
 }
 
 #[test]
+fn parses_field_index_assignment() {
+    let stmts = parse_ok("box.xs[0] = 42");
+    match &stmts[0].node {
+        Statement::IndexAssignment { object, .. } => {
+            assert!(matches!(object.node, Expression::FieldAccess { .. }));
+        }
+        other => panic!("expected IndexAssignment with field object, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_index_field_assignment() {
+    let stmts = parse_ok("xs[0].value = 42");
+    match &stmts[0].node {
+        Statement::FieldAssignment { object, field, .. } => {
+            assert_eq!(field, "value");
+            assert!(matches!(object.node, Expression::Index { .. }));
+        }
+        other => panic!("expected FieldAssignment with index object, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_list_method_calls() {
     // len/push/pop all lower to method calls — the compiler decides
     // later which receiver-specific opcode to emit.
     let stmts = parse_ok("let xs: [int] = [1]\nxs.push(2)\nxs.len()\nxs.pop()");
     assert_eq!(stmts.len(), 4);
+}
+
+#[test]
+fn parses_nested_field_assignment() {
+    let stmts = parse_ok("holder.counter.count = 5");
+    match &stmts[0].node {
+        Statement::FieldAssignment { object, field, .. } => {
+            assert_eq!(field, "count");
+            assert!(matches!(object.node, Expression::FieldAccess { .. }));
+        }
+        other => panic!("expected nested FieldAssignment, got {other:?}"),
+    }
 }

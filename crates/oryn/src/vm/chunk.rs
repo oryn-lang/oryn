@@ -582,8 +582,8 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::NewObject(type_idx, num_fields) => {
                 format!("NewObject {type_idx} {num_fields}")
             }
-            Instruction::GetField(field_idx) => format!("GetField {field_idx}"),
-            Instruction::SetField(field_idx) => format!("SetField {field_idx}"),
+            Instruction::GetField(field) => format!("GetField {field}"),
+            Instruction::SetField(field) => format!("SetField {field}"),
             Instruction::Return => "Return".to_string(),
             Instruction::Equal => "Equal".to_string(),
             Instruction::NotEqual => "NotEqual".to_string(),

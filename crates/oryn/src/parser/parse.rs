@@ -154,10 +154,13 @@ fn atom<'src>(
     // multi-line literals. The compiler rejects empty literals because
     // an empty `[]` has no context-free element type.
     let list_literal = expr
-        .separated_by(just(Token::Comma))
+        .separated_by(just(Token::Comma).then(nl.clone()))
         .allow_trailing()
         .collect::<Vec<Spanned<Expression>>>()
-        .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
+        .delimited_by(
+            just(Token::LeftBracket).then(nl.clone()),
+            nl.clone().then(just(Token::RightBracket)),
+        )
         .map(Expression::ListLiteral);
 
     bool_lit
@@ -569,47 +572,123 @@ fn program<'src>() -> impl Parser<
 
         // -- Assignments --
 
-        // v.x = expr (must be tried before plain assignment)
+        // v.x = expr or v.x.y = expr (must be tried before plain assignment)
         let field_assign_stmt = select! { Token::Ident(name) => name }
-            .then_ignore(just(Token::Dot))
-            .then(select! { Token::Ident(field) => field })
+            .then(
+                just(Token::Dot)
+                    .ignore_then(select! { Token::Ident(field) => field })
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
+            )
             .then_ignore(just(Token::Equals))
             .then(expr.clone())
-            .map_with(|((name, field), value), extra| {
-                let name_span = extra.span();
+            .map_with(|((root, segments), value), extra| {
+                let span = extra.span();
+                let last_idx = segments.len() - 1;
+                let field = segments[last_idx].clone();
+                let object = segments.into_iter().take(last_idx).fold(
+                    Spanned::new(Expression::Ident(root), span),
+                    |object, field| {
+                        Spanned::new(
+                            Expression::FieldAccess {
+                                object: Box::new(object),
+                                field,
+                            },
+                            span,
+                        )
+                    },
+                );
                 Spanned::new(
                     Statement::FieldAssignment {
-                        object: Spanned::new(Expression::Ident(name), name_span),
+                        object,
                         field,
                         value,
                     },
-                    name_span,
+                    span,
                 )
             })
             .boxed();
 
-        // x[i] = expr (must be tried before plain assignment and after
-        // field assignment). Currently restricted to a bare ident on the
-        // LHS so the parser can commit quickly; chained cases like
-        // `foo.bar[i] = x` would need a more general l-value grammar.
+        // x[i] = expr, x.y[i] = expr, or x[i].y = expr.
         let index_assign_stmt = select! { Token::Ident(name) => name }
+            .then(
+                just(Token::Dot)
+                    .ignore_then(select! { Token::Ident(field) => field })
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
             .then(
                 expr.clone()
                     .delimited_by(just(Token::LeftBracket), just(Token::RightBracket)),
             )
+            .then(
+                just(Token::Dot)
+                    .ignore_then(select! { Token::Ident(field) => field })
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
             .then_ignore(just(Token::Equals))
             .then(expr.clone())
-            .map_with(|((name, index), value), extra| {
-                let s: SimpleSpan = extra.span();
-                Spanned::new(
-                    Statement::IndexAssignment {
-                        object: Spanned::new(Expression::Ident(name), s),
-                        index,
-                        value,
-                    },
-                    s,
-                )
-            })
+            .map_with(
+                |((((name, pre_fields), index), post_fields), value), extra| {
+                    let s: SimpleSpan = extra.span();
+                    let object = pre_fields.into_iter().fold(
+                        Spanned::new(Expression::Ident(name), s),
+                        |object, field| {
+                            Spanned::new(
+                                Expression::FieldAccess {
+                                    object: Box::new(object),
+                                    field,
+                                },
+                                s,
+                            )
+                        },
+                    );
+
+                    if post_fields.is_empty() {
+                        Spanned::new(
+                            Statement::IndexAssignment {
+                                object,
+                                index,
+                                value,
+                            },
+                            s,
+                        )
+                    } else {
+                        let indexed = Spanned::new(
+                            Expression::Index {
+                                object: Box::new(object),
+                                index: Box::new(index),
+                            },
+                            s,
+                        );
+                        let last_idx = post_fields.len() - 1;
+                        let field = post_fields[last_idx].clone();
+                        let object = post_fields.into_iter().take(last_idx).fold(
+                            indexed,
+                            |object, field| {
+                                Spanned::new(
+                                    Expression::FieldAccess {
+                                        object: Box::new(object),
+                                        field,
+                                    },
+                                    s,
+                                )
+                            },
+                        );
+
+                        Spanned::new(
+                            Statement::FieldAssignment {
+                                object,
+                                field,
+                                value,
+                            },
+                            s,
+                        )
+                    }
+                },
+            )
             .boxed();
 
         // x = expr

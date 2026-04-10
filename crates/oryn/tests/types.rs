@@ -147,6 +147,76 @@ fn val_reassignment_in_function_is_compile_error() {
     );
 }
 
+#[test]
+fn val_list_len_is_allowed() {
+    assert_eq!(run("val xs: [int] = [1, 2]\nprint(xs.len())"), "2\n");
+}
+
+#[test]
+fn val_list_index_assignment_is_compile_error() {
+    let result = oryn::Chunk::compile("val xs: [int] = [1]\nxs[0] = 2");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("val"))
+    }));
+}
+
+#[test]
+fn val_list_push_is_compile_error() {
+    let result = oryn::Chunk::compile("val xs: [int] = [1]\nxs.push(2)");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("val"))
+    }));
+}
+
+#[test]
+fn val_list_pop_is_compile_error() {
+    let result = oryn::Chunk::compile("val xs: [int] = [1]\nxs.pop()");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("val"))
+    }));
+}
+
+#[test]
+fn val_root_nested_list_push_is_compile_error() {
+    let result =
+        oryn::Chunk::compile("obj Bag { xs: [int] }\nval bag = Bag { xs: [1] }\nbag.xs.push(2)");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("val"))
+    }));
+}
+
+#[test]
+fn field_list_index_assignment_works() {
+    assert_eq!(
+        run("obj Box { xs: [int] }\nlet box = Box { xs: [1] }\nbox.xs[0] = 9\nprint(box.xs[0])"),
+        "9\n",
+    );
+}
+
+#[test]
+fn val_root_nested_list_index_assignment_is_compile_error() {
+    let result =
+        oryn::Chunk::compile("obj Bag { xs: [int] }\nval bag = Bag { xs: [1] }\nbag.xs[0] = 2");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("val"))
+    }));
+}
+
 // --- Type annotations (parsed, not enforced) ---
 
 #[test]
