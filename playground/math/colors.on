@@ -1,0 +1,20 @@
+pub val MAX_CHANNEL = 255
+
+pub obj Color {
+    pub r: i32
+    pub g: i32
+    pub b: i32
+    alpha: i32
+
+    pub fn rgb(r: i32, g: i32, b: i32) -> Color {
+        rn Color { r: r, g: g, b: b, alpha: MAX_CHANNEL }
+    }
+
+    pub fn rgba(r: i32, g: i32, b: i32, a: i32) -> Color {
+        rn Color { r: r, g: g, b: b, alpha: a }
+    }
+
+    pub fn opacity(self) -> i32 {
+        rn self.alpha
+    }
+}

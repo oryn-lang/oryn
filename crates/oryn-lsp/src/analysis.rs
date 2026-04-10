@@ -10,6 +10,7 @@ pub enum SymbolKind {
     Function,
     Parameter,
     Object,
+    Module,
 }
 
 /// A definition site: where a name is introduced (let, fn, param).
@@ -168,14 +169,16 @@ impl AstVisitor for LspVisitor<'_> {
                 name,
                 value,
                 type_ann,
+                is_pub: _,
             }
             | Statement::Val {
                 name,
                 value,
                 type_ann,
+                is_pub: _,
             } => {
                 let type_name = type_ann.as_ref().map(|ann| match ann {
-                    oryn::TypeAnnotation::Named(n) => n.clone(),
+                    oryn::TypeAnnotation::Named(p) => p.join("."),
                 });
                 self.register_definition(
                     name,
@@ -193,17 +196,18 @@ impl AstVisitor for LspVisitor<'_> {
                 params,
                 body,
                 return_type,
+                is_pub: _,
             } => {
                 let param_strs: Vec<String> = params
                     .iter()
                     .map(|(pname, ann)| match ann {
-                        Some(oryn::TypeAnnotation::Named(t)) => format!("{pname}: {t}"),
+                        Some(oryn::TypeAnnotation::Named(t)) => format!("{pname}: {}", t.join(".")),
                         None => pname.clone(),
                     })
                     .collect();
 
                 let ret = return_type.as_ref().map(|rt| match rt {
-                    oryn::TypeAnnotation::Named(n) => n.clone(),
+                    oryn::TypeAnnotation::Named(p) => p.join("."),
                 });
 
                 self.register_definition(
@@ -218,7 +222,7 @@ impl AstVisitor for LspVisitor<'_> {
                 self.enter_scope();
                 for (param_name, type_ann) in params {
                     let type_name = type_ann.as_ref().map(|ann| match ann {
-                        oryn::TypeAnnotation::Named(n) => n.clone(),
+                        oryn::TypeAnnotation::Named(p) => p.join("."),
                     });
                     self.register_definition(
                         param_name,
@@ -252,6 +256,26 @@ impl AstVisitor for LspVisitor<'_> {
 
                 for method in methods {
                     self.visit_obj_method(method, &stmt.span);
+                }
+            }
+
+            Statement::Import { path } => {
+                // Register the full dotted path as a Module symbol so the
+                // root segment shows up as a known identifier in hover and
+                // go-to-definition. The full path becomes the symbol name.
+                let dotted = path.join(".");
+                self.register_definition(&dotted, &stmt.span, SymbolKind::Module, None, None, None);
+                // Also register the root segment so a bare reference like
+                // `math` (in `math.add(...)`) resolves to this import.
+                if let Some(root) = path.first() {
+                    self.register_definition(
+                        root,
+                        &stmt.span,
+                        SymbolKind::Module,
+                        None,
+                        None,
+                        None,
+                    );
                 }
             }
 
@@ -297,13 +321,13 @@ impl LspVisitor<'_> {
             .params
             .iter()
             .map(|(pname, ann)| match ann {
-                Some(oryn::TypeAnnotation::Named(t)) => format!("{pname}: {t}"),
+                Some(oryn::TypeAnnotation::Named(t)) => format!("{pname}: {}", t.join(".")),
                 None => pname.clone(),
             })
             .collect();
 
         let ret = method.return_type.as_ref().map(|rt| match rt {
-            oryn::TypeAnnotation::Named(n) => n.clone(),
+            oryn::TypeAnnotation::Named(p) => p.join("."),
         });
 
         self.register_definition(
@@ -319,7 +343,7 @@ impl LspVisitor<'_> {
             self.enter_scope();
             for (param_name, type_ann) in &method.params {
                 let type_name = type_ann.as_ref().map(|ann| match ann {
-                    oryn::TypeAnnotation::Named(n) => n.clone(),
+                    oryn::TypeAnnotation::Named(p) => p.join("."),
                 });
                 self.register_definition(
                     param_name,

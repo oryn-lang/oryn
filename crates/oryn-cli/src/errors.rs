@@ -61,6 +61,9 @@ pub fn report_errors(filename: &str, source: &str, errors: &[OrynError]) -> io::
                     eprintln!("runtime error: {message}");
                 }
             }
+            OrynError::Module { path, message } => {
+                eprintln!("module error: {}: {}", path, message);
+            }
         }
     }
 

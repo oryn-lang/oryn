@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::OrynError;
+use crate::compiler::tables::FunctionSignature;
 
 // ---------------------------------------------------------------------------
 // Bytecode instructions
@@ -64,6 +65,10 @@ pub struct CompilerOutput {
     pub functions: Vec<CompiledFunction>,
     pub obj_defs: Vec<ObjDefInfo>,
     pub errors: Vec<OrynError>,
+    /// Module-level `pub let` / `pub val` constants, extracted when compiling
+    /// a module. Only non-empty for module compilation units; consumers
+    /// access these via the owning module's [`ModuleExports`].
+    pub(crate) module_constants: HashMap<String, ConstValue>,
 }
 
 #[derive(Debug)]
@@ -76,22 +81,43 @@ pub struct CompiledFunction {
     pub num_locals: usize,
     pub instructions: Vec<Instruction>,
     pub spans: Vec<Range<usize>>,
+    pub is_pub: bool,
 }
 
+/// Compile-time information about an object type. Stored in the
+/// compiler's obj_table for in-module lookups, and cloned into
+/// [`ModuleExports::obj_defs`] when the type is `pub`. Carries enough
+/// information for the importing module to type-check field and method
+/// access without re-parsing the source.
 #[derive(Debug, Clone)]
 pub struct ObjDefInfo {
     pub name: String,
-    /// Field names in order - index = field offset.
+    /// Field names in order — index = field offset in `NewObject`.
     pub fields: Vec<String>,
     pub field_types: Vec<ResolvedType>,
+    /// Parallel to `fields`: whether each field is `pub` (visible across
+    /// module boundaries). Inherited fields take their visibility from
+    /// the originating type.
+    pub field_is_pub: Vec<bool>,
     /// Method name -> function table index.
     pub methods: HashMap<String, usize>,
     /// Static method name -> function table index.
     pub static_methods: HashMap<String, usize>,
+    /// Per-method visibility, parallel to `methods`.
+    pub method_is_pub: HashMap<String, bool>,
+    /// Per-static-method visibility, parallel to `static_methods`.
+    pub static_method_is_pub: HashMap<String, bool>,
+    /// Compiled signature (param types + return type) for each instance
+    /// method. Used for cross-module method dispatch type inference and
+    /// argument type checking.
+    pub method_signatures: HashMap<String, FunctionSignature>,
+    /// Same as `method_signatures` but for static methods.
+    pub static_method_signatures: HashMap<String, FunctionSignature>,
     /// Full method signatures (declared without a body).
     /// Types that `use` this one must provide implementations
     /// matching the complete shape (name, params, return type).
     pub signatures: Vec<MethodSignature>,
+    pub is_pub: bool,
 }
 
 /// A required method signature: name + parameter types (excluding self) + return type.
@@ -104,6 +130,68 @@ pub struct MethodSignature {
     pub return_type: ResolvedType,
 }
 
+/// A module-level constant value, used for `pub let` / `pub val` bindings
+/// that are exposed to importers. Only literal values are allowed for now;
+/// non-literal expressions produce a compile error during module compilation.
+#[derive(Clone)]
+pub(crate) enum ConstValue {
+    Int(i32),
+    Float(f32),
+    Bool(bool),
+    String(String),
+}
+
+impl ConstValue {
+    /// Emit the appropriate push instruction for this constant.
+    pub(crate) fn to_instruction(&self) -> Instruction {
+        match self {
+            ConstValue::Int(n) => Instruction::PushInt(*n),
+            ConstValue::Float(n) => Instruction::PushFloat(*n),
+            ConstValue::Bool(b) => Instruction::PushBool(*b),
+            ConstValue::String(s) => Instruction::PushString(s.clone()),
+        }
+    }
+
+    /// The type of this constant, for type checking.
+    pub(crate) fn resolved_type(&self) -> ResolvedType {
+        match self {
+            ConstValue::Int(_) => ResolvedType::Int,
+            ConstValue::Float(_) => ResolvedType::Float,
+            ConstValue::Bool(_) => ResolvedType::Bool,
+            ConstValue::String(_) => ResolvedType::Str,
+        }
+    }
+}
+
+/// The pub-only surface area of a single compiled module, indexed by
+/// the merged chunk's absolute indices. Importers look up cross-module
+/// references through this struct rather than walking the merged
+/// `CompilerOutput` directly.
+#[derive(Clone)]
+pub(crate) struct ModuleExports {
+    /// `pub fn` name → absolute index in the merged chunk's function table.
+    pub functions: HashMap<String, usize>,
+    /// Compiled signatures (param types + return type) for each pub
+    /// function, used for cross-module type checking.
+    pub fn_signatures: HashMap<String, FunctionSignature>,
+    /// `pub obj` name → absolute index in the merged chunk's obj table.
+    pub objects: HashMap<String, usize>,
+    /// Full `ObjDefInfo` (cloned) for each pub type. Lets importers
+    /// enforce per-field/per-method privacy and construct qualified
+    /// object literals without consulting the merged chunk directly.
+    pub obj_defs: HashMap<String, ObjDefInfo>,
+    /// `pub let` / `pub val` literal constants, inlined at the call site.
+    pub constants: HashMap<String, ConstValue>,
+}
+
+/// All imported modules, keyed by their **full dot-joined path**
+/// (e.g. "math" or "math.nested.library"). Registration uses the complete
+/// path so the compiler can distinguish between flat and nested modules.
+#[derive(Default)]
+pub(crate) struct ModuleTable {
+    pub modules: HashMap<String, ModuleExports>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ResolvedType {
     Int,
@@ -112,21 +200,80 @@ pub(crate) enum ResolvedType {
     Str,
     Range,
     Void,
-    Object(String),
+    /// An object/struct type. `name` is the type's local name; `module`
+    /// is the dotted path of the module that defined it (empty when the
+    /// type was defined in the current compilation unit). The pair lets
+    /// the compiler enforce cross-module field/method privacy.
+    Object {
+        name: String,
+        module: Vec<String>,
+    },
     Unknown,
 }
 
+impl CompilerOutput {
+    /// Build a [`ModuleExports`] from this output, including only `pub` items.
+    /// Indices are remapped by the given offsets so they point into a merged output.
+    pub(crate) fn build_module_exports(
+        &self,
+        fn_offset: usize,
+        obj_offset: usize,
+    ) -> ModuleExports {
+        let mut functions = HashMap::new();
+        let mut fn_signatures = HashMap::new();
+        let mut objects = HashMap::new();
+
+        for (i, func) in self.functions.iter().enumerate() {
+            if func.is_pub {
+                let remapped = fn_offset + i;
+                functions.insert(func.name.clone(), remapped);
+                if let Some(ref rt) = func.return_type {
+                    fn_signatures.insert(
+                        func.name.clone(),
+                        FunctionSignature {
+                            param_types: func.param_types.clone(),
+                            return_type: rt.clone(),
+                        },
+                    );
+                }
+            }
+        }
+
+        let mut obj_defs = HashMap::new();
+        for (i, obj_def) in self.obj_defs.iter().enumerate() {
+            if obj_def.is_pub {
+                objects.insert(obj_def.name.clone(), obj_offset + i);
+                obj_defs.insert(obj_def.name.clone(), obj_def.clone());
+            }
+        }
+
+        ModuleExports {
+            functions,
+            fn_signatures,
+            objects,
+            obj_defs,
+            constants: self.module_constants.clone(),
+        }
+    }
+}
+
 impl ResolvedType {
-    pub fn display_name(&self) -> &str {
+    pub fn display_name(&self) -> std::borrow::Cow<'_, str> {
         match self {
-            ResolvedType::Int => "i32",
-            ResolvedType::Float => "f32",
-            ResolvedType::Bool => "bool",
-            ResolvedType::Str => "String",
-            ResolvedType::Range => "Range",
-            ResolvedType::Void => "void",
-            ResolvedType::Object(name) => name.as_str(),
-            ResolvedType::Unknown => "unknown",
+            ResolvedType::Int => "i32".into(),
+            ResolvedType::Float => "f32".into(),
+            ResolvedType::Bool => "bool".into(),
+            ResolvedType::Str => "String".into(),
+            ResolvedType::Range => "Range".into(),
+            ResolvedType::Void => "void".into(),
+            ResolvedType::Object { name, module } => {
+                if module.is_empty() {
+                    name.as_str().into()
+                } else {
+                    format!("{}.{}", module.join("."), name).into()
+                }
+            }
+            ResolvedType::Unknown => "unknown".into(),
         }
     }
 }

@@ -13,6 +13,29 @@ type TokenSpanned = (Token, SimpleSpan);
 // The input type chumsky operates on. A slice of `TokenSpanned` tokens.
 type TokenInput<'src> = MappedInput<'src, Token, SimpleSpan, &'src [TokenSpanned]>;
 
+/// What kind of suffix follows a postfix `.field` access. Built once
+/// per `.ident` step in the postfix parser; the foldl callback decides
+/// whether to construct a FieldAccess, MethodCall, or ObjLiteral.
+enum PostfixSuffix {
+    Field,
+    Call(Vec<Spanned<Expression>>),
+    ObjLit(Vec<(String, Spanned<Expression>)>),
+}
+
+/// Walk a chain of `Expression::FieldAccess` rooted in `Expression::Ident`
+/// and append each segment name to `out` in source order. Used to recover
+/// the dotted type path when promoting a `.field` chain to an ObjLiteral.
+fn collect_path(expr: &Expression, out: &mut Vec<String>) {
+    match expr {
+        Expression::Ident(name) => out.push(name.clone()),
+        Expression::FieldAccess { object, field } => {
+            collect_path(&object.node, out);
+            out.push(field.clone());
+        }
+        _ => {}
+    }
+}
+
 /// Parses a token stream into an AST. Returns the statements and any
 /// [`OrynError::Parser`] errors. Partial output is returned even when
 /// there are errors.
@@ -107,7 +130,7 @@ fn atom<'src>(
             |((name, call_args), obj_fields)| match (call_args, obj_fields) {
                 (Some(args), _) => Expression::Call { name, args },
                 (_, Some(fields)) => Expression::ObjLiteral {
-                    type_name: name,
+                    type_name: vec![name],
                     fields,
                 },
                 _ => Expression::Ident(name),
@@ -143,22 +166,43 @@ fn program<'src>() -> impl Parser<
     let expr = recursive(|expr| {
         let atom = atom(expr.clone());
 
-        // Postfix: .field access and .method(args) calls.
-        let postfix = atom.clone().foldl(
-            just(Token::Dot)
-                .ignore_then(select! { Token::Ident(name) => name })
-                .then(
-                    expr.clone()
-                        .separated_by(just(Token::Comma))
-                        .collect::<Vec<_>>()
-                        .delimited_by(just(Token::LeftParen), just(Token::RightParen))
-                        .or_not(),
-                )
-                .repeated(),
-            |object, (name, args)| {
+        // Field-value pair used inside object literal braces. Same shape
+        // as the one in `atom()`, but redefined here for postfix scope.
+        let obj_field_value = select! { Token::Ident(name) => name }
+            .then_ignore(just(Token::Colon))
+            .then(expr.clone());
+
+        // Postfix step: `.field`, `.method(args)`, or `.Type { fields }`
+        // (the last one promotes the whole accumulated chain to an
+        // ObjLiteral with a qualified type path).
+        let postfix_obj_fields = obj_field_value
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LeftCurly), just(Token::RightCurly));
+
+        let postfix_call_args = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LeftParen), just(Token::RightParen));
+
+        // Each postfix step yields one of three suffix variants.
+        let postfix_step = just(Token::Dot)
+            .ignore_then(select! { Token::Ident(name) => name })
+            .then(choice((
+                postfix_call_args.map(PostfixSuffix::Call),
+                postfix_obj_fields.map(PostfixSuffix::ObjLit),
+                chumsky::primitive::empty().map(|_| PostfixSuffix::Field),
+            )));
+
+        let postfix = atom
+            .clone()
+            .foldl(postfix_step.repeated(), |object, (name, suffix)| {
                 let span = object.span.clone();
-                match args {
-                    Some(args) => Spanned {
+                match suffix {
+                    PostfixSuffix::Call(args) => Spanned {
                         node: Expression::MethodCall {
                             object: Box::new(object),
                             method: name,
@@ -166,16 +210,31 @@ fn program<'src>() -> impl Parser<
                         },
                         span,
                     },
-                    None => Spanned {
+                    PostfixSuffix::Field => Spanned {
                         node: Expression::FieldAccess {
                             object: Box::new(object),
                             field: name,
                         },
                         span,
                     },
+                    PostfixSuffix::ObjLit(fields) => {
+                        // Walk the accumulated chain back to the root Ident
+                        // to build the qualified type path. The current
+                        // `name` (just consumed) is the type name; the chain
+                        // in `object` provides the module prefix segments.
+                        let mut path = Vec::new();
+                        collect_path(&object.node, &mut path);
+                        path.push(name);
+                        Spanned {
+                            node: Expression::ObjLiteral {
+                                type_name: path,
+                                fields,
+                            },
+                            span,
+                        }
+                    }
                 }
-            },
-        );
+            });
 
         // Unary minus: tighter than *, so -2 * 3 is (-2) * 3.
         // .boxed() erases the deeply nested combinator type to speed up compilation.
@@ -308,8 +367,29 @@ fn program<'src>() -> impl Parser<
     let newlines = just(Token::Newline).repeated();
 
     let stmt = recursive(|stmt| {
-        let type_annotation = just(Token::Colon)
-            .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) });
+        // import <ident> or import <ident>.<ident>.<ident>...
+        let import_stmt = just(Token::Import)
+            .ignore_then(
+                select! { Token::Ident(name) => name }
+                    .separated_by(just(Token::Dot))
+                    .at_least(1)
+                    .collect::<Vec<String>>(),
+            )
+            .map_with(|path, extra| Spanned::new(Statement::Import { path }, extra.span()))
+            .labelled("import statement")
+            .boxed();
+
+        // A dotted type path: `i32`, `Vec2`, or `math.Vec2`,
+        // `std.collections.List`. Stored as a `Vec<String>` so the
+        // compiler can look it up against `obj_table` (single segment)
+        // or `ModuleTable` (multi-segment).
+        let dotted_type = select! { Token::Ident(name) => name }
+            .separated_by(just(Token::Dot))
+            .at_least(1)
+            .collect::<Vec<String>>()
+            .map(TypeAnnotation::Named);
+
+        let type_annotation = just(Token::Colon).ignore_then(dotted_type.clone());
 
         // { stmt \n stmt \n ... }
         let block = stmt
@@ -328,24 +408,29 @@ fn program<'src>() -> impl Parser<
         // Shared helper: parses `<keyword> <name> [: <type>] = <expr>` into a
         // Statement::Let or Statement::Val depending on `mutable`.
         let binding_stmt = |keyword: Token, label: &'static str, mutable: bool| {
-            just(keyword)
-                .ignore_then(select! { Token::Ident(name) => name }.labelled("variable name"))
+            just(Token::Pub)
+                .or_not()
+                .map(|t| t.is_some())
+                .then_ignore(just(keyword))
+                .then(select! { Token::Ident(name) => name }.labelled("variable name"))
                 .then(type_annotation.clone().or_not())
                 .then_ignore(just(Token::Equals))
                 .then(expr.clone())
-                .map_with(move |((name, type_ann), value), extra| {
+                .map_with(move |(((is_pub, name), type_ann), value), extra| {
                     Spanned::new(
                         if mutable {
                             Statement::Let {
                                 name,
                                 type_ann,
                                 value,
+                                is_pub,
                             }
                         } else {
                             Statement::Val {
                                 name,
                                 type_ann,
                                 value,
+                                is_pub,
                             }
                         },
                         extra.span(),
@@ -390,12 +475,22 @@ fn program<'src>() -> impl Parser<
 
         // -- Objects --
 
-        let obj_field = select! { Token::Ident(name) => name }
+        // Optional `pub` modifier on a field or method.
+        let pub_prefix = just(Token::Pub).or_not().map(|t| t.is_some());
+
+        let obj_field = pub_prefix
+            .clone()
+            .then(select! { Token::Ident(name) => name })
             .then_ignore(just(Token::Colon))
-            .then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
-            .map_with(|(name, ty), extra| {
+            .then(dotted_type.clone())
+            .map_with(|((is_pub, name), ty), extra| {
                 let s: SimpleSpan = extra.span();
-                (name, ty, s.start..s.end)
+                ObjField {
+                    name,
+                    type_ann: ty,
+                    span: s.start..s.end,
+                    is_pub,
+                }
             });
 
         let param_list = select! { Token::Ident(name) => name }
@@ -404,9 +499,7 @@ fn program<'src>() -> impl Parser<
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LeftParen), just(Token::RightParen));
 
-        let return_type_ann = just(Token::Arrow)
-            .ignore_then(select! { Token::Ident(name) => TypeAnnotation::Named(name) })
-            .or_not();
+        let return_type_ann = just(Token::Arrow).ignore_then(dotted_type.clone()).or_not();
 
         // Shared header: `fn <name> (<params>) -> <return_type>`
         // Used by both obj_method (optional body) and fn_stmt (required body).
@@ -415,17 +508,22 @@ fn program<'src>() -> impl Parser<
             .then(param_list.clone())
             .then(return_type_ann.clone());
 
-        let obj_method = fn_header.clone().then(block.clone().or_not()).map(
-            |(((name, params), return_type), body)| ObjMethod {
-                name,
-                params,
-                body,
-                return_type,
-            },
-        );
+        let obj_method = pub_prefix
+            .clone()
+            .then(fn_header.clone())
+            .then(block.clone().or_not())
+            .map(
+                |((is_pub, ((name, params), return_type)), body)| ObjMethod {
+                    name,
+                    params,
+                    body,
+                    return_type,
+                    is_pub,
+                },
+            );
 
         enum ObjItem {
-            Field(String, TypeAnnotation, Span),
+            Field(ObjField),
             Method(ObjMethod),
             Use(String),
         }
@@ -435,7 +533,7 @@ fn program<'src>() -> impl Parser<
         let obj_item = obj_method
             .map(ObjItem::Method)
             .or(use_item.map(ObjItem::Use))
-            .or(obj_field.map(|(name, ty, span)| ObjItem::Field(name, ty, span)));
+            .or(obj_field.map(ObjItem::Field));
 
         // obj <name> { <field>, <field> } or { <field> \n <field> }
         let field_sep = just(Token::Comma)
@@ -443,8 +541,11 @@ fn program<'src>() -> impl Parser<
             .or(newlines.clone().map(|n| (Token::Newline, Some(n))))
             .ignored();
 
-        let obj_stmt = just(Token::Obj)
-            .ignore_then(select! { Token::Ident(name) => name })
+        let obj_stmt = just(Token::Pub)
+            .or_not()
+            .map(|t| t.is_some())
+            .then_ignore(just(Token::Obj))
+            .then(select! { Token::Ident(name) => name })
             .then(
                 obj_item
                     .separated_by(field_sep)
@@ -455,14 +556,14 @@ fn program<'src>() -> impl Parser<
                         newlines.clone().or_not().then(just(Token::RightCurly)),
                     ),
             )
-            .map_with(|(name, items), extra| {
+            .map_with(|((is_pub, name), items), extra| {
                 let mut fields = Vec::new();
                 let mut methods = Vec::new();
                 let mut uses = Vec::new();
 
                 for item in items {
                     match item {
-                        ObjItem::Field(name, ty, span) => fields.push((name, ty, span)),
+                        ObjItem::Field(f) => fields.push(f),
                         ObjItem::Method(m) => methods.push(m),
                         ObjItem::Use(name) => uses.push(name),
                     }
@@ -474,6 +575,7 @@ fn program<'src>() -> impl Parser<
                         fields,
                         methods,
                         uses,
+                        is_pub,
                     },
                     extra.span(),
                 )
@@ -483,16 +585,19 @@ fn program<'src>() -> impl Parser<
 
         // -- Functions --
 
-        let fn_stmt = fn_header
-            .clone()
+        let fn_stmt = just(Token::Pub)
+            .or_not()
+            .map(|t| t.is_some())
+            .then(fn_header.clone())
             .then(block.clone())
-            .map_with(|(((name, params), return_type), body), extra| {
+            .map_with(|((is_pub, ((name, params), return_type)), body), extra| {
                 Spanned::new(
                     Statement::Function {
                         name,
                         params,
                         body,
                         return_type,
+                        is_pub,
                     },
                     extra.span(),
                 )
@@ -578,7 +683,8 @@ fn program<'src>() -> impl Parser<
 
         // -- Statement dispatch (order matters for ambiguity resolution) --
 
-        let_stmt
+        import_stmt
+            .or(let_stmt)
             .or(field_assign_stmt)
             .or(assign_stmt)
             .or(val_stmt)

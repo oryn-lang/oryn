@@ -1,0 +1,11 @@
+import math.vec2
+
+pub val GRAVITY = -9.8
+
+pub fn fall_distance(seconds: f32) -> f32 {
+    rn 0.5 * GRAVITY * seconds * seconds
+}
+
+pub fn step(start: math.vec2.Vec2, dt: f32) -> math.vec2.Vec2 {
+    rn start.scaled(dt)
+}

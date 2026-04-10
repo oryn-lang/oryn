@@ -52,6 +52,7 @@
 mod compiler;
 mod errors;
 mod lexer;
+mod modules;
 mod parser;
 mod visitor;
 mod vm;
@@ -59,7 +60,8 @@ mod vm;
 pub use errors::{OrynError, RuntimeError};
 pub use lexer::{Token, lex};
 pub use parser::{
-    BinOp, Expression, ObjMethod, Spanned, Statement, StringPart, TypeAnnotation, UnaryOp, parse,
+    BinOp, Expression, ObjField, ObjMethod, Spanned, Statement, StringPart, TypeAnnotation,
+    UnaryOp, parse,
 };
 pub use visitor::{AstVisitor, walk_expr, walk_stmt, walk_stmts};
 pub use vm::{Chunk, VM};

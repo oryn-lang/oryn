@@ -26,15 +26,34 @@ use crate::vm::value::Value;
 ///         oryn::OrynError::Runtime(e) => {
 ///             println!("runtime: {e}");
 ///         }
+///         oryn::OrynError::Module { path, message } => {
+///             println!("module `{path}`: {message}");
+///         }
 ///     }
 /// }
 /// ```
 #[derive(Debug)]
 pub enum OrynError {
-    Lexer { span: Range<usize> },
-    Parser { span: Range<usize>, message: String },
-    Compiler { span: Range<usize>, message: String },
+    Lexer {
+        span: Range<usize>,
+    },
+    Parser {
+        span: Range<usize>,
+        message: String,
+    },
+    Compiler {
+        span: Range<usize>,
+        message: String,
+    },
     Runtime(RuntimeError),
+    /// A module resolution failure: missing `package.on`, missing module
+    /// file, circular import, or a module containing top-level expressions.
+    /// Carries a file path instead of a span because the error is about
+    /// the file as a whole, not a particular byte range within it.
+    Module {
+        path: String,
+        message: String,
+    },
 }
 
 /// A runtime error from the VM.
@@ -128,6 +147,7 @@ impl fmt::Display for OrynError {
             OrynError::Parser { message, .. } => write!(f, "{message}"),
             OrynError::Compiler { message, .. } => write!(f, "{message}"),
             OrynError::Runtime(e) => write!(f, "{e}"),
+            OrynError::Module { path, message } => write!(f, "module {path}: {message}"),
         }
     }
 }

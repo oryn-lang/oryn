@@ -137,5 +137,8 @@ fn format_definition(def: &crate::analysis::SymbolInfo) -> String {
         SymbolKind::Object => {
             format!("```oryn\nobj {}\n```", def.name)
         }
+        SymbolKind::Module => {
+            format!("```oryn\nimport {}\n```", def.name)
+        }
     }
 }

@@ -5,13 +5,14 @@ pub fn run(file: &Path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: failed to read {}: {e}", file.display());
+
             std::process::exit(1);
         }
     };
 
     let filename = file.display().to_string();
 
-    let chunk = match oryn::Chunk::compile(&source) {
+    let chunk = match oryn::Chunk::compile_file(file) {
         Ok(chunk) => chunk,
         Err(errors) => {
             if let Err(e) = crate::errors::report_errors(&filename, &source, &errors) {

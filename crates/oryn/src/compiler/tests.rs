@@ -1,3 +1,4 @@
+use super::types::ModuleTable;
 use super::*;
 
 use crate::parser::{BinOp, Expression, Spanned, Statement};
@@ -16,7 +17,7 @@ fn flattens_ast_to_instructions() {
         },
     )))];
 
-    let output = compile(stmts);
+    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![]);
 
     assert_eq!(
         output.instructions,
@@ -28,7 +29,7 @@ fn flattens_ast_to_instructions() {
 #[test]
 fn expression_statements_are_popped() {
     let stmts = vec![spanned(Statement::Expression(spanned(Expression::Int(1))))];
-    let output = compile(stmts);
+    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![]);
 
     assert_eq!(output.instructions.last(), Some(&Instruction::Pop));
 }

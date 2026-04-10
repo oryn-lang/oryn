@@ -14,7 +14,10 @@ pub fn document_symbols(source: &str, symbol_table: &SymbolTable) -> Vec<Documen
             def.scope_depth == 0
                 && matches!(
                     def.kind,
-                    SymbolKind::Function | SymbolKind::Variable | SymbolKind::Object
+                    SymbolKind::Function
+                        | SymbolKind::Variable
+                        | SymbolKind::Object
+                        | SymbolKind::Module
                 )
         })
         .map(|def| {
@@ -23,6 +26,7 @@ pub fn document_symbols(source: &str, symbol_table: &SymbolTable) -> Vec<Documen
                 SymbolKind::Variable => LspSymbolKind::VARIABLE,
                 SymbolKind::Parameter => LspSymbolKind::VARIABLE,
                 SymbolKind::Object => LspSymbolKind::STRUCT,
+                SymbolKind::Module => LspSymbolKind::MODULE,
             };
 
             let detail = match &def.kind {

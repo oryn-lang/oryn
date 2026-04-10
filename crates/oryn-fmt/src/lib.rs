@@ -170,7 +170,11 @@ impl Formatter {
                 name,
                 value,
                 type_ann,
+                is_pub,
             } => {
+                if *is_pub {
+                    self.out.push_str("pub ");
+                }
                 self.out.push_str("let ");
                 self.out.push_str(name);
                 self.write_type_annotation(type_ann);
@@ -181,7 +185,11 @@ impl Formatter {
                 name,
                 value,
                 type_ann,
+                is_pub,
             } => {
+                if *is_pub {
+                    self.out.push_str("pub ");
+                }
                 self.out.push_str("val ");
                 self.out.push_str(name);
                 self.write_type_annotation(type_ann);
@@ -193,7 +201,11 @@ impl Formatter {
                 params,
                 body,
                 return_type,
+                is_pub,
             } => {
+                if *is_pub {
+                    self.out.push_str("pub ");
+                }
                 self.write_function_header(name, params, return_type);
                 self.out.push(' ');
                 self.write_block_expression(body);
@@ -210,7 +222,11 @@ impl Formatter {
                 fields,
                 methods,
                 uses,
+                is_pub,
             } => {
+                if *is_pub {
+                    self.out.push_str("pub ");
+                }
                 self.out.push_str("obj ");
                 self.out.push_str(name);
                 self.out.push_str(" {\n");
@@ -236,14 +252,17 @@ impl Formatter {
                         self.out.push('\n');
                     }
 
-                    for (i, (field_name, ann, _)) in fields.iter().enumerate() {
+                    for (i, field) in fields.iter().enumerate() {
                         if i > 0 {
                             self.out.push('\n');
                         }
                         self.write_indent();
-                        self.out.push_str(field_name);
+                        if field.is_pub {
+                            self.out.push_str("pub ");
+                        }
+                        self.out.push_str(&field.name);
                         self.out.push_str(": ");
-                        self.write_type_name(ann);
+                        self.write_type_name(&field.type_ann);
                     }
                     wrote_group = true;
                 }
@@ -310,11 +329,15 @@ impl Formatter {
             Statement::Break => self.out.push_str("break"),
             Statement::Continue => self.out.push_str("continue"),
             Statement::Expression(expr) => self.write_expression(expr, 0),
+            Statement::Import { .. } => {}
         }
     }
 
     fn write_object_method(&mut self, method: &ObjMethod) {
         self.write_indent();
+        if method.is_pub {
+            self.out.push_str("pub ");
+        }
         self.write_function_header(&method.name, &method.params, &method.return_type);
         if let Some(body) = &method.body {
             self.out.push(' ');
@@ -437,7 +460,7 @@ impl Formatter {
             }
             Expression::Ident(name) => self.out.push_str(name),
             Expression::ObjLiteral { type_name, fields } => {
-                self.out.push_str(type_name);
+                self.out.push_str(&type_name.join("."));
                 self.out.push_str(" { ");
                 for (i, (name, value)) in fields.iter().enumerate() {
                     if i > 0 {
@@ -536,7 +559,7 @@ impl Formatter {
 
     fn write_type_name(&mut self, ann: &TypeAnnotation) {
         match ann {
-            TypeAnnotation::Named(name) => self.out.push_str(name),
+            TypeAnnotation::Named(path) => self.out.push_str(&path.join(".")),
         }
     }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::OrynError;
-use crate::compiler::types::ResolvedType;
+use crate::compiler::types::{ConstValue, ResolvedType};
 use crate::parser::{Expression, Span, Spanned, Statement, TypeAnnotation};
 
 use super::compile::{Compiler, LoopContext};
@@ -44,6 +44,48 @@ impl Compiler {
         let slot = self.locals.define(name, mutable, resolved);
         self.emit(Instruction::SetLocal(slot), span);
     }
+
+    /// Extract a module-level `pub let` / `pub val` binding as a literal
+    /// constant, storing it in `output.module_constants`. Non-literal values
+    /// produce a compile error — modules are definitions-only and cannot
+    /// execute expressions at import time.
+    pub(super) fn extract_module_constant(
+        &mut self,
+        name: String,
+        value: Spanned<Expression>,
+        span: &Span,
+    ) {
+        let const_value = match &value.node {
+            Expression::Int(n) => Some(ConstValue::Int(*n)),
+            Expression::Float(n) => Some(ConstValue::Float(*n)),
+            Expression::True => Some(ConstValue::Bool(true)),
+            Expression::False => Some(ConstValue::Bool(false)),
+            Expression::String(s) => Some(ConstValue::String(s.clone())),
+            Expression::UnaryOp {
+                op: crate::parser::UnaryOp::Negate,
+                expr,
+            } => match &expr.node {
+                Expression::Int(n) => Some(ConstValue::Int(-n)),
+                Expression::Float(n) => Some(ConstValue::Float(-n)),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        match const_value {
+            Some(v) => {
+                self.output.module_constants.insert(name, v);
+            }
+            None => {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!(
+                        "module-level `pub` binding `{name}` must be a literal value (int, float, bool, or string)"
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -60,15 +102,28 @@ impl Compiler {
                 name,
                 value,
                 type_ann,
+                is_pub,
             } => {
-                self.compile_binding(name, value, type_ann, true, &stmt_span);
+                // In modules, pub let/val bindings must be literal values
+                // and are extracted as module constants. They are NOT also
+                // bound as runtime locals since modules are definitions-only.
+                if is_pub && self.is_module() {
+                    self.extract_module_constant(name, value, &stmt_span);
+                } else {
+                    self.compile_binding(name, value, type_ann, true, &stmt_span);
+                }
             }
             Statement::Val {
                 name,
                 value,
                 type_ann,
+                is_pub,
             } => {
-                self.compile_binding(name, value, type_ann, false, &stmt_span);
+                if is_pub && self.is_module() {
+                    self.extract_module_constant(name, value, &stmt_span);
+                } else {
+                    self.compile_binding(name, value, type_ann, false, &stmt_span);
+                }
             }
 
             // -- Assignments --
@@ -132,6 +187,7 @@ impl Compiler {
                 params,
                 body,
                 return_type,
+                is_pub,
             } => {
                 // Resolve param types once, then derive both the HashMap
                 // (for the closure) and the Vec (for FunctionBodyConfig).
@@ -192,6 +248,7 @@ impl Compiler {
                     body,
                     span: &stmt_span,
                     return_type: Some(return_resolved),
+                    is_pub,
                 });
             }
             Statement::Return(Some(expr)) => {
@@ -215,8 +272,9 @@ impl Compiler {
                 fields,
                 methods,
                 uses,
+                is_pub,
             } => {
-                self.compile_obj_def(name, fields, methods, uses, &stmt_span);
+                self.compile_obj_def(name, fields, methods, uses, &stmt_span, is_pub);
             }
 
             // -- Control flow --
@@ -351,6 +409,8 @@ impl Compiler {
                 self.compile_expr(expr);
                 self.emit(Instruction::Pop, &expr_span);
             }
+
+            Statement::Import { .. } => {}
         }
     }
 }

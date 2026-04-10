@@ -1,0 +1,23 @@
+pub val ORIGIN_X = 0.0
+pub val ORIGIN_Y = 0.0
+
+fn scale(value: f32, factor: f32) -> f32 {
+    rn value * factor
+}
+
+pub obj Vec2 {
+    pub x: f32
+    pub y: f32
+
+    pub fn length_sq(self) -> f32 {
+        rn self.x * self.x + self.y * self.y
+    }
+
+    pub fn scaled(self, factor: f32) -> Vec2 {
+        rn Vec2 { x: scale(self.x, factor), y: scale(self.y, factor) }
+    }
+
+    pub fn origin() -> Vec2 {
+        rn Vec2 { x: ORIGIN_X, y: ORIGIN_Y }
+    }
+}

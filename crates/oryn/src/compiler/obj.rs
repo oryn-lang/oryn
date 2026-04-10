@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use crate::OrynError;
 use crate::compiler::types::ResolvedType;
-use crate::parser::{ObjMethod, Span, TypeAnnotation};
+use crate::parser::{ObjField, ObjMethod, Span, TypeAnnotation};
 
 use super::compile::{Compiler, resolve_type};
 use super::func::FunctionBodyConfig;
+use super::tables::FunctionSignature;
 use super::types::{MethodSignature, ObjDefInfo};
 
 // ---------------------------------------------------------------------------
@@ -16,15 +17,21 @@ impl Compiler {
     pub(super) fn compile_obj_def(
         &mut self,
         name: String,
-        fields: Vec<(String, TypeAnnotation, Span)>,
+        fields: Vec<ObjField>,
         methods: Vec<ObjMethod>,
         uses: Vec<String>,
         stmt_span: &Span,
+        is_pub: bool,
     ) {
         let mut field_names: Vec<String> = Vec::new();
         let mut field_types: Vec<ResolvedType> = Vec::new();
+        let mut field_is_pub: Vec<bool> = Vec::new();
         let mut method_indices: HashMap<String, usize> = HashMap::new();
         let mut static_method_indices: HashMap<String, usize> = HashMap::new();
+        let mut method_is_pub: HashMap<String, bool> = HashMap::new();
+        let mut static_method_is_pub: HashMap<String, bool> = HashMap::new();
+        let mut method_signatures: HashMap<String, FunctionSignature> = HashMap::new();
+        let mut static_method_signatures: HashMap<String, FunctionSignature> = HashMap::new();
         let mut all_required: Vec<MethodSignature> = Vec::new();
 
         for used_type in &uses {
@@ -35,7 +42,7 @@ impl Compiler {
                     }
                 }
 
-                for field in &def.fields {
+                for (i, field) in def.fields.iter().enumerate() {
                     if field_names.contains(field) {
                         self.output.errors.push(OrynError::compiler(
                             stmt_span.clone(),
@@ -43,6 +50,7 @@ impl Compiler {
                         ));
                     } else {
                         field_names.push(field.clone());
+                        field_is_pub.push(def.field_is_pub.get(i).copied().unwrap_or(false));
                     }
                 }
 
@@ -54,6 +62,13 @@ impl Compiler {
                         ));
                     } else {
                         method_indices.insert(method_name.clone(), func_idx);
+                        method_is_pub.insert(
+                            method_name.clone(),
+                            def.method_is_pub.get(method_name).copied().unwrap_or(false),
+                        );
+                        if let Some(sig) = def.method_signatures.get(method_name) {
+                            method_signatures.insert(method_name.clone(), sig.clone());
+                        }
                     }
                 }
 
@@ -65,6 +80,16 @@ impl Compiler {
                         ));
                     } else {
                         static_method_indices.insert(method_name.clone(), func_idx);
+                        static_method_is_pub.insert(
+                            method_name.clone(),
+                            def.static_method_is_pub
+                                .get(method_name)
+                                .copied()
+                                .unwrap_or(false),
+                        );
+                        if let Some(sig) = def.static_method_signatures.get(method_name) {
+                            static_method_signatures.insert(method_name.clone(), sig.clone());
+                        }
                     }
                 }
             } else {
@@ -76,8 +101,15 @@ impl Compiler {
         }
 
         // Append this obj's own fields.
-        for (field_name, type_ann, field_span) in fields {
+        for field in fields {
+            let ObjField {
+                name: field_name,
+                type_ann,
+                span: field_span,
+                is_pub: field_pub,
+            } = field;
             field_names.push(field_name.clone());
+            field_is_pub.push(field_pub);
 
             match self.resolve_type_annotation(&type_ann) {
                 Ok(t) => field_types.push(t),
@@ -98,9 +130,15 @@ impl Compiler {
             name.clone(),
             field_names.clone(),
             field_types.clone(),
+            field_is_pub.clone(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             Vec::new(),
+            is_pub,
         );
 
         // Collect this type's own required methods (bodyless declarations)
@@ -117,14 +155,20 @@ impl Compiler {
                     .map(|(_, ann)| {
                         ann.as_ref()
                             .map(|a| {
-                                resolve_type(a, &self.obj_table).unwrap_or(ResolvedType::Unknown)
+                                self.attach_current_module(
+                                    resolve_type(a, &self.obj_table, &self.modules)
+                                        .unwrap_or(ResolvedType::Unknown),
+                                )
                             })
                             .unwrap_or(ResolvedType::Unknown)
                     })
                     .collect();
 
                 let return_type = match &m.return_type {
-                    Some(rt) => resolve_type(rt, &self.obj_table).unwrap_or(ResolvedType::Unknown),
+                    Some(rt) => self.attach_current_module(
+                        resolve_type(rt, &self.obj_table, &self.modules)
+                            .unwrap_or(ResolvedType::Unknown),
+                    ),
                     None => ResolvedType::Void,
                 };
 
@@ -152,12 +196,17 @@ impl Compiler {
                     .iter()
                     .map(|(pname, ann)| {
                         let t = if pname == "self" {
-                            ResolvedType::Object(obj_name.clone())
+                            ResolvedType::Object {
+                                name: obj_name.clone(),
+                                module: self.current_module_path.clone(),
+                            }
                         } else {
                             ann.as_ref()
                                 .map(|a| {
-                                    resolve_type(a, &self.obj_table)
-                                        .unwrap_or(ResolvedType::Unknown)
+                                    self.attach_current_module(
+                                        resolve_type(a, &self.obj_table, &self.modules)
+                                            .unwrap_or(ResolvedType::Unknown),
+                                    )
                                 })
                                 .unwrap_or(ResolvedType::Unknown)
                         };
@@ -177,7 +226,10 @@ impl Compiler {
                     .collect();
 
                 let return_resolved = match &method.return_type {
-                    Some(rt) => resolve_type(rt, &self.obj_table).unwrap_or(ResolvedType::Unknown),
+                    Some(rt) => self.attach_current_module(
+                        resolve_type(rt, &self.obj_table, &self.modules)
+                            .unwrap_or(ResolvedType::Unknown),
+                    ),
                     None => ResolvedType::Void,
                 };
 
@@ -192,13 +244,22 @@ impl Compiler {
                             .unwrap_or(ResolvedType::Unknown)
                     })
                     .collect();
-                compiled_signatures
-                    .insert(method.name.clone(), (sig_params, return_resolved.clone()));
+                compiled_signatures.insert(
+                    method.name.clone(),
+                    (sig_params.clone(), return_resolved.clone()),
+                );
 
                 let obj_name_for_closure = obj_name.clone();
+                let module_for_closure = self.current_module_path.clone();
                 let param_fn = move |pname: &str, _ann: &Option<TypeAnnotation>| {
                     if pname == "self" {
-                        (true, ResolvedType::Object(obj_name_for_closure.clone()))
+                        (
+                            true,
+                            ResolvedType::Object {
+                                name: obj_name_for_closure.clone(),
+                                module: module_for_closure.clone(),
+                            },
+                        )
                     } else {
                         let resolved = resolved_params
                             .get(pname)
@@ -208,6 +269,11 @@ impl Compiler {
                     }
                 };
 
+                // Per-method visibility — defaults to private. The
+                // containing object can be `pub` while individual methods
+                // remain hidden, mirroring Rust's pub-on-fields rule.
+                let method_pub = method.is_pub;
+
                 let func_idx = self.compile_function_body(FunctionBodyConfig {
                     name: &method.name,
                     params: &method.params,
@@ -216,16 +282,26 @@ impl Compiler {
                     self_name: None,
                     body,
                     span: stmt_span,
-                    return_type: Some(return_resolved),
+                    is_pub: method_pub,
+                    return_type: Some(return_resolved.clone()),
                 });
+
+                let sig = FunctionSignature {
+                    param_types: sig_params.clone(),
+                    return_type: return_resolved,
+                };
 
                 if is_static {
                     static_method_indices.insert(method.name.clone(), func_idx);
+                    static_method_is_pub.insert(method.name.clone(), method_pub);
+                    static_method_signatures.insert(method.name.clone(), sig);
                     if let Some(def) = self.obj_table.defs.last_mut() {
                         def.static_methods.insert(method.name.clone(), func_idx);
                     }
                 } else {
                     method_indices.insert(method.name.clone(), func_idx);
+                    method_is_pub.insert(method.name.clone(), method_pub);
+                    method_signatures.insert(method.name.clone(), sig);
                 }
             }
         }
@@ -326,9 +402,15 @@ impl Compiler {
             name,
             fields: field_names,
             field_types,
+            field_is_pub,
             methods: method_indices,
             static_methods: static_method_indices,
+            method_is_pub,
+            static_method_is_pub,
+            method_signatures,
+            static_method_signatures,
             signatures: final_required,
+            is_pub,
         });
     }
 }

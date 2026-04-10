@@ -23,6 +23,7 @@ pub(super) struct FunctionBodyConfig<'a> {
     pub body: Spanned<Expression>,
     pub return_type: Option<ResolvedType>,
     pub span: &'a Span,
+    pub is_pub: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,9 @@ pub(super) struct FunctionBodyConfig<'a> {
 impl Compiler {
     /// Shared compilation logic for functions and methods. Uses save/restore
     /// to isolate the function's locals, loops, and bytecode from the parent.
+    ///
+    /// Returns the **absolute** function index (within the merged chunk)
+    /// so callers can emit `Call(absolute_idx, arity)` directly.
     pub(super) fn compile_function_body(&mut self, config: FunctionBodyConfig<'_>) -> usize {
         let FunctionBodyConfig {
             name,
@@ -42,12 +46,14 @@ impl Compiler {
             body,
             span,
             return_type,
+            is_pub,
         } = config;
 
-        let func_idx = self.output.functions.len();
+        let local_idx = self.output.functions.len();
+        let absolute_idx = self.fn_base_offset + local_idx;
         let param_names: Vec<String> = params.iter().map(|p| p.0.clone()).collect();
 
-        // Push a placeholder so the index is valid.
+        // Push a placeholder so the local position is valid.
         self.output.functions.push(CompiledFunction {
             name: name.to_string(),
             arity: params.len(),
@@ -57,6 +63,7 @@ impl Compiler {
             num_locals: 0,
             instructions: Vec::new(),
             spans: Vec::new(),
+            is_pub,
         });
 
         // Save parent state.
@@ -79,9 +86,10 @@ impl Compiler {
             self.emit(Instruction::SetLocal(slot.0), span);
         }
 
-        // Register the function for recursion if needed.
+        // Register the function for recursion if needed. The fn_table
+        // stores the absolute index (register() shifts by base_offset).
         if let Some(self_name) = self_name {
-            self.fn_table.register(self_name.to_string(), func_idx);
+            self.fn_table.register(self_name.to_string(), local_idx);
         }
 
         // Compile the body.
@@ -103,7 +111,7 @@ impl Compiler {
         self.fn_table = parent_fn_table;
 
         // Write the compiled function.
-        self.output.functions[func_idx] = CompiledFunction {
+        self.output.functions[local_idx] = CompiledFunction {
             name: name.to_string(),
             arity: params.len(),
             params: param_names,
@@ -112,8 +120,9 @@ impl Compiler {
             num_locals: func_num_locals,
             instructions: func_instructions,
             spans: func_spans,
+            is_pub,
         };
 
-        func_idx
+        absolute_idx
     }
 }

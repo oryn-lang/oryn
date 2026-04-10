@@ -25,6 +25,10 @@ pub enum Token {
     For,
     #[token("in")]
     In,
+    #[token("pub")]
+    Pub,
+    #[token("import")]
+    Import,
 
     // Literals.
     #[token("true")]
@@ -129,6 +133,8 @@ impl Display for Token {
             Token::Use => write!(f, "use"),
             Token::For => write!(f, "for"),
             Token::In => write!(f, "in"),
+            Token::Pub => write!(f, "pub"),
+            Token::Import => write!(f, "import"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::Float(n) => write!(f, "{n}"),

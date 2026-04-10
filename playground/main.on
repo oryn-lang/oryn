@@ -1,0 +1,32 @@
+import math.vec2
+import math.colors
+import physics
+
+print("--- module constants ---")
+print(math.vec2.ORIGIN_X)
+print(math.colors.MAX_CHANNEL)
+print(physics.GRAVITY)
+
+print("--- qualified object literal ---")
+let v: math.vec2.Vec2 = math.vec2.Vec2 { x: 3.0, y: 4.0 }
+print(v.x)
+print(v.y)
+print(v.length_sq())
+
+print("--- static constructor on imported type ---")
+let red = math.colors.Color.rgb(255, 0, 0)
+print(red.r)
+print(red.opacity())
+
+print("--- cross-module function call ---")
+let stepped = physics.step(v, 0.5)
+print(stepped.x)
+print(stepped.y)
+
+print("--- static method via qualified path ---")
+let zero = math.vec2.Vec2.origin()
+print(zero.x)
+
+print("--- string interpolation across modules ---")
+print("starting at ({zero.x}, {zero.y})")
+print("after 1.5s of free fall: {physics.fall_distance(1.5)}")

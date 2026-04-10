@@ -136,6 +136,8 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
         Statement::Expression(expr) => {
             visitor.visit_expr(expr);
         }
+
+        Statement::Import { .. } => {}
     }
 }
 
@@ -253,6 +255,7 @@ mod tests {
                 Statement::Continue => "continue",
                 Statement::Expression(_) => "expr_stmt",
                 Statement::FieldAssignment { .. } => "field_assign",
+                Statement::Import { .. } => "import",
             };
             self.events.push(format!("stmt:{kind}"));
             walk_stmt(self, stmt);
