@@ -60,7 +60,12 @@ fn main() {
         (Some(Command::Run { file }), _) => commands::run::run(&file),
         (Some(Command::Check { paths }), _) => commands::check::run(&paths),
         (Some(Command::Disasm { file }), _) => commands::disasm::run(&file),
-        (Some(Command::Fmt { path }), _) => commands::fmt::run(&path),
+        (Some(Command::Fmt { path }), _) => {
+            if let Err(error) = commands::fmt::run(&path) {
+                commands::fmt::report(&error);
+                std::process::exit(1);
+            }
+        }
         (Some(Command::Test { patterns }), _) => commands::test::run(&patterns),
         (Some(Command::Lsp), _) => commands::lsp::run(),
         (None, Some(file)) => commands::run::run(&file),
