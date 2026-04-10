@@ -524,15 +524,17 @@ fn program<'src>() -> impl Parser<
             .clone()
             .then(fn_header.clone())
             .then(block.clone().or_not())
-            .map(
-                |((is_pub, ((name, params), return_type)), body)| ObjMethod {
+            .map_with(|((is_pub, ((name, params), return_type)), body), extra| {
+                let s: SimpleSpan = extra.span();
+                ObjMethod {
                     name,
                     params,
                     body,
                     return_type,
                     is_pub,
-                },
-            );
+                    span: s.start..s.end,
+                }
+            });
 
         enum ObjItem {
             Field(ObjField),

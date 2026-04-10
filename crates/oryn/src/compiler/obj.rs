@@ -256,6 +256,10 @@ impl Compiler {
                     None => ResolvedType::Void,
                 };
 
+                self.output
+                    .type_map
+                    .insert(method.span.clone(), &return_resolved);
+
                 let sig_params: Vec<ResolvedType> = method
                     .params
                     .iter()

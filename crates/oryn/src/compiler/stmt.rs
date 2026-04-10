@@ -41,6 +41,7 @@ impl Compiler {
         }
 
         let resolved = declared_type.unwrap_or(inferred_type);
+        self.output.type_map.insert(span.clone(), &resolved);
         let slot = self.locals.define(name, mutable, resolved);
         self.emit(Instruction::SetLocal(slot), span);
     }
@@ -238,6 +239,10 @@ impl Compiler {
                         .unwrap_or(ResolvedType::Unknown),
                     None => ResolvedType::Void,
                 };
+
+                self.output
+                    .type_map
+                    .insert(stmt_span.clone(), &return_resolved);
 
                 self.compile_function_body(FunctionBodyConfig {
                     name: &name,

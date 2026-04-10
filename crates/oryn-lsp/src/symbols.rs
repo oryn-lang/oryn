@@ -26,6 +26,7 @@ pub fn document_symbols(source: &str, symbol_table: &SymbolTable) -> Vec<Documen
                 SymbolKind::Variable => LspSymbolKind::VARIABLE,
                 SymbolKind::Parameter => LspSymbolKind::VARIABLE,
                 SymbolKind::Object => LspSymbolKind::STRUCT,
+                SymbolKind::Field => LspSymbolKind::FIELD,
                 SymbolKind::Module => LspSymbolKind::MODULE,
             };
 

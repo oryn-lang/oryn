@@ -69,6 +69,48 @@ pub struct CompilerOutput {
     /// a module. Only non-empty for module compilation units; consumers
     /// access these via the owning module's [`ModuleExports`].
     pub(crate) module_constants: HashMap<String, ConstValue>,
+    /// Span → type lookup populated during compilation and consumed by
+    /// tools (LSP hover / inlay hints). See [`TypeMap`].
+    pub type_map: TypeMap,
+}
+
+/// Span → type lookup populated while compiling a source file. Keys are
+/// the `Spanned<Statement>.span` of each declaration (let/val binding,
+/// function, obj method) so tooling can look up inferred types by the
+/// same span the parser assigned — the LSP's [`SymbolInfo::full_span`]
+/// uses the exact same value.
+///
+/// Values are pretty-printed type names (`"i32"`, `"math.vec2.Vec2"`)
+/// rather than the internal [`ResolvedType`] enum, which keeps the
+/// public API stable while letting the LSP render hovers without
+/// peeking at compiler internals.
+#[derive(Debug, Default, Clone)]
+pub struct TypeMap {
+    by_span: HashMap<Range<usize>, String>,
+}
+
+impl TypeMap {
+    /// Look up the resolved type at `span`. Returns `None` when the
+    /// compiler didn't record anything (e.g. inference gave up and
+    /// fell back to [`ResolvedType::Unknown`]).
+    pub fn get(&self, span: &Range<usize>) -> Option<&str> {
+        self.by_span.get(span).map(String::as_str)
+    }
+
+    /// True when no types were recorded for this compilation unit.
+    pub fn is_empty(&self) -> bool {
+        self.by_span.is_empty()
+    }
+
+    /// Record a type for a declaration span. Silently ignores
+    /// [`ResolvedType::Unknown`] so consumers can distinguish "the
+    /// compiler has an answer" from "no information".
+    pub(crate) fn insert(&mut self, span: Range<usize>, ty: &ResolvedType) {
+        if matches!(ty, ResolvedType::Unknown) {
+            return;
+        }
+        self.by_span.insert(span, ty.display_name().into_owned());
+    }
 }
 
 #[derive(Debug)]

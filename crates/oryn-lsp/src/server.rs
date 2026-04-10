@@ -5,32 +5,56 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification,
 };
 use lsp_types::request::{
-    DocumentSymbolRequest, GotoDefinition, HoverRequest, References, Request,
+    DocumentSymbolRequest, GotoDefinition, HoverRequest, InlayHintRequest, References, Request,
+    SignatureHelpRequest,
 };
 use lsp_types::{
-    HoverProviderCapability, OneOf, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind,
+    HoverProviderCapability, OneOf, ServerCapabilities, SignatureHelpOptions,
+    TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use tracing::{debug, error, info};
 
 use crate::analysis::SymbolTable;
-use crate::{definition, diagnostics, hover, references, symbols};
+use crate::{definition, diagnostics, hover, inlay, references, signature, symbols};
 
-/// Per-document state: source text and cached symbol table.
+/// Per-document state: source text, symbol table, doc table, and the
+/// compiler-produced type map used for hover/inlay hints.
 struct Document {
     source: String,
     symbols: SymbolTable,
+    docs: oryn::DocTable,
+    types: oryn::TypeMap,
 }
 
 impl Document {
-    fn new(source: String) -> Self {
+    fn new(source: String, file_path: Option<&std::path::Path>) -> Self {
         let symbols = crate::analysis::analyze(&source);
-        Self { source, symbols }
+        let docs = oryn::DocTable::build(&source);
+        let types = build_type_map(&source, file_path);
+        Self {
+            source,
+            symbols,
+            docs,
+            types,
+        }
     }
 
-    fn update(&mut self, source: String) {
+    fn update(&mut self, source: String, file_path: Option<&std::path::Path>) {
         self.symbols = crate::analysis::analyze(&source);
+        self.docs = oryn::DocTable::build(&source);
+        self.types = build_type_map(&source, file_path);
         self.source = source;
+    }
+}
+
+/// Run the compiler's type-check pipeline and return just the type
+/// map. Uses `check_file_with_types` when we know a file path (so
+/// imports resolve against `package.on`), falling back to
+/// `check_with_types` for scratch buffers.
+fn build_type_map(source: &str, file_path: Option<&std::path::Path>) -> oryn::TypeMap {
+    match file_path {
+        Some(path) => oryn::Chunk::check_file_with_types(path, source).1,
+        None => oryn::Chunk::check_with_types(source).1,
     }
 }
 
@@ -58,6 +82,12 @@ pub fn run() {
         document_symbol_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        inlay_hint_provider: Some(OneOf::Left(true)),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".into(), ",".into()]),
+            retrigger_characters: Some(vec![",".into()]),
+            ..Default::default()
+        }),
         ..Default::default()
     };
 
@@ -115,16 +145,21 @@ fn main_loop(connection: &Connection) {
                             }
                         };
 
-                    let uri = params
-                        .text_document_position_params
-                        .text_document
-                        .uri
-                        .as_str();
+                    let uri_obj = &params.text_document_position_params.text_document.uri;
+                    let uri = uri_obj.as_str();
                     let pos = params.text_document_position_params.position;
+                    let file_path = crate::diagnostics::uri_to_path(uri_obj);
 
-                    let result = documents
-                        .get(uri)
-                        .and_then(|doc| hover::hover(&doc.source, pos, &doc.symbols));
+                    let result = documents.get(uri).and_then(|doc| {
+                        hover::hover(
+                            &doc.source,
+                            pos,
+                            &doc.symbols,
+                            &doc.docs,
+                            &doc.types,
+                            file_path.as_deref(),
+                        )
+                    });
 
                     let resp = Response::new_ok(req.id, &result);
                     let _ = connection.sender.send(Message::Response(resp));
@@ -219,6 +254,58 @@ fn main_loop(connection: &Connection) {
 
                     let resp = Response::new_ok(req.id, &result);
                     let _ = connection.sender.send(Message::Response(resp));
+                } else if req.method == <InlayHintRequest as Request>::METHOD {
+                    debug!("inlay hint request");
+
+                    let params: lsp_types::InlayHintParams =
+                        match serde_json::from_value(req.params.clone()) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                error!("failed to parse inlay hint params: {e}");
+                                continue;
+                            }
+                        };
+
+                    let uri = params.text_document.uri.as_str();
+                    let viewport = params.range;
+
+                    let result: Vec<lsp_types::InlayHint> = documents
+                        .get(uri)
+                        .map(|doc| {
+                            inlay::inlay_hints(&doc.source, &viewport, &doc.symbols, &doc.types)
+                        })
+                        .unwrap_or_default();
+
+                    let resp = Response::new_ok(req.id, &result);
+                    let _ = connection.sender.send(Message::Response(resp));
+                } else if req.method == <SignatureHelpRequest as Request>::METHOD {
+                    debug!("signature help request");
+
+                    let params: lsp_types::SignatureHelpParams =
+                        match serde_json::from_value(req.params.clone()) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                error!("failed to parse signature help params: {e}");
+                                continue;
+                            }
+                        };
+
+                    let uri_obj = &params.text_document_position_params.text_document.uri;
+                    let uri = uri_obj.as_str();
+                    let pos = params.text_document_position_params.position;
+                    let file_path = crate::diagnostics::uri_to_path(uri_obj);
+
+                    let result = documents.get(uri).and_then(|doc| {
+                        signature::signature_help(
+                            &doc.source,
+                            pos,
+                            &doc.symbols,
+                            file_path.as_deref(),
+                        )
+                    });
+
+                    let resp = Response::new_ok(req.id, &result);
+                    let _ = connection.sender.send(Message::Response(resp));
                 }
             }
             Message::Notification(note) => match note.method.as_str() {
@@ -233,9 +320,13 @@ fn main_loop(connection: &Connection) {
                         };
                     let uri = params.text_document.uri;
                     let source = params.text_document.text;
+                    let file_path = crate::diagnostics::uri_to_path(&uri);
 
                     diagnostics::publish_diagnostics(connection, uri.clone(), &source);
-                    documents.insert(uri.as_str().to_owned(), Document::new(source));
+                    documents.insert(
+                        uri.as_str().to_owned(),
+                        Document::new(source, file_path.as_deref()),
+                    );
                 }
                 <DidChangeTextDocument as Notification>::METHOD => {
                     let params: lsp_types::DidChangeTextDocumentParams =
@@ -247,14 +338,18 @@ fn main_loop(connection: &Connection) {
                             }
                         };
                     let uri = params.text_document.uri;
+                    let file_path = crate::diagnostics::uri_to_path(&uri);
 
                     if let Some(change) = params.content_changes.into_iter().next() {
                         diagnostics::publish_diagnostics(connection, uri.clone(), &change.text);
 
                         if let Some(doc) = documents.get_mut(uri.as_str()) {
-                            doc.update(change.text);
+                            doc.update(change.text, file_path.as_deref());
                         } else {
-                            documents.insert(uri.as_str().to_owned(), Document::new(change.text));
+                            documents.insert(
+                                uri.as_str().to_owned(),
+                                Document::new(change.text, file_path.as_deref()),
+                            );
                         }
                     }
                 }

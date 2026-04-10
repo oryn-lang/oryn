@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use oryn::{AstVisitor, Expression, ObjMethod, Spanned, Statement, Token, walk_expr, walk_stmt};
+use oryn::{
+    AstVisitor, Expression, ObjField, ObjMethod, Spanned, Statement, Token, walk_expr, walk_stmt,
+};
 
 /// What kind of symbol a definition introduces.
 #[derive(Debug, Clone, PartialEq)]
@@ -10,6 +12,8 @@ pub enum SymbolKind {
     Function,
     Parameter,
     Object,
+    /// A field declared inside an `obj` body.
+    Field,
     Module,
 }
 
@@ -244,6 +248,7 @@ impl AstVisitor for LspVisitor<'_> {
 
             Statement::ObjDef {
                 name,
+                fields,
                 methods,
                 uses,
                 ..
@@ -256,8 +261,12 @@ impl AstVisitor for LspVisitor<'_> {
                     }
                 }
 
+                for field in fields {
+                    self.visit_obj_field(field);
+                }
+
                 for method in methods {
-                    self.visit_obj_method(method, &stmt.span);
+                    self.visit_obj_method(method);
                 }
             }
 
@@ -318,7 +327,20 @@ impl AstVisitor for LspVisitor<'_> {
 }
 
 impl LspVisitor<'_> {
-    fn visit_obj_method(&mut self, method: &ObjMethod, obj_span: &Range<usize>) {
+    fn visit_obj_field(&mut self, field: &ObjField) {
+        let oryn::TypeAnnotation::Named(parts) = &field.type_ann;
+        let type_name = parts.join(".");
+        self.register_definition(
+            &field.name,
+            &field.span,
+            SymbolKind::Field,
+            None,
+            Some(type_name),
+            None,
+        );
+    }
+
+    fn visit_obj_method(&mut self, method: &ObjMethod) {
         let param_strs: Vec<String> = method
             .params
             .iter()
@@ -334,7 +356,7 @@ impl LspVisitor<'_> {
 
         self.register_definition(
             &method.name,
-            obj_span,
+            &method.span,
             SymbolKind::Function,
             Some(param_strs),
             None,
@@ -349,7 +371,7 @@ impl LspVisitor<'_> {
                 });
                 self.register_definition(
                     param_name,
-                    obj_span,
+                    &method.span,
                     SymbolKind::Parameter,
                     None,
                     type_name,
@@ -486,5 +508,52 @@ mod tests {
         let x_refs: Vec<&SymbolRef> = table.references.iter().filter(|r| r.name == "x").collect();
         assert_eq!(x_refs.len(), 1);
         assert_eq!(x_refs[0].definition_idx, Some(0));
+    }
+
+    #[test]
+    fn obj_fields_are_registered() {
+        let source = "obj Vec2 {\nx: i32\ny: i32\n}";
+        let table = analyze(source);
+
+        let fields: Vec<&SymbolInfo> = table
+            .definitions
+            .iter()
+            .filter(|d| d.kind == SymbolKind::Field)
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "x");
+        assert_eq!(fields[0].type_name.as_deref(), Some("i32"));
+        assert_eq!(fields[1].name, "y");
+    }
+
+    #[test]
+    fn obj_field_full_span_covers_only_the_field_line() {
+        let source = "obj Vec2 {\nx: i32\ny: i32\n}";
+        let table = analyze(source);
+
+        let field = table
+            .definitions
+            .iter()
+            .find(|d| d.kind == SymbolKind::Field && d.name == "x")
+            .expect("missing field x");
+        // The field's full_span should not cover the entire obj.
+        assert!(field.full_span.end - field.full_span.start < source.len());
+        assert_eq!(&source[field.full_span.clone()], "x: i32");
+    }
+
+    #[test]
+    fn obj_method_full_span_is_method_only_not_whole_obj() {
+        let source = "obj Foo {\nfn bar(self) {\nrn 1\n}\n}";
+        let table = analyze(source);
+
+        let method = table
+            .definitions
+            .iter()
+            .find(|d| d.kind == SymbolKind::Function && d.name == "bar")
+            .expect("missing method bar");
+        // The method's full_span must start at `fn`, not at `obj`.
+        let snippet = &source[method.full_span.clone()];
+        assert!(snippet.starts_with("fn bar"), "got: {snippet:?}");
+        assert!(!snippet.contains("obj Foo"), "got: {snippet:?}");
     }
 }

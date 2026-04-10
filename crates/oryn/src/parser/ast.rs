@@ -188,6 +188,10 @@ pub struct ObjMethod {
     pub body: Option<Spanned<Expression>>,
     pub return_type: Option<TypeAnnotation>,
     pub is_pub: bool,
+    /// Byte range covering the method declaration (from `pub`/`fn`
+    /// through the end of the body or signature). Used by the LSP to
+    /// look up doc comments directly above the method.
+    pub span: Span,
 }
 
 #[derive(Debug)]

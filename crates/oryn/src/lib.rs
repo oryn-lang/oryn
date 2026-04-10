@@ -50,6 +50,7 @@
 //! ```
 
 mod compiler;
+mod docs;
 mod errors;
 mod lexer;
 mod modules;
@@ -57,8 +58,10 @@ mod parser;
 mod visitor;
 mod vm;
 
+pub use compiler::TypeMap;
+pub use docs::DocTable;
 pub use errors::{OrynError, RuntimeError};
-pub use lexer::{Token, lex};
+pub use lexer::{Token, lex, lex_all};
 pub use modules::{find_project_root, resolve_import};
 pub use parser::{
     BinOp, Expression, ObjField, ObjMethod, Spanned, Statement, StringPart, TypeAnnotation,

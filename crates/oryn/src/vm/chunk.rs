@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::Statement;
 use crate::compiler::{
     self, CompiledFunction, CompilerOutput, Instruction, ModuleExports, ModuleTable, ObjDefInfo,
+    TypeMap,
 };
 use crate::errors::OrynError;
 use crate::lexer;
@@ -183,6 +184,14 @@ impl Chunk {
     /// assert!(!oryn::Chunk::check("let = @").is_empty());
     /// ```
     pub fn check(source: &str) -> Vec<OrynError> {
+        let (errors, _types) = Self::check_with_types(source);
+        errors
+    }
+
+    /// Like [`Chunk::check`], but also returns a [`TypeMap`] with every
+    /// declaration's inferred type. Used by the LSP to power hover and
+    /// inlay hints without rebuilding its own type inference.
+    pub fn check_with_types(source: &str) -> (Vec<OrynError>, TypeMap) {
         let (tokens, lex_errors) = lexer::lex(source);
         let (statements, parse_errors) = parser::parse(tokens);
 
@@ -193,7 +202,7 @@ impl Chunk {
         let output = compiler::compile(statements, ModuleTable::default(), 0, 0, vec![]);
         errors.extend(output.errors);
 
-        errors
+        (errors, output.type_map)
     }
 
     /// Like [`Chunk::check`], but module-aware. Used by the LSP and other
@@ -207,6 +216,13 @@ impl Chunk {
     /// pure single-file checking, which means cross-module references
     /// in the source will report as undefined.
     pub fn check_file(path: &Path, source: &str) -> Vec<OrynError> {
+        let (errors, _types) = Self::check_file_with_types(path, source);
+        errors
+    }
+
+    /// Like [`Chunk::check_file`], but also returns a [`TypeMap`] for
+    /// the entry file. Types from imported modules are not included.
+    pub fn check_file_with_types(path: &Path, source: &str) -> (Vec<OrynError>, TypeMap) {
         let mut errors: Vec<OrynError> = Vec::new();
 
         let (tokens, lex_errors) = lexer::lex(source);
@@ -260,11 +276,11 @@ impl Chunk {
 
         // Compile the in-memory source with the populated (or empty)
         // module table. Offsets don't matter for checking — we only
-        // care about the errors collected on the way.
+        // care about the errors and type map collected on the way.
         let output = compiler::compile(statements, module_table, 0, 0, vec![]);
         errors.extend(output.errors);
 
-        errors
+        (errors, output.type_map)
     }
 
     /// Returns a human-readable disassembly of the compiled bytecode.
