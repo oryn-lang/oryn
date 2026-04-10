@@ -1,5 +1,6 @@
 // 2D vector type with mostly-public fields and a private helper.
-// Try hovering and go-to-definition on the names from main.on.
+// Try hovering and go-to-definition on the names from main.on in an
+// LSP-enabled editor.
 
 pub val ORIGIN_X = 0.0
 pub val ORIGIN_Y = 0.0

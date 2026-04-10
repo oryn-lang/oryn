@@ -1,0 +1,35 @@
+// ---------------------------------------------------------------------
+// Hello, Oryn
+// ---------------------------------------------------------------------
+// The smallest useful program. Shows: variables, primitive types,
+// string interpolation, and the `print` builtin.
+//
+// Run with:
+//   cargo run --bin oryn -- examples/01_hello.on
+
+// `let` introduces a mutable binding; `val` introduces an immutable one.
+// Types are usually inferred, but you can annotate explicitly.
+let name = "Oryn"
+val version: f32 = 0.1
+
+// String interpolation: anything inside `{...}` in a string literal is
+// an Oryn expression evaluated at runtime.
+print("Hello from {name} v{version}!")
+
+// Integers and floats are distinct. `i32` is the default integer type,
+// `f32` the default float.
+let a = 10
+let b = 3
+print("a + b = {a + b}")
+print("a / b = {a / b}")       // integer division -> 3
+print("a - b * 2 = {a - b * 2}")
+
+// Booleans and comparison operators work how you'd expect. `and` / `or`
+// / `not` are the logical keywords (not `&&` / `||` / `!`).
+let positive = a > 0 and b > 0
+print("both positive? {positive}")
+print("either negative? {not positive}")
+
+// `let` bindings are reassignable; `val` bindings aren't. Uncomment the
+// next line to see the compiler catch the mistake:
+//   version = 0.2   // error: cannot reassign immutable `val` binding

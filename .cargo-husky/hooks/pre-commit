@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# Managed by cargo-husky: https://github.com/rhysd/cargo-husky
+#
+# Installed from oryn/.cargo-husky/hooks/pre-commit into
+# .git/hooks/pre-commit on every `cargo test` run.
+#
+# Runs the three fast checks we want to block a commit on:
+#   1. Formatter is clean (`cargo fmt --all -- --check`)
+#   2. No clippy warnings across the workspace
+#   3. Every committed Oryn example type-checks
+set -euo pipefail
+
+echo "[pre-commit] cargo fmt --all -- --check"
+cargo fmt --all -- --check
+
+echo "[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "[pre-commit] oryn check examples/"
+cargo run --quiet --bin oryn -- check examples/

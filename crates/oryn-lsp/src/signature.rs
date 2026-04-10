@@ -258,7 +258,8 @@ let z = outer(add(1, 2), 3)
             .unwrap()
             .parent()
             .unwrap()
-            .join("playground")
+            .join("examples")
+            .join("modules")
             .join("main.on");
         assert!(main_path.exists(), "fixture missing: {main_path:?}");
 

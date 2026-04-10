@@ -8,3 +8,11 @@ license = { workspace = true }
 chumsky = "0.12.0"
 gc-arena = "0.5.3"
 logos = "0.16.1"
+
+# cargo-husky installs our git hooks (see oryn/.cargo-husky/hooks/) into
+# `.git/hooks/` whenever `cargo test` runs. The `user-hooks` feature
+# disables the crate's default canned hook in favor of the ones we ship.
+[dev-dependencies]
+cargo-husky = { version = "1.5.0", default-features = false, features = [
+    "user-hooks",
+] }

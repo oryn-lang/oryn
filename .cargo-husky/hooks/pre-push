@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#
+# Managed by cargo-husky: https://github.com/rhysd/cargo-husky
+#
+# Installed from oryn/.cargo-husky/hooks/pre-push into
+# .git/hooks/pre-push on every `cargo test` run.
+#
+# Runs the full workspace test suite before any push so broken
+# commits never leave the local machine.
+set -euo pipefail
+
+echo "[pre-push] cargo test --workspace"
+cargo test --workspace

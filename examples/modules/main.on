@@ -1,0 +1,71 @@
+// ---------------------------------------------------------------------
+// Multi-file example: the module system
+// ---------------------------------------------------------------------
+// Everything this example demonstrates:
+//   - Flat imports          (import physics)
+//   - Nested imports        (import math.vec2)
+//   - Module constants      (math.vec2.ORIGIN_X)
+//   - Qualified literals    (math.vec2.Vec2 { ... })
+//   - Qualified types       (let v: math.vec2.Vec2 = ...)
+//   - Static constructors   (math.colors.Color.rgb(...))
+//   - Cross-module method calls
+//
+// Project layout:
+//   examples/modules/
+//     package.on          <- empty marker; tells the compiler "this
+//                            directory is a project root"
+//     main.on             <- this file
+//     physics.on          <- a flat sibling module
+//     math/
+//       vec2.on           <- a nested module
+//       colors.on         <- a nested sibling module
+//
+// Run with (from the `oryn/` directory):
+//   cargo run --bin oryn -- examples/modules/main.on
+
+import math.vec2
+import math.colors
+import physics
+
+print("--- module constants ---")
+// `pub val` at the top of a module becomes a module constant, usable
+// from importers with the full qualified path.
+print(math.vec2.ORIGIN_X)
+print(math.colors.MAX_CHANNEL)
+print(physics.GRAVITY)
+
+print("--- qualified object literal ---")
+// All Vec2 fields are `pub`, so we can construct one directly with
+// a qualified type name. Explicit annotation on the left side is
+// optional here; we write it out for clarity.
+let v: math.vec2.Vec2 = math.vec2.Vec2 { x: 3.0, y: 4.0 }
+print(v.x)
+print(v.y)
+print(v.length_sq())
+
+print("--- static constructor on imported type ---")
+// Color has a private `alpha` field, so the ONLY way to build one
+// from another module is through a static constructor like `rgb`.
+// Try uncommenting the direct literal to see the compiler complain:
+//   let bad = math.colors.Color { r: 1, g: 2, b: 3, alpha: 4 }
+let red = math.colors.Color.rgb(255, 0, 0)
+print(red.r)
+print(red.opacity())
+
+print("--- cross-module function call ---")
+// physics.step takes and returns a math.vec2.Vec2. Notice main.on
+// has to import math.vec2 itself even though physics.on already
+// imports it internally — imports are non-transitive, so each file
+// spells out what it uses.
+let stepped = physics.step(v, 0.5)
+print(stepped.x)
+print(stepped.y)
+
+print("--- static method via qualified path ---")
+let zero = math.vec2.Vec2.origin()
+print(zero.x)
+
+print("--- string interpolation across modules ---")
+// Interpolated expressions can cross module boundaries too.
+print("starting at ({zero.x}, {zero.y})")
+print("after 1.5s of free fall: {physics.fall_distance(1.5)}")
