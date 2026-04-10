@@ -70,7 +70,16 @@ impl Compiler {
                 op: crate::parser::UnaryOp::Negate,
                 expr,
             } => match &expr.node {
-                Expression::Int(n) => Some(ConstValue::Int(-n)),
+                Expression::Int(n) => match n.checked_neg() {
+                    Some(v) => Some(ConstValue::Int(v)),
+                    None => {
+                        self.output.errors.push(OrynError::compiler(
+                            span.clone(),
+                            format!("integer overflow in module constant `{name}`"),
+                        ));
+                        return;
+                    }
+                },
                 Expression::Float(n) => Some(ConstValue::Float(-n)),
                 _ => None,
             },
