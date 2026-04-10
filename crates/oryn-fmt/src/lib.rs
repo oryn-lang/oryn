@@ -503,6 +503,11 @@ impl Formatter {
                 body,
                 else_body,
             } => self.write_if_chain(condition, body, else_body.as_ref(), false),
+            Statement::Unless {
+                condition,
+                body,
+                else_body,
+            } => self.write_unless(condition, body, else_body.as_ref()),
             Statement::While { condition, body } => {
                 self.out.push_str("while ");
                 self.write_expression(condition, 0);
@@ -656,6 +661,24 @@ impl Formatter {
                 self.out.push_str("else ");
                 self.write_block_expression(else_body);
             }
+        }
+    }
+
+    fn write_unless(
+        &mut self,
+        condition: &Spanned<Expression>,
+        body: &Spanned<Expression>,
+        else_body: Option<&Spanned<Expression>>,
+    ) {
+        self.out.push_str("unless ");
+        self.write_expression(condition, 0);
+        self.out.push(' ');
+        self.write_block_expression(body);
+
+        if let Some(else_body) = else_body {
+            self.out.push(' ');
+            self.out.push_str("else ");
+            self.write_block_expression(else_body);
         }
     }
 
@@ -1002,6 +1025,25 @@ mod tests {
         assert_eq!(
             formatted,
             "if a {\n    print(1)\n} elif b {\n    print(2)\n} else {\n    print(3)\n}\n"
+        );
+    }
+
+    #[test]
+    fn formats_unless() {
+        let source = "unless ready{print(0)}";
+        let formatted = format_source(source).unwrap();
+
+        assert_eq!(formatted, "unless ready {\n    print(0)\n}\n");
+    }
+
+    #[test]
+    fn formats_unless_with_else() {
+        let source = "unless ready{print(0)}else{print(1)}";
+        let formatted = format_source(source).unwrap();
+
+        assert_eq!(
+            formatted,
+            "unless ready {\n    print(0)\n} else {\n    print(1)\n}\n"
         );
     }
 }

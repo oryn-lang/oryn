@@ -95,6 +95,8 @@ pub enum Token {
     // Control flow.
     #[token("if")]
     If,
+    #[token("unless")]
+    Unless,
     #[token("elif")]
     Elif,
     #[token("else")]
@@ -182,6 +184,7 @@ impl Display for Token {
             Token::Or => write!(f, "or"),
             Token::Not => write!(f, "not"),
             Token::If => write!(f, "if"),
+            Token::Unless => write!(f, "unless"),
             Token::Else => write!(f, "else"),
             Token::Elif => write!(f, "elif"),
             Token::While => write!(f, "while"),
@@ -394,6 +397,27 @@ mod tests {
         let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
         assert!(errors.is_empty());
         assert_eq!(kinds, vec![Token::Bang, Token::Ident("expr".into()),]);
+    }
+
+    #[test]
+    fn tokenizes_unless_keyword() {
+        let (tokens, errors) = lex("unless ready { print(0) }");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Unless,
+                Token::Ident("ready".into()),
+                Token::LeftCurly,
+                Token::Ident("print".into()),
+                Token::LeftParen,
+                Token::Int(0),
+                Token::RightParen,
+                Token::RightCurly,
+            ]
+        );
     }
 
     #[test]

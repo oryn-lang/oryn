@@ -89,6 +89,66 @@ impl Compiler {
 // ---------------------------------------------------------------------------
 
 impl Compiler {
+    fn compile_conditional(
+        &mut self,
+        condition: Spanned<Expression>,
+        body: Spanned<Expression>,
+        else_body: Option<Spanned<Expression>>,
+        run_body_on_false: bool,
+        stmt_span: &Span,
+    ) {
+        self.compile_expr(condition);
+
+        let branch_jump_idx = self.output.instructions.len();
+        self.emit(Instruction::JumpIfFalse(0), stmt_span);
+
+        if run_body_on_false {
+            if let Some(else_body) = else_body {
+                self.compile_body_expr(else_body);
+
+                let jump_idx = self.output.instructions.len();
+                self.emit(Instruction::Jump(0), stmt_span);
+
+                let body_start = self.output.instructions.len();
+                self.output.instructions[branch_jump_idx] = Instruction::JumpIfFalse(body_start);
+
+                self.compile_body_expr(body);
+
+                let end = self.output.instructions.len();
+                self.output.instructions[jump_idx] = Instruction::Jump(end);
+            } else {
+                let jump_idx = self.output.instructions.len();
+                self.emit(Instruction::Jump(0), stmt_span);
+
+                let body_start = self.output.instructions.len();
+                self.output.instructions[branch_jump_idx] = Instruction::JumpIfFalse(body_start);
+
+                self.compile_body_expr(body);
+
+                let end = self.output.instructions.len();
+                self.output.instructions[jump_idx] = Instruction::Jump(end);
+            }
+        } else {
+            self.compile_body_expr(body);
+
+            if let Some(else_body) = else_body {
+                let jump_idx = self.output.instructions.len();
+                self.emit(Instruction::Jump(0), stmt_span);
+
+                let else_start = self.output.instructions.len();
+                self.output.instructions[branch_jump_idx] = Instruction::JumpIfFalse(else_start);
+
+                self.compile_body_expr(else_body);
+
+                let end = self.output.instructions.len();
+                self.output.instructions[jump_idx] = Instruction::Jump(end);
+            } else {
+                let end = self.output.instructions.len();
+                self.output.instructions[branch_jump_idx] = Instruction::JumpIfFalse(end);
+            }
+        }
+    }
+
     pub(super) fn compile_stmt(&mut self, stmt: Spanned<Statement>) {
         let stmt_span = stmt.span.clone();
 
@@ -284,31 +344,12 @@ impl Compiler {
                 condition,
                 body,
                 else_body,
-            } => {
-                self.compile_expr(condition);
-
-                let jump_if_false_idx = self.output.instructions.len();
-                self.emit(Instruction::JumpIfFalse(0), &stmt_span);
-
-                self.compile_body_expr(body);
-
-                if let Some(else_body) = else_body {
-                    let jump_idx = self.output.instructions.len();
-                    self.emit(Instruction::Jump(0), &stmt_span);
-
-                    let else_start = self.output.instructions.len();
-                    self.output.instructions[jump_if_false_idx] =
-                        Instruction::JumpIfFalse(else_start);
-
-                    self.compile_body_expr(else_body);
-
-                    let end = self.output.instructions.len();
-                    self.output.instructions[jump_idx] = Instruction::Jump(end);
-                } else {
-                    let end = self.output.instructions.len();
-                    self.output.instructions[jump_if_false_idx] = Instruction::JumpIfFalse(end);
-                }
-            }
+            } => self.compile_conditional(condition, body, else_body, false, &stmt_span),
+            Statement::Unless {
+                condition,
+                body,
+                else_body,
+            } => self.compile_conditional(condition, body, else_body, true, &stmt_span),
             Statement::While { condition, body } => {
                 let loop_start = self.output.instructions.len();
 

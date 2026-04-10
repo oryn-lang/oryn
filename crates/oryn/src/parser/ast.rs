@@ -70,6 +70,11 @@ pub enum Statement {
         body: Spanned<Expression>,
         else_body: Option<Spanned<Expression>>,
     },
+    Unless {
+        condition: Spanned<Expression>,
+        body: Spanned<Expression>,
+        else_body: Option<Spanned<Expression>>,
+    },
     /// `if let x = maybe { ... } else { ... }`
     IfLet {
         name: String,

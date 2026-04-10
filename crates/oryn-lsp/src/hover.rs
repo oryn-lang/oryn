@@ -56,6 +56,9 @@ pub fn hover(
         oryn::Token::Fn => Some("`fn` - declare a function".to_string()),
         oryn::Token::Rn => Some("`rn` - return a value from a function".to_string()),
         oryn::Token::If => Some("`if` - conditional branch".to_string()),
+        oryn::Token::Unless => {
+            Some("`unless` - conditional branch when the condition is false".to_string())
+        }
         oryn::Token::Elif => Some("`elif` - else-if branch".to_string()),
         oryn::Token::Else => Some("`else` - fallback branch".to_string()),
         oryn::Token::While => Some("`while` - loop while condition is true".to_string()),

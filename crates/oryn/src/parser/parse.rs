@@ -749,6 +749,22 @@ fn program<'src>() -> impl Parser<
             }))
             .boxed();
 
+        let unless_stmt = just(Token::Unless)
+            .ignore_then(expr.clone())
+            .then(block.clone())
+            .then(just(Token::Else).ignore_then(block.clone()).or_not())
+            .map_with(|((condition, body), else_body), extra| {
+                Spanned::new(
+                    Statement::Unless {
+                        condition,
+                        body,
+                        else_body,
+                    },
+                    extra.span(),
+                )
+            })
+            .boxed();
+
         let while_stmt = just(Token::While)
             .ignore_then(expr.clone())
             .then(block.clone())
@@ -802,6 +818,7 @@ fn program<'src>() -> impl Parser<
             .or(return_stmt)
             .or(if_let_stmt)
             .or(if_stmt)
+            .or(unless_stmt)
             .or(while_stmt)
             .or(for_stmt)
             .or(break_stmt)

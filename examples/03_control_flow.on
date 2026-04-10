@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------
 // Control flow
 // ---------------------------------------------------------------------
-// Shows: if / elif / else, while, for-in, ranges, break, continue.
+// Shows: if / unless / elif / else, while, for-in, ranges, break, continue.
 //
 // Run with:
 //   cargo run --bin oryn -- examples/03_control_flow.on
@@ -20,6 +20,14 @@ fn classify(n: int) -> String {
 print(classify(-3))
 print(classify(0))
 print(classify(42))
+
+// `unless` runs when the condition is false.
+let debug = false
+unless debug {
+    print("debug logging is off")
+} else {
+    print("debug logging is on")
+}
 
 // `for x in <range>` walks an exclusive or inclusive range.
 // `..` is exclusive, `..=` is inclusive.

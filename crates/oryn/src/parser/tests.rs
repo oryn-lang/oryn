@@ -443,6 +443,30 @@ fn if_let_does_not_break_elif() {
     assert!(matches!(&stmts[0].node, Statement::If { .. }));
 }
 
+#[test]
+fn parses_unless_statement() {
+    let stmts = parse_ok("unless ready { print(0) }");
+    assert!(matches!(
+        &stmts[0].node,
+        Statement::Unless {
+            else_body: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn parses_unless_with_else() {
+    let stmts = parse_ok("unless ready { print(0) } else { print(1) }");
+    assert!(matches!(
+        &stmts[0].node,
+        Statement::Unless {
+            else_body: Some(_),
+            ..
+        }
+    ));
+}
+
 // -- Precedence edge cases --
 
 #[test]

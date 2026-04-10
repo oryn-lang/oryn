@@ -202,6 +202,26 @@ fn if_scope_does_not_escape() {
     }));
 }
 
+#[test]
+fn unless_false_runs_body() {
+    assert_eq!(run("unless false { print(1) }"), "1\n");
+}
+
+#[test]
+fn unless_true_skips_body() {
+    assert_eq!(run("unless true { print(1) }\nprint(2)"), "2\n");
+}
+
+#[test]
+fn unless_else_takes_else_when_true() {
+    assert_eq!(run("unless true { print(1) } else { print(2) }"), "2\n");
+}
+
+#[test]
+fn unless_else_takes_body_when_false() {
+    assert_eq!(run("unless false { print(1) } else { print(2) }"), "1\n");
+}
+
 // --- While loops ---
 
 #[test]

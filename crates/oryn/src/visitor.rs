@@ -116,6 +116,18 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
             }
         }
 
+        Statement::Unless {
+            condition,
+            body,
+            else_body,
+        } => {
+            visitor.visit_expr(condition);
+            visitor.visit_expr(body);
+            if let Some(else_body) = else_body {
+                visitor.visit_expr(else_body);
+            }
+        }
+
         Statement::While { condition, body } => {
             visitor.visit_expr(condition);
             visitor.visit_expr(body);
@@ -276,6 +288,7 @@ mod tests {
                 Statement::Assignment { .. } => "assign",
                 Statement::ObjDef { .. } => "obj",
                 Statement::If { .. } => "if",
+                Statement::Unless { .. } => "unless",
                 Statement::While { .. } => "while",
                 Statement::For { .. } => "for",
                 Statement::Return(_) => "return",
