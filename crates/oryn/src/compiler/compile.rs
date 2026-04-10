@@ -169,6 +169,14 @@ pub(super) fn resolve_type(
                 }
             }
         }
+        TypeAnnotation::Nillable(inner) => {
+            let inner_resolved = resolve_type(inner, obj_table, modules)?;
+            Ok(ResolvedType::Nillable(Box::new(inner_resolved)))
+        }
+        TypeAnnotation::ErrorUnion(inner) => {
+            let inner_resolved = resolve_type(inner, obj_table, modules)?;
+            Ok(ResolvedType::ErrorUnion(Box::new(inner_resolved)))
+        }
     }
 }
 
@@ -299,10 +307,7 @@ impl Compiler {
         span: &Span,
         message: &str,
     ) {
-        if *expected != ResolvedType::Unknown
-            && *actual != ResolvedType::Unknown
-            && expected != actual
-        {
+        if !expected.is_compatible_with(actual) {
             self.output.errors.push(OrynError::compiler(
                 span.clone(),
                 format!(

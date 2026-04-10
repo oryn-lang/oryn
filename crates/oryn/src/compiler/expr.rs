@@ -717,6 +717,33 @@ impl Compiler {
 
             // -- Calls --
             Expression::Call { name, args } => {
+                // `Error("message")` — builtin error constructor.
+                if name == "Error" {
+                    if args.len() != 1 {
+                        self.output.errors.push(crate::OrynError::compiler(
+                            span.clone(),
+                            format!("`Error` expects exactly 1 argument, got {}", args.len()),
+                        ));
+
+                        self.emit(Instruction::PushInt(0), &span);
+
+                        return ResolvedType::Error;
+                    }
+
+                    let arg_type = self.compile_expr(args.into_iter().next().unwrap());
+
+                    self.check_types(
+                        &ResolvedType::Str,
+                        &arg_type,
+                        &span,
+                        "`Error` argument must be a String",
+                    );
+
+                    self.emit(Instruction::MakeError, &span);
+
+                    return ResolvedType::Error;
+                }
+
                 let arity = args.len();
 
                 let mut arg_types = Vec::new();
@@ -752,6 +779,137 @@ impl Compiler {
             }
 
             // -- Blocks --
+            Expression::Nil => {
+                self.emit(Instruction::PushNil, &span);
+
+                ResolvedType::Nil
+            }
+
+            Expression::Try(inner_expr) => {
+                let inner_type = self.compile_expr(*inner_expr);
+
+                let success_type = match inner_type.unwrap_error_union() {
+                    Some(t) => {
+                        // Verify the enclosing function returns an error union.
+                        if let Some(ref return_type) = self.locals.return_type
+                            && !return_type.is_error_union()
+                            && !matches!(return_type, ResolvedType::Unknown)
+                        {
+                            self.output.errors.push(crate::OrynError::compiler(
+                                    span.clone(),
+                                    format!(
+                                        "`try` requires the enclosing function to return an error union type, but it returns `{}`",
+                                        return_type.display_name()
+                                    ),
+                                ));
+                        }
+                        t.clone()
+                    }
+                    None => {
+                        if !matches!(inner_type, ResolvedType::Unknown) {
+                            self.output.errors.push(crate::OrynError::compiler(
+                                span.clone(),
+                                format!(
+                                    "`try` requires an error union type, got `{}`",
+                                    inner_type.display_name()
+                                ),
+                            ));
+                        }
+
+                        ResolvedType::Unknown
+                    }
+                };
+
+                // JumpIfError(propagate) — if error, leave on stack and jump
+                let jump_if_error_idx = self.output.instructions.len();
+                self.emit(Instruction::JumpIfError(0), &span);
+
+                // Success path: value on stack, skip propagation
+                let jump_to_end_idx = self.output.instructions.len();
+                self.emit(Instruction::Jump(0), &span);
+
+                // Propagation path: error is on TOS, return it
+                let propagate_addr = self.output.instructions.len();
+                self.output.instructions[jump_if_error_idx] =
+                    Instruction::JumpIfError(propagate_addr);
+                self.emit(Instruction::Return, &span);
+
+                let end_addr = self.output.instructions.len();
+                self.output.instructions[jump_to_end_idx] = Instruction::Jump(end_addr);
+
+                success_type
+            }
+
+            Expression::UnwrapError(inner_expr) => {
+                let inner_type = self.compile_expr(*inner_expr);
+
+                let success_type = match inner_type.unwrap_error_union() {
+                    Some(t) => t.clone(),
+                    None => {
+                        if !matches!(inner_type, ResolvedType::Unknown) {
+                            self.output.errors.push(crate::OrynError::compiler(
+                                span.clone(),
+                                format!(
+                                    "`!` unwrap requires an error union type, got `{}`",
+                                    inner_type.display_name()
+                                ),
+                            ));
+                        }
+
+                        ResolvedType::Unknown
+                    }
+                };
+
+                self.emit(Instruction::UnwrapErrorOrTrap, &span);
+
+                success_type
+            }
+
+            Expression::Coalesce { left, right } => {
+                let left_type = self.compile_expr(*left);
+
+                let inner_type = match left_type.unwrap_nillable() {
+                    Some(inner) => inner.clone(),
+                    None => {
+                        if !matches!(left_type, ResolvedType::Unknown) {
+                            self.output.errors.push(crate::OrynError::compiler(
+                                span.clone(),
+                                format!(
+                                    "`??` requires a nillable type on the left, got `{}`",
+                                    left_type.display_name()
+                                ),
+                            ));
+                        }
+                        ResolvedType::Unknown
+                    }
+                };
+
+                // JumpIfNil(fallback) — if nil, pop it and jump to fallback
+                let jump_if_nil_idx = self.output.instructions.len();
+                self.emit(Instruction::JumpIfNil(0), &span);
+
+                // Not nil: value is on the stack, skip fallback
+                let jump_to_end_idx = self.output.instructions.len();
+                self.emit(Instruction::Jump(0), &span);
+
+                // Fallback: nil was popped, compile the right-hand side
+                let fallback_addr = self.output.instructions.len();
+                self.output.instructions[jump_if_nil_idx] = Instruction::JumpIfNil(fallback_addr);
+
+                let right_type = self.compile_expr(*right);
+                self.check_types(
+                    &inner_type,
+                    &right_type,
+                    &span,
+                    "coalesce fallback type mismatch",
+                );
+
+                let end_addr = self.output.instructions.len();
+                self.output.instructions[jump_to_end_idx] = Instruction::Jump(end_addr);
+
+                inner_type
+            }
+
             Expression::Block(stmts) => self.compile_block(stmts, BlockMode::FreshLoops),
         }
     }

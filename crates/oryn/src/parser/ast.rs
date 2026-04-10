@@ -70,6 +70,13 @@ pub enum Statement {
         body: Spanned<Expression>,
         else_body: Option<Spanned<Expression>>,
     },
+    /// `if let x = maybe { ... } else { ... }`
+    IfLet {
+        name: String,
+        value: Spanned<Expression>,
+        body: Spanned<Expression>,
+        else_body: Option<Spanned<Expression>>,
+    },
     While {
         condition: Spanned<Expression>,
         body: Spanned<Expression>,
@@ -93,6 +100,8 @@ pub enum Statement {
 /// An expression node in the AST.
 #[derive(Debug)]
 pub enum Expression {
+    /// The `nil` literal.
+    Nil,
     True,
     False,
     Float(f32),
@@ -133,6 +142,15 @@ pub enum Expression {
         name: String,
         args: Vec<Spanned<Expression>>,
     },
+    /// `try expr` — propagate error from `!T`.
+    Try(Box<Spanned<Expression>>),
+    /// `!expr` — unwrap `!T`, trap on error.
+    UnwrapError(Box<Spanned<Expression>>),
+    /// `a ?? b` — nil coalescing.
+    Coalesce {
+        left: Box<Spanned<Expression>>,
+        right: Box<Spanned<Expression>>,
+    },
     Block(Vec<Spanned<Statement>>),
 }
 
@@ -165,6 +183,10 @@ pub enum TypeAnnotation {
     /// Type name as a dotted path. A bare `Vec2` is `vec!["Vec2"]`,
     /// a qualified `math.Vec2` is `vec!["math", "Vec2"]`.
     Named(Vec<String>),
+    /// `T?` — a nillable type.
+    Nillable(Box<TypeAnnotation>),
+    /// `!T` — an error union type.
+    ErrorUnion(Box<TypeAnnotation>),
 }
 
 /// A field declared inside an `obj` body. The `is_pub` flag controls

@@ -34,6 +34,10 @@ pub enum Token {
     Pub,
     #[token("import")]
     Import,
+    #[token("try")]
+    Try,
+    #[token("nil")]
+    Nil,
 
     // Literals.
     #[token("true")]
@@ -67,6 +71,12 @@ pub enum Token {
     EqualsEquals,
     #[token("!=")]
     NotEquals,
+    #[token("??")]
+    QuestionQuestion,
+    #[token("?")]
+    Question,
+    #[token("!")]
+    Bang,
     #[token("<")]
     LessThan,
     #[token(">")]
@@ -147,6 +157,8 @@ impl Display for Token {
             Token::In => write!(f, "in"),
             Token::Pub => write!(f, "pub"),
             Token::Import => write!(f, "import"),
+            Token::Try => write!(f, "try"),
+            Token::Nil => write!(f, "nil"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::Float(n) => write!(f, "{n}"),
@@ -159,6 +171,9 @@ impl Display for Token {
             Token::Divide => write!(f, "/"),
             Token::EqualsEquals => write!(f, "=="),
             Token::NotEquals => write!(f, "!="),
+            Token::QuestionQuestion => write!(f, "??"),
+            Token::Question => write!(f, "?"),
+            Token::Bang => write!(f, "!"),
             Token::LessThan => write!(f, "<"),
             Token::GreaterThan => write!(f, ">"),
             Token::LessThanEquals => write!(f, "<="),
@@ -326,5 +341,95 @@ mod tests {
             .collect();
 
         assert_eq!(filtered, all_non_comment);
+    }
+
+    #[test]
+    fn tokenizes_nil_and_error_tokens() {
+        // nullable type + nil literal
+        let (tokens, errors) = lex("let x: int? = nil");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Let,
+                Token::Ident("x".into()),
+                Token::Colon,
+                Token::Ident("int".into()),
+                Token::Question,
+                Token::Equals,
+                Token::Nil,
+            ]
+        );
+
+        // try keyword
+        let (tokens, errors) = lex("try foo()");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Try,
+                Token::Ident("foo".into()),
+                Token::LeftParen,
+                Token::RightParen,
+            ]
+        );
+
+        // nil coalescing
+        let (tokens, errors) = lex("a ?? b");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Ident("a".into()),
+                Token::QuestionQuestion,
+                Token::Ident("b".into()),
+            ]
+        );
+
+        // bang (error unwrap)
+        let (tokens, errors) = lex("!expr");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(kinds, vec![Token::Bang, Token::Ident("expr".into()),]);
+    }
+
+    #[test]
+    fn bang_does_not_break_not_equals() {
+        let (tokens, errors) = lex("a != b");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Ident("a".into()),
+                Token::NotEquals,
+                Token::Ident("b".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn question_question_vs_single_question() {
+        // ?? should be a single QuestionQuestion token, not two Questions
+        let (tokens, errors) = lex("x??y");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Ident("x".into()),
+                Token::QuestionQuestion,
+                Token::Ident("y".into()),
+            ]
+        );
+
+        // single ? at end
+        let (tokens, errors) = lex("x?");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(kinds, vec![Token::Ident("x".into()), Token::Question,]);
     }
 }

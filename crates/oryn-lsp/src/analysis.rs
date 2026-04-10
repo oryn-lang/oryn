@@ -2,8 +2,19 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use oryn::{
-    AstVisitor, Expression, ObjField, ObjMethod, Spanned, Statement, Token, walk_expr, walk_stmt,
+    AstVisitor, Expression, ObjField, ObjMethod, Spanned, Statement, Token, TypeAnnotation,
+    walk_expr, walk_stmt,
 };
+
+/// Format a `TypeAnnotation` as a human-readable string (e.g. `"int"`,
+/// `"Vec2?"`, `"!String"`).
+fn format_type_annotation(ann: &TypeAnnotation) -> String {
+    match ann {
+        TypeAnnotation::Named(p) => p.join("."),
+        TypeAnnotation::Nillable(inner) => format!("{}?", format_type_annotation(inner)),
+        TypeAnnotation::ErrorUnion(inner) => format!("!{}", format_type_annotation(inner)),
+    }
+}
 
 /// What kind of symbol a definition introduces.
 #[derive(Debug, Clone, PartialEq)]
@@ -181,9 +192,7 @@ impl AstVisitor for LspVisitor<'_> {
                 type_ann,
                 is_pub: _,
             } => {
-                let type_name = type_ann.as_ref().map(|ann| match ann {
-                    oryn::TypeAnnotation::Named(p) => p.join("."),
-                });
+                let type_name = type_ann.as_ref().map(format_type_annotation);
                 self.register_definition(
                     name,
                     &stmt.span,
@@ -205,14 +214,12 @@ impl AstVisitor for LspVisitor<'_> {
                 let param_strs: Vec<String> = params
                     .iter()
                     .map(|(pname, ann)| match ann {
-                        Some(oryn::TypeAnnotation::Named(t)) => format!("{pname}: {}", t.join(".")),
+                        Some(t) => format!("{pname}: {}", format_type_annotation(t)),
                         None => pname.clone(),
                     })
                     .collect();
 
-                let ret = return_type.as_ref().map(|rt| match rt {
-                    oryn::TypeAnnotation::Named(p) => p.join("."),
-                });
+                let ret = return_type.as_ref().map(format_type_annotation);
 
                 self.register_definition(
                     name,
@@ -225,9 +232,7 @@ impl AstVisitor for LspVisitor<'_> {
 
                 self.enter_scope();
                 for (param_name, type_ann) in params {
-                    let type_name = type_ann.as_ref().map(|ann| match ann {
-                        oryn::TypeAnnotation::Named(p) => p.join("."),
-                    });
+                    let type_name = type_ann.as_ref().map(format_type_annotation);
                     self.register_definition(
                         param_name,
                         &stmt.span,
@@ -328,8 +333,7 @@ impl AstVisitor for LspVisitor<'_> {
 
 impl LspVisitor<'_> {
     fn visit_obj_field(&mut self, field: &ObjField) {
-        let oryn::TypeAnnotation::Named(parts) = &field.type_ann;
-        let type_name = parts.join(".");
+        let type_name = format_type_annotation(&field.type_ann);
         self.register_definition(
             &field.name,
             &field.span,
@@ -345,14 +349,12 @@ impl LspVisitor<'_> {
             .params
             .iter()
             .map(|(pname, ann)| match ann {
-                Some(oryn::TypeAnnotation::Named(t)) => format!("{pname}: {}", t.join(".")),
+                Some(t) => format!("{pname}: {}", format_type_annotation(t)),
                 None => pname.clone(),
             })
             .collect();
 
-        let ret = method.return_type.as_ref().map(|rt| match rt {
-            oryn::TypeAnnotation::Named(p) => p.join("."),
-        });
+        let ret = method.return_type.as_ref().map(format_type_annotation);
 
         self.register_definition(
             &method.name,
@@ -366,9 +368,7 @@ impl LspVisitor<'_> {
         if let Some(body) = &method.body {
             self.enter_scope();
             for (param_name, type_ann) in &method.params {
-                let type_name = type_ann.as_ref().map(|ann| match ann {
-                    oryn::TypeAnnotation::Named(p) => p.join("."),
-                });
+                let type_name = type_ann.as_ref().map(format_type_annotation);
                 self.register_definition(
                     param_name,
                     &method.span,

@@ -96,6 +96,11 @@ pub enum RuntimeError {
     IntegerOverflow {
         span: Option<Range<usize>>,
     },
+    /// `!expr` unwrapped an error value at runtime.
+    ErrorUnwrapTrap {
+        message: String,
+        span: Option<Range<usize>>,
+    },
 }
 
 /// The type of a value.
@@ -104,6 +109,8 @@ pub enum ValueType {
     Bool,
     Float,
     Int,
+    Nil,
+    Error,
     Object,
     Range,
     String,
@@ -112,6 +119,8 @@ pub enum ValueType {
 impl From<&Value<'_>> for ValueType {
     fn from(value: &Value<'_>) -> Self {
         match value {
+            Value::Nil => ValueType::Nil,
+            Value::Error(_) => ValueType::Error,
             Value::Uninitialized => {
                 unreachable!("compiler bug: uninitialized value reached type conversion")
             }
@@ -131,6 +140,8 @@ impl fmt::Display for ValueType {
             ValueType::Bool => write!(f, "bool"),
             ValueType::Float => write!(f, "float"),
             ValueType::Int => write!(f, "int"),
+            ValueType::Nil => write!(f, "nil"),
+            ValueType::Error => write!(f, "error"),
             ValueType::Object => write!(f, "object"),
             ValueType::Range => write!(f, "range"),
             ValueType::String => write!(f, "string"),
@@ -183,6 +194,9 @@ impl fmt::Display for RuntimeError {
             }
             RuntimeError::DivisionByZero { .. } => write!(f, "division by zero"),
             RuntimeError::IntegerOverflow { .. } => write!(f, "integer overflow"),
+            RuntimeError::ErrorUnwrapTrap { message, .. } => {
+                write!(f, "unwrap trap: {message}")
+            }
         }
     }
 }
@@ -200,6 +214,7 @@ impl RuntimeError {
             RuntimeError::TypeMismatch { span, .. } => span.as_ref(),
             RuntimeError::DivisionByZero { span } => span.as_ref(),
             RuntimeError::IntegerOverflow { span } => span.as_ref(),
+            RuntimeError::ErrorUnwrapTrap { span, .. } => span.as_ref(),
         }
     }
 }

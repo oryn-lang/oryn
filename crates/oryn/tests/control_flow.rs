@@ -1,6 +1,92 @@
 mod common;
 use common::run;
 
+// --- Nil and error runtime behavior ---
+
+#[test]
+fn nil_binding_prints_nil() {
+    assert_eq!(run("let x: int? = nil\nprint(x)"), "nil\n");
+}
+
+#[test]
+fn nillable_binding_with_value_prints_value() {
+    assert_eq!(run("let x: int? = 5\nprint(x)"), "5\n");
+}
+
+#[test]
+fn coalesce_returns_value_when_not_nil() {
+    assert_eq!(run("let x: int? = 5\nlet y = x ?? 0\nprint(y)"), "5\n");
+}
+
+#[test]
+fn coalesce_returns_fallback_when_nil() {
+    assert_eq!(run("let x: int? = nil\nlet y = x ?? 42\nprint(y)"), "42\n");
+}
+
+#[test]
+fn coalesce_nested_fallback() {
+    // Chaining ?? is left-associative: (a ?? b) returns int, so a second
+    // ?? on the result would not type-check. Use if-let or nested
+    // coalesce with separate bindings instead.
+    assert_eq!(
+        run("let a: int? = nil\nlet b: int? = 7\nlet y = a ?? (b ?? 0)\nprint(y)"),
+        "7\n"
+    );
+}
+
+#[test]
+fn coalesce_nested_all_nil() {
+    assert_eq!(
+        run("let a: int? = nil\nlet b: int? = nil\nlet y = a ?? (b ?? 99)\nprint(y)"),
+        "99\n"
+    );
+}
+
+#[test]
+fn if_let_runs_body_when_not_nil() {
+    assert_eq!(run("let x: int? = 10\nif let v = x {\nprint(v)\n}"), "10\n");
+}
+
+#[test]
+fn if_let_skips_body_when_nil() {
+    assert_eq!(
+        run("let x: int? = nil\nif let v = x {\nprint(v)\n}\nprint(0)"),
+        "0\n"
+    );
+}
+
+#[test]
+fn if_let_else_runs_else_when_nil() {
+    assert_eq!(
+        run("let x: int? = nil\nif let v = x {\nprint(v)\n} else {\nprint(99)\n}"),
+        "99\n"
+    );
+}
+
+#[test]
+fn if_let_else_runs_body_when_not_nil() {
+    assert_eq!(
+        run("let x: int? = 7\nif let v = x {\nprint(v)\n} else {\nprint(99)\n}"),
+        "7\n"
+    );
+}
+
+#[test]
+fn nil_equality() {
+    assert_eq!(run("let x: int? = nil\nprint(x == nil)"), "true\n");
+}
+
+#[test]
+fn non_nil_not_equal_to_nil() {
+    assert_eq!(run("let x: int? = 5\nprint(x == nil)"), "false\n");
+}
+
+#[test]
+fn nil_not_equals() {
+    assert_eq!(run("let x: int? = nil\nprint(x != nil)"), "false\n");
+    assert_eq!(run("let x: int? = 5\nprint(x != nil)"), "true\n");
+}
+
 // --- If / else / elif ---
 
 #[test]

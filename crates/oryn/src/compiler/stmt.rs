@@ -416,6 +416,57 @@ impl Compiler {
             }
 
             Statement::Import { .. } => {}
+
+            Statement::IfLet {
+                name,
+                value,
+                body,
+                else_body,
+            } => {
+                let scrutinee_type = self.compile_expr(value);
+
+                let inner_type = match scrutinee_type.unwrap_nillable() {
+                    Some(inner) => inner.clone(),
+                    None => {
+                        if !matches!(scrutinee_type, ResolvedType::Unknown) {
+                            self.output.errors.push(crate::OrynError::compiler(
+                                stmt_span.clone(),
+                                format!(
+                                    "`if let` requires a nillable type, got `{}`",
+                                    scrutinee_type.display_name()
+                                ),
+                            ));
+                        }
+                        ResolvedType::Unknown
+                    }
+                };
+
+                let jump_if_nil_idx = self.output.instructions.len();
+                self.emit(Instruction::JumpIfNil(0), &stmt_span);
+
+                // Then-branch: introduce `name: T` in a new scope.
+                self.with_scope(|this| {
+                    let slot = this.locals.define(name, false, inner_type);
+                    this.emit(Instruction::SetLocal(slot), &stmt_span);
+                    this.compile_body_expr(body);
+                });
+
+                if let Some(else_body) = else_body {
+                    let jump_idx = self.output.instructions.len();
+                    self.emit(Instruction::Jump(0), &stmt_span);
+
+                    let else_start = self.output.instructions.len();
+                    self.output.instructions[jump_if_nil_idx] = Instruction::JumpIfNil(else_start);
+
+                    self.compile_body_expr(else_body);
+
+                    let end = self.output.instructions.len();
+                    self.output.instructions[jump_idx] = Instruction::Jump(end);
+                } else {
+                    let end = self.output.instructions.len();
+                    self.output.instructions[jump_if_nil_idx] = Instruction::JumpIfNil(end);
+                }
+            }
         }
     }
 }

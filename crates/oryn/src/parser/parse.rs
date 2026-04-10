@@ -94,6 +94,7 @@ fn atom<'src>(
 ) -> impl Parser<'src, TokenInput<'src>, Spanned<Expression>, extra::Err<Rich<'src, Token, SimpleSpan>>>
 + Clone {
     let bool_lit = select! { Token::True => Expression::True, Token::False => Expression::False };
+    let nil_lit = just(Token::Nil).map(|_| Expression::Nil);
     let float = select! { Token::Float(n) => Expression::Float(n) };
     let int = select! { Token::Int(n) => Expression::Int(n) };
     let string = select! { Token::String(s) => s }.map_with(|s, extra| {
@@ -148,6 +149,7 @@ fn atom<'src>(
         .map(|spanned| spanned.node);
 
     bool_lit
+        .or(nil_lit)
         .or(float)
         .or(int)
         .or(string)
@@ -344,34 +346,73 @@ fn program<'src>() -> impl Parser<
             binop_fold,
         );
 
-        // not (prefix, right-associative)
-        let not = just(Token::Not)
-            .repeated()
-            .foldr(comparison.boxed(), |_op, expr| {
-                let span = expr.span.clone();
-                Spanned {
+        // not / try / !expr (prefix, right-associative)
+        #[derive(Clone)]
+        enum PrefixOp {
+            Not,
+            Try,
+            UnwrapError,
+        }
+
+        let prefix_unary = choice((
+            just(Token::Not).to(PrefixOp::Not),
+            just(Token::Try).to(PrefixOp::Try),
+            just(Token::Bang).to(PrefixOp::UnwrapError),
+        ))
+        .repeated()
+        .foldr(comparison.boxed(), |op, expr| {
+            let span = expr.span.clone();
+            match op {
+                PrefixOp::Not => Spanned {
                     node: Expression::UnaryOp {
                         op: UnaryOp::Not,
                         expr: Box::new(expr),
                     },
                     span,
-                }
-            })
-            .boxed();
+                },
+                PrefixOp::Try => Spanned {
+                    node: Expression::Try(Box::new(expr)),
+                    span,
+                },
+                PrefixOp::UnwrapError => Spanned {
+                    node: Expression::UnwrapError(Box::new(expr)),
+                    span,
+                },
+            }
+        })
+        .boxed();
 
         // and
-        let and = not.clone().foldl(
-            just(Token::And).to(BinOp::And).then(not).repeated(),
+        let and = prefix_unary.clone().foldl(
+            just(Token::And)
+                .to(BinOp::And)
+                .then(prefix_unary)
+                .repeated(),
             binop_fold,
         );
 
-        // or (loosest)
+        // or
         let or = and.clone().foldl(
             just(Token::Or).to(BinOp::Or).then(and).repeated(),
             binop_fold,
         );
 
-        or.labelled("expression").boxed()
+        // ?? (nil coalescing — loosest binary operator)
+        let coalesce = or.clone().foldl(
+            just(Token::QuestionQuestion).then(or).repeated(),
+            |left, (_tok, right)| {
+                let span = left.span.start..right.span.end;
+                Spanned {
+                    node: Expression::Coalesce {
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    span,
+                }
+            },
+        );
+
+        coalesce.labelled("expression").boxed()
     });
 
     // -- Statement parsers --
@@ -391,17 +432,42 @@ fn program<'src>() -> impl Parser<
             .labelled("import statement")
             .boxed();
 
-        // A dotted type path: `int`, `Vec2`, or `math.Vec2`,
-        // `std.collections.List`. Stored as a `Vec<String>` so the
-        // compiler can look it up against `obj_table` (single segment)
-        // or `ModuleTable` (multi-segment).
-        let dotted_type = select! { Token::Ident(name) => name }
-            .separated_by(just(Token::Dot))
-            .at_least(1)
-            .collect::<Vec<String>>()
-            .map(TypeAnnotation::Named);
+        // Recursive type annotation parser supporting:
+        //   T, mod.T        → TypeAnnotation::Named
+        //   T?              → TypeAnnotation::Nillable
+        //   !T              → TypeAnnotation::ErrorUnion
+        //   !(T?), (!T)?    → allowed with parentheses
+        //   !T?             → rejected (ambiguous without parentheses)
+        let type_ann_parser = recursive(|type_ann_rec| {
+            let dotted_name = select! { Token::Ident(name) => name }
+                .separated_by(just(Token::Dot))
+                .at_least(1)
+                .collect::<Vec<String>>()
+                .map(TypeAnnotation::Named);
 
-        let type_annotation = just(Token::Colon).ignore_then(dotted_type.clone());
+            let paren_type =
+                type_ann_rec.delimited_by(just(Token::LeftParen), just(Token::RightParen));
+
+            let base_type = paren_type.or(dotted_name);
+
+            // T? — nillable (base + postfix ?)
+            let nillable = base_type
+                .clone()
+                .then_ignore(just(Token::Question))
+                .map(|inner| TypeAnnotation::Nillable(Box::new(inner)));
+
+            // !T — error union (prefix ! + base, no trailing ? allowed at this level)
+            let error_union = just(Token::Bang)
+                .ignore_then(base_type.clone())
+                .map(|inner| TypeAnnotation::ErrorUnion(Box::new(inner)));
+
+            // Try nillable first (so T? is parsed before bare T),
+            // then error_union, then bare base_type.
+            // !T? will parse !T as ErrorUnion, leaving ? unconsumed → parse error.
+            choice((nillable, error_union, base_type))
+        });
+
+        let type_annotation = just(Token::Colon).ignore_then(type_ann_parser.clone());
 
         // { stmt \n stmt \n ... }
         let block = stmt
@@ -494,7 +560,7 @@ fn program<'src>() -> impl Parser<
             .clone()
             .then(select! { Token::Ident(name) => name })
             .then_ignore(just(Token::Colon))
-            .then(dotted_type.clone())
+            .then(type_ann_parser.clone())
             .map_with(|((is_pub, name), ty), extra| {
                 let s: SimpleSpan = extra.span();
                 ObjField {
@@ -511,7 +577,9 @@ fn program<'src>() -> impl Parser<
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LeftParen), just(Token::RightParen));
 
-        let return_type_ann = just(Token::Arrow).ignore_then(dotted_type.clone()).or_not();
+        let return_type_ann = just(Token::Arrow)
+            .ignore_then(type_ann_parser.clone())
+            .or_not();
 
         // Shared header: `fn <name> (<params>) -> <return_type>`
         // Used by both obj_method (optional body) and fn_stmt (required body).
@@ -633,6 +701,26 @@ fn program<'src>() -> impl Parser<
 
         // -- Control flow --
 
+        let if_let_stmt = just(Token::If)
+            .ignore_then(just(Token::Let))
+            .ignore_then(select! { Token::Ident(name) => name })
+            .then_ignore(just(Token::Equals))
+            .then(expr.clone())
+            .then(block.clone())
+            .then(just(Token::Else).ignore_then(block.clone()).or_not())
+            .map_with(|(((name, value), body), else_body), extra| {
+                Spanned::new(
+                    Statement::IfLet {
+                        name,
+                        value,
+                        body,
+                        else_body,
+                    },
+                    extra.span(),
+                )
+            })
+            .boxed();
+
         let if_stmt = just(Token::If)
             .ignore_then(recursive(|if_body| {
                 let else_branch =
@@ -712,6 +800,7 @@ fn program<'src>() -> impl Parser<
             .or(obj_stmt)
             .or(fn_stmt)
             .or(return_stmt)
+            .or(if_let_stmt)
             .or(if_stmt)
             .or(while_stmt)
             .or(for_stmt)

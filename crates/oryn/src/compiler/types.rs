@@ -51,6 +51,17 @@ pub enum Instruction {
     Jump(usize),
     RangeHasNext,
     RangeNext,
+    /// Push the nil value onto the stack.
+    PushNil,
+    /// Peek at TOS: if Nil, pop it and jump to target; if not Nil, leave it on the stack.
+    JumpIfNil(usize),
+    /// Peek at TOS: if Error, leave it on stack and jump to target; if not Error, leave it and fall through.
+    JumpIfError(usize),
+    /// Peek at TOS: if Error, produce a fatal runtime trap with the error message.
+    /// If not Error, leave the value on the stack (it's the success value).
+    UnwrapErrorOrTrap,
+    /// Pop a String from the stack and push a `Value::Error(...)`.
+    MakeError,
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +261,16 @@ pub(crate) enum ResolvedType {
         name: String,
         module: Vec<String>,
     },
+    /// `T?` — a nillable type wrapping an inner type.
+    Nillable(Box<ResolvedType>),
+    /// `!T` — an error union type wrapping an inner success type.
+    ErrorUnion(Box<ResolvedType>),
+    /// Internal-only nil type. Used for contextual typing of the `nil`
+    /// literal. Not user-declarable.
+    Nil,
+    /// Internal-only error type. Used for contextual typing of the
+    /// `Error(...)` constructor expression. Not user-declarable.
+    Error,
     Unknown,
 }
 
@@ -315,7 +336,84 @@ impl ResolvedType {
                     format!("{}.{}", module.join("."), name).into()
                 }
             }
+            ResolvedType::Nillable(inner) => format!("{}?", inner.display_name()).into(),
+            ResolvedType::ErrorUnion(inner) => format!("!{}", inner.display_name()).into(),
+            ResolvedType::Nil => "nil".into(),
+            ResolvedType::Error => "error".into(),
             ResolvedType::Unknown => "unknown".into(),
         }
+    }
+
+    /// Returns `true` if this is a `Nillable` type.
+    pub(crate) fn is_nillable(&self) -> bool {
+        matches!(self, ResolvedType::Nillable(_))
+    }
+
+    /// If this is `Nillable(T)`, returns `Some(&T)`. Otherwise `None`.
+    pub(crate) fn unwrap_nillable(&self) -> Option<&ResolvedType> {
+        match self {
+            ResolvedType::Nillable(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this is an `ErrorUnion` type.
+    pub(crate) fn is_error_union(&self) -> bool {
+        matches!(self, ResolvedType::ErrorUnion(_))
+    }
+
+    /// If this is `ErrorUnion(T)`, returns `Some(&T)`. Otherwise `None`.
+    pub(crate) fn unwrap_error_union(&self) -> Option<&ResolvedType> {
+        match self {
+            ResolvedType::ErrorUnion(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    /// Check whether `actual` is assignment-compatible with `self` as the
+    /// expected type. This is more nuanced than simple equality:
+    ///
+    /// - `Unknown` is compatible with anything (inference gap).
+    /// - `Nil` is compatible with any `Nillable(_)`.
+    /// - `T` is compatible with `Nillable(T)` (value promotion).
+    /// - `Error` is compatible with any `ErrorUnion(_)`.
+    /// - `T` is compatible with `ErrorUnion(T)` (success value promotion).
+    /// - Otherwise, structural equality is required.
+    pub(crate) fn is_compatible_with(&self, actual: &ResolvedType) -> bool {
+        // Unknown is a wildcard in both directions.
+        if matches!(self, ResolvedType::Unknown) || matches!(actual, ResolvedType::Unknown) {
+            return true;
+        }
+
+        // Exact match.
+        if self == actual {
+            return true;
+        }
+
+        // Nil → T? (nil literal assigned to nillable).
+        if matches!(actual, ResolvedType::Nil) && self.is_nillable() {
+            return true;
+        }
+
+        // T → T? (value promotion into nillable).
+        if let ResolvedType::Nillable(inner) = self
+            && inner.as_ref() == actual
+        {
+            return true;
+        }
+
+        // Error → !T (error constructor assigned to error union).
+        if matches!(actual, ResolvedType::Error) && self.is_error_union() {
+            return true;
+        }
+
+        // T → !T (success value promotion into error union).
+        if let ResolvedType::ErrorUnion(inner) = self
+            && inner.as_ref() == actual
+        {
+            return true;
+        }
+
+        false
     }
 }

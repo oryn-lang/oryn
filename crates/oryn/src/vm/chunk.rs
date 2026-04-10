@@ -516,6 +516,11 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::Jump(target) => format!("Jump -> {target:04}"),
             Instruction::RangeHasNext => "RangeHasNext".to_string(),
             Instruction::RangeNext => "RangeNext".to_string(),
+            Instruction::PushNil => "PushNil".to_string(),
+            Instruction::JumpIfNil(target) => format!("JumpIfNil -> {target:04}"),
+            Instruction::JumpIfError(target) => format!("JumpIfError -> {target:04}"),
+            Instruction::UnwrapErrorOrTrap => "UnwrapErrorOrTrap".to_string(),
+            Instruction::MakeError => "MakeError".to_string(),
         };
 
         writeln!(out, "{i:04}  {formatted}").unwrap();

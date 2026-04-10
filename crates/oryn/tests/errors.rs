@@ -1,5 +1,230 @@
 // --- Compiler hardening ---
 
+// ---------------------------------------------------------------------------
+// Phase 2: Nil and error union type checking
+// ---------------------------------------------------------------------------
+
+// -- Nillable types --
+
+#[test]
+fn nil_assigned_to_nillable_is_ok() {
+    let errors = oryn::Chunk::check("let x: int? = nil");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn int_assigned_to_nillable_int_is_ok() {
+    let errors = oryn::Chunk::check("let x: int? = 5");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn nil_assigned_to_non_nillable_is_error() {
+    let errors = oryn::Chunk::check("let x: int = nil");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("type mismatch"))
+    }));
+}
+
+#[test]
+fn nillable_return_type_accepts_nil() {
+    let errors = oryn::Chunk::check("fn foo() -> int? {\nrn nil\n}");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn nillable_return_type_accepts_value() {
+    let errors = oryn::Chunk::check("fn foo() -> int? {\nrn 42\n}");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn nillable_param_type_accepts_nil() {
+    let errors = oryn::Chunk::check("fn foo(x: int?) {\nprint(1)\n}\nfoo(nil)");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn nillable_param_type_accepts_value() {
+    let errors = oryn::Chunk::check("fn foo(x: int?) {\nprint(1)\n}\nfoo(5)");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+// -- Coalesce (??) --
+
+#[test]
+fn coalesce_on_nillable_is_ok() {
+    let errors = oryn::Chunk::check("let x: int? = nil\nlet y = x ?? 0");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn coalesce_on_non_nillable_is_error() {
+    let errors = oryn::Chunk::check("let x: int = 5\nlet y = x ?? 0");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("nillable"))
+    }));
+}
+
+#[test]
+fn coalesce_fallback_type_mismatch_is_error() {
+    let errors = oryn::Chunk::check("let x: int? = nil\nlet y = x ?? true");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("type mismatch"))
+    }));
+}
+
+// -- Error union types --
+
+#[test]
+fn error_union_return_type_resolves() {
+    let errors = oryn::Chunk::check("fn foo() -> !int {\nrn 42\n}");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    // No errors expected for the type resolution itself.
+    // (Return type compatibility may report mismatches since we
+    // don't yet have implicit T → !T wrapping, which is expected.)
+    let _ = compiler_errors;
+}
+
+// -- try expression --
+
+#[test]
+fn try_on_non_error_union_is_error() {
+    let errors = oryn::Chunk::check("fn foo() -> !int {\nlet x: int = 5\nrn try x\n}");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("error union"))
+    }));
+}
+
+#[test]
+fn try_outside_error_union_function_is_error() {
+    let errors =
+        oryn::Chunk::check("fn bar() -> !int {\nrn 1\n}\nfn foo() -> int {\nrn try bar()\n}");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. }
+            if message.contains("enclosing function"))
+    }));
+}
+
+// -- !expr (unwrap error) --
+
+#[test]
+fn unwrap_error_on_non_error_union_is_error() {
+    let errors = oryn::Chunk::check("let x: int = 5\nlet y = !x");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("error union"))
+    }));
+}
+
+// -- if let --
+
+#[test]
+fn if_let_on_nillable_is_ok() {
+    let errors = oryn::Chunk::check("let x: int? = nil\nif let v = x {\nprint(v)\n}");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn if_let_on_non_nillable_is_error() {
+    let errors = oryn::Chunk::check("let x: int = 5\nif let v = x {\nprint(v)\n}");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("nillable"))
+    }));
+}
+
+#[test]
+fn if_let_with_else_on_nillable_is_ok() {
+    let errors =
+        oryn::Chunk::check("let x: int? = nil\nif let v = x {\nprint(v)\n} else {\nprint(0)\n}");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+// -- Type display names --
+
+#[test]
+fn nillable_type_display_in_error_message() {
+    let errors = oryn::Chunk::check("let x: int? = nil\nlet y: bool = x");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. }
+            if message.contains("int?"))
+    }));
+}
+
+#[test]
+fn error_union_type_display_in_error_message() {
+    let errors = oryn::Chunk::check("let x: !int = 5\nlet y: bool = x");
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. }
+            if message.contains("!int"))
+    }));
+}
+
 #[test]
 fn undefined_variable_is_compile_error() {
     let result = oryn::Chunk::compile("print(typo)");

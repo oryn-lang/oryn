@@ -330,6 +330,7 @@ impl Formatter {
             Statement::Continue => self.out.push_str("continue"),
             Statement::Expression(expr) => self.write_expression(expr, 0),
             Statement::Import { .. } => {}
+            Statement::IfLet { .. } => todo!("format IfLet"),
         }
     }
 
@@ -520,6 +521,20 @@ impl Formatter {
                 self.out.push(')');
             }
             Expression::Block(stmts) => self.write_block_statements(stmts),
+            Expression::Nil => self.out.push_str("nil"),
+            Expression::Try(inner) => {
+                self.out.push_str("try ");
+                self.write_expression(inner, PREC_UNARY);
+            }
+            Expression::UnwrapError(inner) => {
+                self.out.push('!');
+                self.write_expression(inner, PREC_UNARY);
+            }
+            Expression::Coalesce { left, right } => {
+                self.write_expression(left, 1);
+                self.out.push_str(" ?? ");
+                self.write_expression(right, 2);
+            }
             Expression::StringInterp(parts) => {
                 self.out.push('"');
                 for part in parts {
@@ -560,6 +575,14 @@ impl Formatter {
     fn write_type_name(&mut self, ann: &TypeAnnotation) {
         match ann {
             TypeAnnotation::Named(path) => self.out.push_str(&path.join(".")),
+            TypeAnnotation::Nillable(inner) => {
+                self.write_type_name(inner);
+                self.out.push('?');
+            }
+            TypeAnnotation::ErrorUnion(inner) => {
+                self.out.push('!');
+                self.write_type_name(inner);
+            }
         }
     }
 

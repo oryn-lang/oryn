@@ -63,6 +63,16 @@ macro_rules! equality_op {
             (Value::String(l), Value::String(r)) => {
                 $state.stack.push(Value::Bool(**l $op **r));
             }
+            // Nil comparisons: nil == nil is true, nil == non-nil is false.
+            // For != the result is naturally inverted since the macro passes !=.
+            (Value::Nil, Value::Nil) => {
+                // For ==: true == true → true.  For !=: true != true → false.
+                $state.stack.push(Value::Bool(true $op true));
+            }
+            (Value::Nil, _) | (_, Value::Nil) => {
+                // For ==: true == false → false.  For !=: true != false → true.
+                $state.stack.push(Value::Bool(true $op false));
+            }
             (l, r) => {
                 let span = VM::current_span_from_state($frames, $chunk);
                 return Err(RuntimeError::TypeMismatch {
@@ -238,6 +248,54 @@ impl VM {
                     Instruction::PushString(s) => {
                         state.stack.push(Value::String(Gc::new(mc, s.clone())));
                     }
+                    Instruction::PushNil => {
+                        state.stack.push(Value::Nil);
+                    }
+                    Instruction::JumpIfNil(target) => {
+                        if state.stack.is_empty() {
+                            return Err(RuntimeError::StackUnderflow);
+                        }
+                        if state.stack.last() == Some(&Value::Nil) {
+                            state.stack.pop();
+                            state.frames.last_mut().unwrap().ip = *target;
+                            continue;
+                        }
+                    }
+                    Instruction::JumpIfError(target) => {
+                        if state.stack.is_empty() {
+                            return Err(RuntimeError::StackUnderflow);
+                        }
+                        if matches!(state.stack.last(), Some(Value::Error(_))) {
+                            state.frames.last_mut().unwrap().ip = *target;
+                            continue;
+                        }
+                    }
+                    Instruction::MakeError => {
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        match value {
+                            Value::String(s) => {
+                                state.stack.push(Value::Error(s));
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::String,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    Instruction::UnwrapErrorOrTrap => {
+                        let top = state.stack.last().ok_or(RuntimeError::StackUnderflow)?;
+                        if let Value::Error(msg) = top {
+                            let message = msg.as_str().to_string();
+                            return Err(RuntimeError::ErrorUnwrapTrap {
+                                message,
+                                span: Self::current_span_from_state(&state.frames, chunk),
+                            });
+                        }
+                    }
                     Instruction::ToString => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
@@ -259,6 +317,8 @@ impl VM {
                                 let op = if range.inclusive { "..=" } else { ".." };
                                 format!("{}{}{}", range.current, op, range.end)
                             }
+                            Value::Nil => "nil".to_string(),
+                            Value::Error(msg) => format!("error: {}", msg.as_str()),
                             Value::Uninitialized => {
                                 return Err(RuntimeError::TypeError {
                                     expected: ValueType::String,
@@ -571,6 +631,8 @@ impl VM {
                                             format!("{}{}{}", range.current, op, range.end)
                                         }
                                         Value::String(s) => s.as_str().to_string(),
+                                        Value::Nil => "nil".to_string(),
+                                        Value::Error(msg) => format!("error: {}", msg.as_str()),
                                     })
                                     .collect();
 

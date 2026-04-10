@@ -7,6 +7,8 @@ pub(crate) enum Value<'gc> {
     /// A GetLocal hitting this is a compiler bug (the compiler rejects
     /// reads of undefined variables), so the VM treats it as a fatal error.
     Uninitialized,
+    /// The `nil` value — represents the absence of a value for `T?` types.
+    Nil,
     Bool(bool),
     Float(f32),
     Int(i32),
@@ -19,6 +21,9 @@ pub(crate) enum Value<'gc> {
     // the Gc pointer (alias), not the underlying data.
     Object(Gc<'gc, RefLock<ObjData<'gc>>>),
     String(Gc<'gc, String>),
+    /// A language-level error value carrying a message payload.
+    /// Only produced by explicit error-union language behavior.
+    Error(Gc<'gc, String>),
 }
 
 #[derive(Debug, PartialEq, Collect)]

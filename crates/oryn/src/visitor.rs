@@ -139,6 +139,22 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
             visitor.visit_expr(expr);
         }
 
+        Statement::IfLet {
+            value,
+            name,
+            body,
+            else_body,
+        } => {
+            visitor.visit_expr(value);
+            visitor.enter_scope();
+            visitor.on_define(name, &stmt.span, &stmt.span);
+            visitor.visit_expr(body);
+            visitor.exit_scope();
+            if let Some(else_body) = else_body {
+                visitor.visit_expr(else_body);
+            }
+        }
+
         Statement::Import { .. } => {}
     }
 }
@@ -161,7 +177,8 @@ fn walk_obj_method<V: AstVisitor + ?Sized>(visitor: &mut V, method: &ObjMethod, 
 /// Default walk for a single expression. Dispatches to children based on variant.
 pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Expression>) {
     match &expr.node {
-        Expression::True
+        Expression::Nil
+        | Expression::True
         | Expression::False
         | Expression::Float(_)
         | Expression::Int(_)
@@ -217,6 +234,15 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
             }
         }
 
+        Expression::Try(inner) | Expression::UnwrapError(inner) => {
+            visitor.visit_expr(inner);
+        }
+
+        Expression::Coalesce { left, right } => {
+            visitor.visit_expr(left);
+            visitor.visit_expr(right);
+        }
+
         Expression::Block(stmts) => {
             visitor.enter_scope();
             walk_stmts(visitor, stmts);
@@ -258,6 +284,7 @@ mod tests {
                 Statement::Expression(_) => "expr_stmt",
                 Statement::FieldAssignment { .. } => "field_assign",
                 Statement::Import { .. } => "import",
+                Statement::IfLet { .. } => "if_let",
             };
             self.events.push(format!("stmt:{kind}"));
             walk_stmt(self, stmt);
