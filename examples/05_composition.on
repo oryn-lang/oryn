@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------
+// Composition via `use`
+// ---------------------------------------------------------------------
+// Shows how an `obj` can pull in fields and methods from another `obj`
+// without inheritance. This is Oryn's answer to "I want a lot of game
+// entities that share a health pool" without building a class tree.
+//
+// Run with:
+//   cargo run --bin oryn -- examples/05_composition.on
+
+// A reusable chunk of behaviour. Notice: no `abstract`, no interface —
+// just an ordinary object that happens to be convenient to compose.
 obj Health {
     hp: int
     max_hp: int
@@ -15,12 +27,19 @@ obj Health {
     }
 }
 
+// `use Health` inlines every field and method of Health into Guard.
+// Instances of Guard carry `hp` and `max_hp` directly and can call
+// `damage(...)` / `is_alive()` on themselves as if they'd been
+// declared here. This is composition, not inheritance: there is no
+// Health instance hiding inside a Guard.
 obj Guard {
     use Health
 
     name: String
     alert: bool
 
+    // Static constructor — the only place that has to know about the
+    // fields Health contributed.
     fn spawn(name: String) -> Guard {
         rn Guard { hp: 100, max_hp: 100, name: name, alert: false }
     }
@@ -30,6 +49,8 @@ obj Guard {
         print("{self.name}: Halt!")
     }
 
+    // `take_hit` calls `damage()` and `is_alive()` — both inherited
+    // via `use Health` — without ever mentioning Health explicitly.
     fn take_hit(self, amount: int) {
         self.damage(amount)
         if not self.is_alive() {

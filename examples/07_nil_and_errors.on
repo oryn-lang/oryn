@@ -11,24 +11,24 @@
 // A nillable type can hold either a real value *or* `nil`.
 // Use the postfix `?` on any type name to make it nillable.
 
-let name: String? = "Oryn"       // holds a real String
-let missing: String? = nil       // holds nil — no value at all
+let name: String? = "Oryn"  // holds a real String
+let missing: String? = nil  // holds nil — no value at all
 
-print("name    = {name}")        // → Oryn
-print("missing = {missing}")     // → nil
+print("name    = {name}")  // → Oryn
+print("missing = {missing}")  // → nil
 
 // Integers work the same way.
 let score: int? = 42
 let no_score: int? = nil
 
-print("score    = {score}")      // → 42
-print("no_score = {no_score}")   // → nil
+print("score    = {score}")  // → 42
+print("no_score = {no_score}")  // → nil
 
 // You can reassign a nillable between a value and nil freely.
 let mood: String? = "happy"
-print("mood before = {mood}")    // → happy
+print("mood before = {mood}")  // → happy
 mood = nil
-print("mood after  = {mood}")    // → nil
+print("mood after  = {mood}")  // → nil
 
 // ── 2. Nil coalescing (??) ──────────────────────────────────────────
 // `a ?? b` evaluates to `a` when it is non-nil, otherwise `b`.
@@ -36,13 +36,13 @@ print("mood after  = {mood}")    // → nil
 // The result is always the unwrapped type T.
 
 let greeting = name ?? "stranger"
-print("greeting = {greeting}")           // → Oryn  (name is non-nil)
+print("greeting = {greeting}")  // → Oryn  (name is non-nil)
 
 let fallback = missing ?? "default"
-print("fallback = {fallback}")           // → default  (missing is nil)
+print("fallback = {fallback}")  // → default  (missing is nil)
 
 let points = no_score ?? 0
-print("points   = {points}")            // → 0
+print("points   = {points}")  // → 0
 
 // Nested coalescing: since `a ?? b` returns T (non-nillable), you
 // cannot chain directly like `a ?? b ?? c`. Instead, nest with
@@ -51,12 +51,12 @@ let first: int? = nil
 let second: int? = nil
 let third: int? = 7
 let pick = first ?? (second ?? (third ?? 0))
-print("pick = {pick}")                  // → 7  (first two are nil)
+print("pick = {pick}")  // → 7  (first two are nil)
 
 let all_nil: int? = nil
 let also_nil: int? = nil
 let last_resort = all_nil ?? (also_nil ?? 99)
-print("last_resort = {last_resort}")    // → 99  (everything was nil)
+print("last_resort = {last_resort}")  // → 99  (everything was nil)
 
 // ── 3. if-let unwrapping ────────────────────────────────────────────
 // `if let x = expr { ... }` runs the body only when expr is non-nil,
@@ -86,7 +86,7 @@ let maybe_label: String? = nil
 if let label = maybe_label {
     print("label: {label}")
 }
-print("(continued after if-let)")       // always prints
+print("(continued after if-let)")  // always prints
 
 // ── 4. Nil equality ─────────────────────────────────────────────────
 // You can compare any nillable value against `nil` with `==` and `!=`.
@@ -94,10 +94,10 @@ print("(continued after if-let)")       // always prints
 let present: int? = 10
 let absent: int? = nil
 
-print("present == nil? {present == nil}")   // → false
-print("present != nil? {present != nil}")   // → true
-print("absent  == nil? {absent == nil}")    // → true
-print("absent  != nil? {absent != nil}")    // → false
+print("present == nil? {present == nil}")  // → false
+print("present != nil? {present != nil}")  // → true
+print("absent  == nil? {absent == nil}")  // → true
+print("absent  != nil? {absent != nil}")  // → false
 
 // Useful in conditions:
 if present != nil {
@@ -120,8 +120,8 @@ fn describe(value: int?) -> String {
     }
 }
 
-print(describe(5))       // → the value is 5
-print(describe(nil))     // → no value provided
+print(describe(5))  // → the value is 5
+print(describe(nil))  // → no value provided
 
 // A function that returns a nillable type.
 fn find_positive(a: int) -> int? {
@@ -133,15 +133,15 @@ fn find_positive(a: int) -> int? {
 
 let found = find_positive(42)
 let neg = 0 - 3
-let nope  = find_positive(neg)
+let nope = find_positive(neg)
 
-print("find_positive(42) = {found}")    // → 42
-print("find_positive(-3) = {nope}")     // → nil
+print("find_positive(42) = {found}")  // → 42
+print("find_positive(-3) = {nope}")  // → nil
 
 // Combine a nillable return with coalescing at the call site.
 let neg1 = 0 - 1
 let safe = find_positive(neg1) ?? 0
-print("safe = {safe}")                  // → 0
+print("safe = {safe}")  // → 0
 
 // Or use if-let to branch on the result.
 if let result = find_positive(100) {
@@ -149,6 +149,7 @@ if let result = find_positive(100) {
 } else {
     print("not positive")
 }
+
 // → found positive: 100
 
 // A function that threads nillable values through.
@@ -161,14 +162,14 @@ fn add_maybe(a: int?, b: int?) -> int? {
     rn nil
 }
 
-print("add_maybe(3, 4)     = {add_maybe(3, 4)}")       // → 7
-print("add_maybe(nil, 4)   = {add_maybe(nil, 4)}")     // → nil
-print("add_maybe(3, nil)   = {add_maybe(3, nil)}")     // → nil
-print("add_maybe(nil, nil) = {add_maybe(nil, nil)}")   // → nil
+print("add_maybe(3, 4)     = {add_maybe(3, 4)}")  // → 7
+print("add_maybe(nil, 4)   = {add_maybe(nil, 4)}")  // → nil
+print("add_maybe(3, nil)   = {add_maybe(3, nil)}")  // → nil
+print("add_maybe(nil, nil) = {add_maybe(nil, nil)}")  // → nil
 
 // Use coalescing to turn a nil sum into zero.
 let total = add_maybe(nil, 5) ?? 0
-print("total = {total}")               // → 0
+print("total = {total}")  // → 0
 
 // ── 6. Error unions (!T) ────────────────────────────────────────────
 // A function that might fail can return `!T` — an error union.
@@ -185,13 +186,13 @@ fn divide(a: int, b: int) -> !int {
 // The result carries either the value or the error.
 let ok_result = divide(10, 2)
 let bad_result = divide(10, 0)
-print("divide(10, 2) = {ok_result}")    // → 5
-print("divide(10, 0) = {bad_result}")   // → error: division by zero
+print("divide(10, 2) = {ok_result}")  // → 5
+print("divide(10, 0) = {bad_result}")  // → error: division by zero
 
 // `!expr` unwraps the success value, or traps if it's an error.
 // Use it when you're confident the call will succeed.
 let five = !divide(10, 2)
-print("unwrapped = {five}")             // → 5
+print("unwrapped = {five}")  // → 5
 
 // `try` propagates an error out of the enclosing function.
 // The enclosing function must itself return `!T`.
@@ -202,12 +203,12 @@ fn compute(a: int, b: int, c: int) -> !int {
 }
 
 let c1 = compute(100, 5, 2)
-print("compute(100, 5, 2) = {c1}")      // → 10
+print("compute(100, 5, 2) = {c1}")  // → 10
 
 let c2 = compute(100, 0, 2)
-print("compute(100, 0, 2) = {c2}")      // → error: division by zero
+print("compute(100, 0, 2) = {c2}")  // → error: division by zero
 
 let c3 = compute(100, 5, 0)
-print("compute(100, 5, 0) = {c3}")      // → error: division by zero
+print("compute(100, 5, 0) = {c3}")  // → error: division by zero
 
 print("--- done ---")

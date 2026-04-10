@@ -13,12 +13,12 @@ use crate::ui;
 /// pre-commit hook, and editor "save and check" loops.
 ///
 /// When a directory is walked, files that are reachable via `import`
-/// from another file in the batch are skipped — they'll be
-/// type-checked transitively when their importer is checked, and
-/// compiling a module file as its own entry point misbehaves (module
-/// constants only exist in module-compilation mode).
+/// from another file in the batch are checked transitively through
+/// their importer rather than as standalone entry points. They still
+/// appear in the output with a `·` glyph so you can see everything
+/// that was covered.
 ///
-/// Empty `package.on` marker files are also skipped.
+/// Empty `package.on` marker files are skipped.
 ///
 /// Exits with status 0 if every file compiles cleanly, 1 if any errors
 /// were reported.
@@ -48,24 +48,33 @@ pub fn run(paths: &[PathBuf]) {
     // the importer's `compile_file` will type-check them transitively.
     let imported = collect_imported_files(&files);
 
-    // Filter down to entry-point files, sorted for stable output.
-    let mut check_files: Vec<&PathBuf> = files
-        .iter()
-        .filter(|f| !is_package_marker(f))
-        .filter(|f| {
-            f.canonicalize()
-                .map(|c| !imported.contains(&c))
-                .unwrap_or(true)
-        })
-        .collect();
-    check_files.sort();
+    // Split into entry points and imported modules, sorted for stable
+    // output. Package markers are excluded entirely.
+    let mut entry_points: Vec<&PathBuf> = Vec::new();
+    let mut module_files: Vec<&PathBuf> = Vec::new();
 
-    let file_count = check_files.len();
+    for file in &files {
+        if is_package_marker(file) {
+            continue;
+        }
+        if let Ok(canonical) = file.canonicalize()
+            && imported.contains(&canonical)
+        {
+            module_files.push(file);
+        } else {
+            entry_points.push(file);
+        }
+    }
+
+    entry_points.sort();
+    module_files.sort();
+
+    let total_count = entry_points.len() + module_files.len();
     spinner.finish_and_clear();
 
     // ── header ──────────────────────────────────────────────────────
     println!();
-    ui::header("checking", file_count, "file");
+    ui::header("checking", total_count, "file");
     println!();
 
     // ── per-file check ──────────────────────────────────────────────
@@ -73,7 +82,7 @@ pub fn run(paths: &[PathBuf]) {
     let mut failed = 0usize;
     let mut error_reports: Vec<(String, String, Vec<oryn::OrynError>)> = Vec::new();
 
-    for file in &check_files {
+    for file in &entry_points {
         let sp = ui::file_spinner(&file.display().to_string());
 
         match oryn::Chunk::compile_file(file) {
@@ -88,12 +97,22 @@ pub fn run(paths: &[PathBuf]) {
             }
             Err(errors) => {
                 sp.finish_and_clear();
-                println!("    {} {}", style("✗").red().bold(), file.display(),);
+                println!("    {} {}", style("✗").red().bold(), file.display());
                 let source = std::fs::read_to_string(file).unwrap_or_default();
                 error_reports.push((file.display().to_string(), source, errors));
                 failed += 1;
             }
         }
+    }
+
+    // Imported modules — checked transitively via their importer.
+    for file in &module_files {
+        println!(
+            "    {} {} {}",
+            style("·").cyan(),
+            style(file.display()).dim(),
+            style("(via import)").dim(),
+        );
     }
 
     // ── error reports ───────────────────────────────────────────────

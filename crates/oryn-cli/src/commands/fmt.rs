@@ -11,25 +11,28 @@ pub fn run(target: &str) {
     let spinner = ui::spinner("formatting…");
 
     match format_target(target) {
-        Ok(formatted) => {
+        Ok(changed) => {
             spinner.finish_and_clear();
-            let count = formatted.len();
-
-            println!();
-            ui::header("formatted", count, "file");
-            println!();
-
-            for path in &formatted {
-                println!(
-                    "    {} {}",
-                    style("✎").magenta().bold(),
-                    style(path.display()).dim(),
-                );
-            }
-
             let elapsed = start.elapsed();
+
             println!();
-            ui::success("done", elapsed);
+            if changed.is_empty() {
+                ui::success("already formatted", elapsed);
+            } else {
+                ui::header("formatted", changed.len(), "file");
+                println!();
+
+                for path in &changed {
+                    println!(
+                        "    {} {}",
+                        style("✎").magenta().bold(),
+                        style(path.display()).dim(),
+                    );
+                }
+
+                println!();
+                ui::success("done", elapsed);
+            }
             println!();
         }
 
