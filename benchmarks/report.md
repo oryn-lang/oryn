@@ -1,8 +1,8 @@
 ## Summary
 
-- Overall: across 12 benchmarks, Oryn is about 1.23x slower than Lua and 6.69x slower than LuaJIT.
-- Source: across 6 benchmarks, Oryn is about 2.05x slower than Lua and 5.27x slower than LuaJIT.
-- Runtime: across 6 benchmarks, Oryn is about 0.74x slower than Lua and 8.51x slower than LuaJIT.
+- Overall: across 12 benchmarks, Oryn is about 2.22x slower than Lua.
+- Source: across 6 benchmarks, Oryn is about 1.94x slower than Lua.
+- Runtime: across 6 benchmarks, Oryn is about 2.53x slower than Lua.
 
 # Benchmark Report
 
@@ -16,9 +16,8 @@ Mode: end-to-end CLI
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/source/oryn/fib.on` | 45.0 ± 0.5 | 44.5 | 45.8 | 11.91 ± 4.78 |
-| `lua benchmarks/source/lua/fib.lua` | 17.7 ± 1.5 | 16.1 | 21.6 | 4.69 ± 1.92 |
-| `luajit benchmarks/source/lua/fib.lua` | 3.8 ± 1.5 | 3.0 | 8.0 | 1.00 |
+| `./target/release/oryn run benchmarks/source/oryn/fib.on` | 44.5 ± 0.3 | 43.9 | 44.9 | 1.76 ± 0.96 |
+| `lua benchmarks/source/lua/fib.lua` | 25.2 ± 13.7 | 17.0 | 63.2 | 1.00 |
 
 ### sum_loop
 
@@ -26,9 +25,8 @@ Mode: end-to-end CLI
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/source/oryn/sum_loop.on` | 3.2 ± 0.1 | 2.9 | 3.4 | 2.07 ± 0.26 |
-| `lua benchmarks/source/lua/sum_loop.lua` | 2.1 ± 0.2 | 1.7 | 2.6 | 1.33 ± 0.22 |
-| `luajit benchmarks/source/lua/sum_loop.lua` | 1.5 ± 0.2 | 1.2 | 1.8 | 1.00 |
+| `./target/release/oryn run benchmarks/source/oryn/sum_loop.on` | 3.3 ± 0.2 | 3.0 | 3.6 | 1.64 ± 0.18 |
+| `lua benchmarks/source/lua/sum_loop.lua` | 2.0 ± 0.2 | 1.8 | 2.3 | 1.00 |
 
 ### call_loop
 
@@ -36,9 +34,8 @@ Mode: end-to-end CLI
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/source/oryn/call_loop.on` | 13.3 ± 0.6 | 12.6 | 14.6 | 8.13 ± 1.13 |
-| `lua benchmarks/source/lua/call_loop.lua` | 5.8 ± 0.3 | 5.4 | 6.5 | 3.56 ± 0.50 |
-| `luajit benchmarks/source/lua/call_loop.lua` | 1.6 ± 0.2 | 1.3 | 2.1 | 1.00 |
+| `./target/release/oryn run benchmarks/source/oryn/call_loop.on` | 13.5 ± 0.3 | 13.1 | 14.0 | 2.23 ± 0.13 |
+| `lua benchmarks/source/lua/call_loop.lua` | 6.1 ± 0.3 | 5.7 | 6.6 | 1.00 |
 
 ### field_update
 
@@ -46,9 +43,8 @@ Mode: end-to-end CLI
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/source/oryn/field_update.on` | 12.3 ± 0.7 | 11.1 | 13.2 | 4.17 ± 1.03 |
-| `lua benchmarks/source/lua/field_update.lua` | 5.9 ± 0.4 | 5.4 | 6.7 | 2.01 ± 0.51 |
-| `luajit benchmarks/source/lua/field_update.lua` | 2.9 ± 0.7 | 2.0 | 4.3 | 1.00 |
+| `./target/release/oryn run benchmarks/source/oryn/field_update.on` | 12.5 ± 0.6 | 11.5 | 13.4 | 2.51 ± 0.19 |
+| `lua benchmarks/source/lua/field_update.lua` | 5.0 ± 0.3 | 4.6 | 5.4 | 1.00 |
 
 ### method_loop
 
@@ -56,9 +52,8 @@ Mode: end-to-end CLI
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/source/oryn/method_loop.on` | 19.2 ± 0.8 | 18.2 | 20.3 | 12.28 ± 2.12 |
-| `lua benchmarks/source/lua/method_loop.lua` | 8.1 ± 0.3 | 7.7 | 8.5 | 5.16 ± 0.89 |
-| `luajit benchmarks/source/lua/method_loop.lua` | 1.6 ± 0.3 | 1.1 | 1.9 | 1.00 |
+| `./target/release/oryn run benchmarks/source/oryn/method_loop.on` | 18.2 ± 0.5 | 17.3 | 19.1 | 2.21 ± 0.13 |
+| `lua benchmarks/source/lua/method_loop.lua` | 8.3 ± 0.4 | 7.8 | 9.0 | 1.00 |
 
 ### range_loop
 
@@ -66,9 +61,8 @@ Mode: end-to-end CLI
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/source/oryn/range_loop.on` | 3.0 ± 0.1 | 2.7 | 3.2 | 2.00 ± 0.20 |
-| `lua benchmarks/source/lua/range_loop.lua` | 1.8 ± 0.5 | 1.4 | 3.0 | 1.19 ± 0.33 |
-| `luajit benchmarks/source/lua/range_loop.lua` | 1.5 ± 0.1 | 1.3 | 1.7 | 1.00 |
+| `./target/release/oryn run benchmarks/source/oryn/range_loop.on` | 3.2 ± 0.5 | 2.8 | 3.9 | 1.51 ± 0.36 |
+| `lua benchmarks/source/lua/range_loop.lua` | 2.1 ± 0.4 | 1.7 | 2.8 | 1.00 |
 
 ## runtime
 
@@ -78,9 +72,8 @@ Mode: runtime-focused
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/runtime/oryn/fib.on` | 430.9 ± 3.5 | 428.2 | 440.2 | 18.40 ± 0.92 |
-| `lua benchmarks/runtime/lua/fib.lua` | 236.3 ± 1.0 | 234.9 | 237.6 | 10.10 ± 0.50 |
-| `luajit benchmarks/runtime/lua/fib.lua` | 23.4 ± 1.2 | 22.4 | 26.5 | 1.00 |
+| `./target/release/oryn run benchmarks/runtime/oryn/fib.on` | 438.0 ± 10.8 | 427.4 | 460.3 | 2.74 ± 0.08 |
+| `lua benchmarks/runtime/lua/fib.lua` | 159.8 ± 2.9 | 157.1 | 167.5 | 1.00 |
 
 ### sum_loop
 
@@ -88,9 +81,8 @@ Mode: runtime-focused
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/runtime/oryn/sum_loop.on` | 20.9 ± 0.4 | 20.0 | 21.3 | 4.35 ± 0.21 |
-| `lua benchmarks/runtime/lua/sum_loop.lua` | 72.3 ± 2.0 | 71.0 | 76.5 | 15.05 ± 0.80 |
-| `luajit benchmarks/runtime/lua/sum_loop.lua` | 4.8 ± 0.2 | 4.4 | 5.1 | 1.00 |
+| `./target/release/oryn run benchmarks/runtime/oryn/sum_loop.on` | 21.1 ± 0.5 | 20.6 | 22.2 | 1.55 ± 0.06 |
+| `lua benchmarks/runtime/lua/sum_loop.lua` | 13.6 ± 0.4 | 13.2 | 14.3 | 1.00 |
 
 ### call_loop
 
@@ -98,9 +90,8 @@ Mode: runtime-focused
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/runtime/oryn/call_loop.on` | 29.3 ± 0.3 | 28.6 | 29.6 | 12.39 ± 0.98 |
-| `lua benchmarks/runtime/lua/call_loop.lua` | 46.2 ± 0.9 | 44.8 | 47.5 | 19.55 ± 1.58 |
-| `luajit benchmarks/runtime/lua/call_loop.lua` | 2.4 ± 0.2 | 2.0 | 2.5 | 1.00 |
+| `./target/release/oryn run benchmarks/runtime/oryn/call_loop.on` | 28.8 ± 0.3 | 28.4 | 29.4 | 3.05 ± 0.10 |
+| `lua benchmarks/runtime/lua/call_loop.lua` | 9.4 ± 0.3 | 9.0 | 9.8 | 1.00 |
 
 ### field_update
 
@@ -108,9 +99,8 @@ Mode: runtime-focused
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/runtime/oryn/field_update.on` | 26.6 ± 1.5 | 25.7 | 30.7 | 11.19 ± 1.03 |
-| `lua benchmarks/runtime/lua/field_update.lua` | 34.3 ± 0.1 | 34.1 | 34.4 | 14.41 ± 1.05 |
-| `luajit benchmarks/runtime/lua/field_update.lua` | 2.4 ± 0.2 | 2.1 | 2.7 | 1.00 |
+| `./target/release/oryn run benchmarks/runtime/oryn/field_update.on` | 27.3 ± 1.6 | 25.2 | 31.1 | 3.76 ± 0.28 |
+| `lua benchmarks/runtime/lua/field_update.lua` | 7.3 ± 0.3 | 6.9 | 8.0 | 1.00 |
 
 ### method_loop
 
@@ -118,9 +108,8 @@ Mode: runtime-focused
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/runtime/oryn/method_loop.on` | 42.4 ± 0.6 | 41.7 | 43.5 | 16.82 ± 1.37 |
-| `lua benchmarks/runtime/lua/method_loop.lua` | 76.0 ± 1.2 | 74.6 | 78.6 | 30.15 ± 2.47 |
-| `luajit benchmarks/runtime/lua/method_loop.lua` | 2.5 ± 0.2 | 2.2 | 2.9 | 1.00 |
+| `./target/release/oryn run benchmarks/runtime/oryn/method_loop.on` | 40.5 ± 0.4 | 40.0 | 41.0 | 2.78 ± 0.06 |
+| `lua benchmarks/runtime/lua/method_loop.lua` | 14.6 ± 0.3 | 14.1 | 14.9 | 1.00 |
 
 ### range_loop
 
@@ -128,7 +117,6 @@ Mode: runtime-focused
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `./target/release/oryn run benchmarks/runtime/oryn/range_loop.on` | 3.5 ± 0.1 | 3.4 | 3.6 | 2.06 ± 0.20 |
-| `lua benchmarks/runtime/lua/range_loop.lua` | 3.0 ± 0.1 | 2.7 | 3.1 | 1.73 ± 0.19 |
-| `luajit benchmarks/runtime/lua/range_loop.lua` | 1.7 ± 0.2 | 1.4 | 2.0 | 1.00 |
+| `./target/release/oryn run benchmarks/runtime/oryn/range_loop.on` | 3.5 ± 0.2 | 3.0 | 3.8 | 1.97 ± 0.25 |
+| `lua benchmarks/runtime/lua/range_loop.lua` | 1.8 ± 0.2 | 1.4 | 2.0 | 1.00 |
 

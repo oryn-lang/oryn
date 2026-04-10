@@ -4,25 +4,15 @@
 
 ## Status
 
-Early development.
+Early development. [Language reference](https://oryn.sh/ref.html).
 
 ## Examples
 
 Start with [`examples/`](./examples). A short, commented tour of the
-language:
+language.
 
-- [`01_hello.on`](./examples/01_hello.on) — variables, types, string interpolation, `print`
-- [`02_functions.on`](./examples/02_functions.on) — `fn`, return types, recursion
-- [`03_control_flow.on`](./examples/03_control_flow.on) — `if`/`elif`/`else`, `while`, `for`, ranges
-- [`04_objects.on`](./examples/04_objects.on) — `obj` types, fields, methods, `self`
-- [`05_composition.on`](./examples/05_composition.on) — field/method composition with `use`
-- [`06_private_fields.on`](./examples/06_private_fields.on) — `pub` visibility and constructor patterns
-- [`modules/`](./examples/modules) — the module system across multiple files
+## [Benchmarks](./benchmarks/report.md)
 
-Run any of them with:
-
-```bash
-cargo run --bin oryn -- examples/01_hello.on
-```
-
-See [`examples/README.md`](./examples/README.md) for the full tour.
+- Overall: across 12 benchmarks, Oryn is about 2.22x slower than Lua.
+- Source: across 6 benchmarks, Oryn is about 1.94x slower than Lua.
+- Runtime: across 6 benchmarks, Oryn is about 2.53x slower than Lua.

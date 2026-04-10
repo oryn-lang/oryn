@@ -5,12 +5,6 @@ end
 
 local total = 0
 
-for _ = 1, 5 do
-    total = total + fib(28)
-end
-
-total = 0
-
 for _ = 1, 10 do
     total = total + fib(28)
 end

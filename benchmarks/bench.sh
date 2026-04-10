@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Compare Oryn vs Lua vs LuaJIT on equivalent programs.
+# Compare Oryn vs Lua on equivalent programs. We target plain Lua
+# because that's what game mods and embedded scripts use in practice;
+# LuaJIT is a different product with different tradeoffs and isn't
+# the benchmark we care about.
 #
 # Modes:
 #   source  - end-to-end CLI benchmark: process startup, file loading,
-#             parsing/compilation or JIT warmup, and execution are included
-#   runtime - runtime-focused benchmark: each script does repeated work in
-#             one process; LuaJIT scripts also include an internal warmup
+#             parsing/compilation, and execution are all included
+#   runtime - runtime-focused benchmark: each script does the
+#             measured work once in one process
 #   all     - run both modes
 
 set -euo pipefail
@@ -20,7 +23,7 @@ SUMMARY_FILE="$(mktemp)"
 # Build Oryn in release mode if needed.
 if [ ! -f "$ORYN" ]; then
     echo "Building Oryn (release)..."
-    (cd oryn && cargo build --release --bin oryn)
+    (cargo build --release --bin oryn)
 fi
 
 programs=()
@@ -109,8 +112,7 @@ for mode in "${modes[@]}"; do
             --runs 10 \
             --reference "$ORYN run $oryn_file" \
             --export-markdown "$temp_report" \
-            "lua $lua_file" \
-            "luajit $lua_file"
+            "lua $lua_file"
 
         mapfile -t mean_values < <(
             awk -F'|' '
@@ -123,11 +125,10 @@ for mode in "${modes[@]}"; do
             ' "$temp_report"
         )
 
-        if [ "${#mean_values[@]}" -eq 3 ]; then
-            printf '%s %s %s %s\n' \
+        if [ "${#mean_values[@]}" -eq 2 ]; then
+            printf '%s %s %s\n' \
                 "$mode" \
                 "$(awk "BEGIN { printf \"%.12f\", ${mean_values[0]} / ${mean_values[1]} }")" \
-                "$(awk "BEGIN { printf \"%.12f\", ${mean_values[0]} / ${mean_values[2]} }")" \
                 "$prog" >>"$SUMMARY_FILE"
         fi
         printf '### %s\n\n' "$prog" >>"$REPORT_FILE"
@@ -140,40 +141,34 @@ done
 
 summary_text="$(
     awk '
-        function emit(label, lua_prod, luajit_prod, count) {
+        function emit(label, lua_prod, count) {
             if (count == 0) {
                 return
             }
 
             lua_gm = exp(log(lua_prod) / count)
-            luajit_gm = exp(log(luajit_prod) / count)
-            printf "- %s: across %d benchmarks, Oryn is about %.2fx slower than Lua and %.2fx slower than LuaJIT.\n", label, count, lua_gm, luajit_gm
+            printf "- %s: across %d benchmarks, Oryn is about %.2fx slower than Lua.\n", label, count, lua_gm
         }
 
         BEGIN {
             overall_lua = 1
-            overall_luajit = 1
         }
 
         {
             mode = $1
             lua_ratio = $2
-            luajit_ratio = $3
 
             overall_lua *= lua_ratio
-            overall_luajit *= luajit_ratio
             overall_count += 1
 
             if (!(mode in seen)) {
                 seen[mode] = 1
                 mode_order[++mode_count] = mode
                 mode_lua[mode] = 1
-                mode_luajit[mode] = 1
                 mode_items[mode] = 0
             }
 
             mode_lua[mode] *= lua_ratio
-            mode_luajit[mode] *= luajit_ratio
             mode_items[mode] += 1
         }
 
@@ -184,12 +179,12 @@ summary_text="$(
 
             print "## Summary"
             print ""
-            emit("Overall", overall_lua, overall_luajit, overall_count)
+            emit("Overall", overall_lua, overall_count)
 
             for (i = 1; i <= mode_count; i += 1) {
                 mode = mode_order[i]
                 label = toupper(substr(mode, 1, 1)) substr(mode, 2)
-                emit(label, mode_lua[mode], mode_luajit[mode], mode_items[mode])
+                emit(label, mode_lua[mode], mode_items[mode])
             }
         }
     ' "$SUMMARY_FILE"
