@@ -58,7 +58,7 @@ mod parser;
 mod visitor;
 mod vm;
 
-pub use compiler::TypeMap;
+pub use compiler::{ListMethod, TypeMap};
 pub use docs::DocTable;
 pub use errors::{FileDiagnostics, OrynError, RuntimeError};
 pub use lexer::{Token, lex, lex_all};
