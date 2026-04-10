@@ -455,6 +455,54 @@ impl Compiler {
 
             Statement::Import { .. } => {}
 
+            // -- Tests --
+            Statement::Test { name, body } => {
+                // Tests lower to zero-arity, non-public functions. They
+                // are recorded in `output.tests` so the runner can
+                // invoke each one directly; the synthetic function
+                // name prevents user code from calling them.
+                let synthetic_name = format!("__test_{}", self.output.tests.len());
+                let fn_span = stmt_span.clone();
+
+                let param_fn = |_: &str, _: &Option<TypeAnnotation>| (false, ResolvedType::Unknown);
+
+                let function_idx = self.compile_function_body(FunctionBodyConfig {
+                    name: &synthetic_name,
+                    params: &[],
+                    param_types: Vec::new(),
+                    param_local_fn: &param_fn,
+                    self_name: None,
+                    body,
+                    span: &fn_span,
+                    return_type: None,
+                    is_pub: false,
+                });
+
+                self.output.tests.push(crate::compiler::TestInfo {
+                    display_name: name,
+                    function_idx,
+                    span: stmt_span,
+                });
+            }
+
+            Statement::Assert { condition } => {
+                let cond_span = condition.span.clone();
+                let cond_type = self.compile_expr(condition);
+
+                // The condition must be a bool. Unknown (inference gap)
+                // passes silently; anything else produces a clear compile
+                // error instead of letting the VM raise a generic type
+                // error at runtime.
+                self.check_types(
+                    &ResolvedType::Bool,
+                    &cond_type,
+                    &cond_span,
+                    "assert condition type mismatch",
+                );
+
+                self.emit(Instruction::Assert, &cond_span);
+            }
+
             Statement::IfLet {
                 name,
                 value,

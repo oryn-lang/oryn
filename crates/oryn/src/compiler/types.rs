@@ -73,6 +73,12 @@ pub enum Instruction {
     UnwrapErrorOrTrap,
     /// Pop a String from the stack and push a `Value::Error(...)`.
     MakeError,
+    /// Pop a boolean off the stack. Continue if true; raise
+    /// [`crate::errors::RuntimeError::AssertionFailed`] if false. A
+    /// non-boolean operand raises a type error. The span recorded for
+    /// this instruction points at the asserted expression so ariadne
+    /// underlines it directly.
+    Assert,
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +92,12 @@ pub struct CompilerOutput {
     pub spans: Vec<Range<usize>>,
     pub functions: Vec<CompiledFunction>,
     pub obj_defs: Vec<ObjDefInfo>,
+    /// Test blocks discovered during compilation. Each entry points at a
+    /// zero-arity compiled function in `functions`. Only populated for
+    /// the compilation unit that the user's invocation targets (imported
+    /// modules' test metadata is discarded during chunk merging so that
+    /// `oryn test main.on` never silently runs tests defined elsewhere).
+    pub tests: Vec<TestInfo>,
     pub errors: Vec<OrynError>,
     /// Module-level `pub let` / `pub val` constants, extracted when compiling
     /// a module. Only non-empty for module compilation units; consumers
@@ -150,6 +162,20 @@ pub struct CompiledFunction {
     pub instructions: Vec<Instruction>,
     pub spans: Vec<Range<usize>>,
     pub is_pub: bool,
+}
+
+/// Metadata for a single `test "name" { ... }` block discovered during
+/// compilation. The runner looks up the compiled body via `function_idx`
+/// and renders reports using `display_name` and `span`.
+#[derive(Debug, Clone)]
+pub struct TestInfo {
+    /// The human-readable name from the source: `test "addition works"`
+    /// stores `"addition works"`.
+    pub display_name: String,
+    /// Absolute index into `Chunk.functions` for the compiled test body.
+    pub function_idx: usize,
+    /// Byte-offset span of the entire `test "..." { ... }` statement.
+    pub span: Range<usize>,
 }
 
 /// Compile-time information about an object type. Stored in the

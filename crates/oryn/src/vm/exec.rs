@@ -163,6 +163,58 @@ impl VM {
         chunk: &Chunk,
         writer: &mut impl Write,
     ) -> Result<(), RuntimeError> {
+        self.run_from_entry(chunk, writer, None)
+    }
+
+    /// Invoke a specific compiled function by absolute index with no
+    /// arguments. The VM is reset before execution so no state from a
+    /// prior run leaks into this call. Used by the `oryn test` runner
+    /// to invoke zero-arity test bodies in isolation.
+    ///
+    /// Returns `Err(RuntimeError::ArityMismatch)` if the target function
+    /// expects arguments, or `Err(RuntimeError::UndefinedFunction)` if
+    /// `function_idx` is out of bounds.
+    pub fn run_function(&mut self, chunk: &Chunk, function_idx: usize) -> Result<(), RuntimeError> {
+        self.run_function_with_writer(chunk, function_idx, &mut std::io::stdout())
+    }
+
+    /// Same as [`VM::run_function`] but writes any script-side output
+    /// (e.g. `print` calls inside the test body) to `writer` instead of
+    /// stdout. Useful for capturing output in tests or redirecting to a
+    /// log file from the host.
+    pub fn run_function_with_writer(
+        &mut self,
+        chunk: &Chunk,
+        function_idx: usize,
+        writer: &mut impl Write,
+    ) -> Result<(), RuntimeError> {
+        let func =
+            chunk
+                .functions
+                .get(function_idx)
+                .ok_or_else(|| RuntimeError::UndefinedFunction {
+                    name: format!("<function #{function_idx}>"),
+                    span: None,
+                })?;
+
+        if func.arity != 0 {
+            return Err(RuntimeError::ArityMismatch {
+                name: func.name.clone(),
+                expected: func.arity,
+                actual: 0,
+                span: None,
+            });
+        }
+
+        self.run_from_entry(chunk, writer, Some(function_idx))
+    }
+
+    fn run_from_entry(
+        &mut self,
+        chunk: &Chunk,
+        writer: &mut impl Write,
+        entry_function_idx: Option<usize>,
+    ) -> Result<(), RuntimeError> {
         self.arena.mutate_root(|mc, state| {
             // A VM instance is reusable across runs, so reset the live
             // execution state but keep the underlying allocations.
@@ -170,10 +222,13 @@ impl VM {
             state.locals.clear();
             state.frames.clear();
 
-            // Top-level code runs in a synthetic frame whose locals
-            // window starts at offset 0 in the shared locals stack.
+            // The initial frame is either the top-level instruction
+            // stream (`entry_function_idx = None`) or a specific
+            // compiled function's body. Both drive the exact same
+            // interpreter loop below; `Return` pops the frame and the
+            // loop terminates naturally when `frames` becomes empty.
             state.frames.push(CallFrame {
-                function_idx: None,
+                function_idx: entry_function_idx,
                 ip: 0,
                 local_base: 0,
             });
@@ -790,6 +845,32 @@ impl VM {
                             }
                         }
                     }
+                    Instruction::Assert => {
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        match value {
+                            Value::Bool(true) => {
+                                // Assertions leave nothing on the stack;
+                                // `Statement::Assert` compiles as a
+                                // statement, not an expression, so there
+                                // is no value to carry forward.
+                            }
+                            Value::Bool(false) => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::AssertionFailed { span });
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Bool,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
+                    }
                 }
 
                 state.frames[frame_idx].ip += 1;
@@ -837,6 +918,7 @@ mod tests {
             spans: vec![0..0; len],
             functions: vec![],
             obj_defs: vec![],
+            tests: vec![],
         }
     }
 
@@ -867,5 +949,64 @@ mod tests {
         let mut output = Vec::new();
         vm.run_with_writer(&c, &mut output).unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "1\n");
+    }
+
+    #[test]
+    fn assert_true_runs_to_completion() {
+        let c = crate::Chunk::compile("assert(true)").unwrap();
+        let mut vm = VM::new();
+        vm.run(&c).unwrap();
+    }
+
+    #[test]
+    fn assert_false_raises_assertion_failed() {
+        let c = crate::Chunk::compile("assert(false)").unwrap();
+        let mut vm = VM::new();
+        let err = vm.run(&c).expect_err("assert(false) should trap");
+        assert!(matches!(
+            err,
+            RuntimeError::AssertionFailed { span: Some(_) }
+        ));
+    }
+
+    #[test]
+    fn run_function_invokes_test_body_in_isolation() {
+        // Two tests in the same chunk: one passes, one fails. The runner
+        // calls run_function for each; the order-independent result
+        // confirms the loop tears down state cleanly between invocations.
+        let c = crate::Chunk::compile(
+            "test \"ok\" { assert(1 + 1 == 2) }\ntest \"bad\" { assert(1 == 2) }",
+        )
+        .unwrap();
+
+        assert_eq!(c.tests().len(), 2);
+
+        let passing = c.tests()[0].function_idx;
+        let failing = c.tests()[1].function_idx;
+
+        let mut vm = VM::new();
+        vm.run_function(&c, passing).unwrap();
+
+        let err = vm.run_function(&c, failing).expect_err("test should fail");
+        assert!(matches!(err, RuntimeError::AssertionFailed { .. }));
+    }
+
+    #[test]
+    fn run_function_rejects_arity_mismatch() {
+        // Compile a one-arg function and ensure run_function refuses
+        // to invoke it without arguments.
+        let c = crate::Chunk::compile("fn id(x: int) -> int { rn x }").unwrap();
+        let mut vm = VM::new();
+        let err = vm
+            .run_function(&c, 0)
+            .expect_err("run_function should reject non-zero-arity functions");
+        assert!(matches!(
+            err,
+            RuntimeError::ArityMismatch {
+                expected: 1,
+                actual: 0,
+                ..
+            }
+        ));
     }
 }

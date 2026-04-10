@@ -100,6 +100,18 @@ pub enum Statement {
     Break,
     Continue,
     Expression(Spanned<Expression>),
+    /// `test "name" { ... }` — a named test block at module level. The
+    /// body is compiled like a zero-arity function; the runner invokes
+    /// each test in isolation.
+    Test {
+        name: String,
+        body: Spanned<Expression>,
+    },
+    /// `assert(expr)` — fail the enclosing test (or trap at runtime) if
+    /// the condition evaluates to `false`. The condition must be boolean.
+    Assert {
+        condition: Spanned<Expression>,
+    },
 }
 
 /// An expression node in the AST.

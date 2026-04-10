@@ -1,0 +1,41 @@
+// ---------------------------------------------------------------------
+// Tests and assertions
+// ---------------------------------------------------------------------
+// Shows: `test "..." { ... }` blocks and the `assert(cond)` keyword.
+//
+// Run the tests:
+//   cargo run --bin oryn -- test examples/08_tests.on
+//
+// One test deliberately fails so you can see the pretty failure output.
+
+fn add(a: int, b: int) -> int {
+    rn a + b
+}
+
+fn max(a: int, b: int) -> int {
+    if a > b {
+        rn a
+    }
+    rn b
+}
+
+test "addition works" {
+    assert(add(2, 3) == 5)
+    assert(add(0, 0) == 0)
+}
+
+test "addition is commutative" {
+    assert(add(1, 4) == add(4, 1))
+}
+
+test "max picks the larger value" {
+    assert(max(10, 3) == 10)
+    assert(max(3, 10) == 10)
+    assert(max(7, 7) == 7)
+}
+
+test "deliberately broken" {
+    // This one fails so the `oryn test` output exercises its failure
+    // rendering path. Fix or delete this block to make the suite green.
+    assert(add(1, 1) == 3)
+}

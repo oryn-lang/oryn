@@ -120,6 +120,12 @@ pub enum RuntimeError {
         message: String,
         span: Option<Range<usize>>,
     },
+    /// An `assert(expr)` condition evaluated to `false`. The span points
+    /// at the asserted expression so the CLI can slice the source to
+    /// build a `"assertion failed: <snippet>"` message.
+    AssertionFailed {
+        span: Option<Range<usize>>,
+    },
 }
 
 /// The type of a value.
@@ -216,6 +222,7 @@ impl fmt::Display for RuntimeError {
             RuntimeError::ErrorUnwrapTrap { message, .. } => {
                 write!(f, "unwrap trap: {message}")
             }
+            RuntimeError::AssertionFailed { .. } => write!(f, "assertion failed"),
         }
     }
 }
@@ -234,6 +241,7 @@ impl RuntimeError {
             RuntimeError::DivisionByZero { span } => span.as_ref(),
             RuntimeError::IntegerOverflow { span } => span.as_ref(),
             RuntimeError::ErrorUnwrapTrap { span, .. } => span.as_ref(),
+            RuntimeError::AssertionFailed { span } => span.as_ref(),
         }
     }
 }

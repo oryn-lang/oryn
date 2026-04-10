@@ -765,6 +765,32 @@ fn program<'src>() -> impl Parser<
             })
             .boxed();
 
+        // `test "name" { ... }` — module-level test block. The name is a
+        // required string literal; identifier names are rejected by the
+        // parser so test reports always render a readable sentence.
+        let test_stmt = just(Token::Test)
+            .ignore_then(select! { Token::String(s) => s })
+            .then(block.clone())
+            .map_with(|(name, body), extra| {
+                Spanned::new(Statement::Test { name, body }, extra.span())
+            })
+            .labelled("test statement")
+            .boxed();
+
+        // `assert(expr)` — parses with required parentheses and exactly
+        // one expression. The expression's span is propagated to the
+        // `Statement::Assert` node so the CLI can render the asserted
+        // source snippet in failure messages.
+        let assert_stmt = just(Token::Assert)
+            .ignore_then(just(Token::LeftParen))
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::RightParen))
+            .map_with(|condition, extra| {
+                Spanned::new(Statement::Assert { condition }, extra.span())
+            })
+            .labelled("assert statement")
+            .boxed();
+
         let while_stmt = just(Token::While)
             .ignore_then(expr.clone())
             .then(block.clone())
@@ -815,6 +841,8 @@ fn program<'src>() -> impl Parser<
             .or(val_stmt)
             .or(obj_stmt)
             .or(fn_stmt)
+            .or(test_stmt)
+            .or(assert_stmt)
             .or(return_stmt)
             .or(if_let_stmt)
             .or(if_stmt)

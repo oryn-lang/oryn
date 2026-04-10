@@ -168,6 +168,16 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
         }
 
         Statement::Import { .. } => {}
+
+        Statement::Test { body, .. } => {
+            visitor.enter_scope();
+            visitor.visit_expr(body);
+            visitor.exit_scope();
+        }
+
+        Statement::Assert { condition } => {
+            visitor.visit_expr(condition);
+        }
     }
 }
 
@@ -298,6 +308,8 @@ mod tests {
                 Statement::FieldAssignment { .. } => "field_assign",
                 Statement::Import { .. } => "import",
                 Statement::IfLet { .. } => "if_let",
+                Statement::Test { .. } => "test",
+                Statement::Assert { .. } => "assert",
             };
             self.events.push(format!("stmt:{kind}"));
             walk_stmt(self, stmt);

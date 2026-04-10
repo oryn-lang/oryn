@@ -13,6 +13,14 @@ fn parse_ok(source: &str) -> Vec<Spanned<Statement>> {
     stmts
 }
 
+/// Helper: lex + parse source, return collected parse errors (ignores
+/// lex errors). Used for negative parser tests.
+fn parse_errors(source: &str) -> Vec<OrynError> {
+    let (tokens, _lex_errors) = lex(source);
+    let (_stmts, errors) = parse(tokens);
+    errors
+}
+
 #[test]
 fn builds_ast_from_tokens() {
     let stmts = parse_ok("let x = 5");
@@ -465,6 +473,52 @@ fn parses_unless_with_else() {
             ..
         }
     ));
+}
+
+// -- Test and Assert --
+
+#[test]
+fn parses_test_statement() {
+    let stmts = parse_ok("test \"addition works\" { assert(1 == 1) }");
+    match &stmts[0].node {
+        Statement::Test { name, .. } => assert_eq!(name, "addition works"),
+        other => panic!("expected Statement::Test, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_assert_statement() {
+    let stmts = parse_ok("assert(1 == 1)");
+    assert!(matches!(&stmts[0].node, Statement::Assert { .. }));
+}
+
+#[test]
+fn test_block_contains_assert() {
+    // Parse the body and confirm the assert lands inside it.
+    let stmts = parse_ok("test \"ok\" { assert(true) }");
+    let body = match &stmts[0].node {
+        Statement::Test { body, .. } => body,
+        other => panic!("expected Statement::Test, got {other:?}"),
+    };
+    let inner = match &body.node {
+        Expression::Block(inner) => inner,
+        other => panic!("expected block body, got {other:?}"),
+    };
+    assert!(matches!(&inner[0].node, Statement::Assert { .. }));
+}
+
+#[test]
+fn test_requires_string_name() {
+    // An identifier name isn't accepted; the rest of the file still
+    // parses so we verify at least one parse error is raised.
+    let errors = parse_errors("test oops { assert(true) }");
+    assert!(!errors.is_empty());
+}
+
+#[test]
+fn assert_requires_parentheses() {
+    let errors = parse_errors("assert true");
+    assert!(!errors.is_empty());
 }
 
 // -- Precedence edge cases --

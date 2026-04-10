@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::Statement;
 use crate::compiler::{
     self, CompiledFunction, CompilerOutput, Instruction, ModuleExports, ModuleTable, ObjDefInfo,
-    TypeMap,
+    TestInfo, TypeMap,
 };
 use crate::errors::{FileDiagnostics, OrynError};
 use crate::lexer;
@@ -26,6 +26,20 @@ pub struct Chunk {
     pub(crate) spans: Vec<Range<usize>>,
     pub(crate) functions: Vec<CompiledFunction>,
     pub(crate) obj_defs: Vec<ObjDefInfo>,
+    /// Test blocks defined in this chunk's entry file (never in imported
+    /// modules). The `oryn test` runner reads this vec and invokes each
+    /// entry by `function_idx`.
+    pub(crate) tests: Vec<TestInfo>,
+}
+
+impl Chunk {
+    /// Returns the test blocks discovered in this chunk's entry file.
+    /// Consumers (the `oryn test` runner) get a read-only view; the
+    /// internal fields stay `pub(crate)` so the chunk's bytecode layout
+    /// is not part of the public API.
+    pub fn tests(&self) -> &[TestInfo] {
+        &self.tests
+    }
 }
 
 impl Chunk {
@@ -61,6 +75,7 @@ impl Chunk {
             spans: output.spans,
             functions: output.functions,
             obj_defs: output.obj_defs,
+            tests: output.tests,
         })
     }
 
@@ -203,12 +218,18 @@ impl Chunk {
         merged.spans = entry_output.spans;
         merged.functions.extend(entry_output.functions);
         merged.obj_defs.extend(entry_output.obj_defs);
+        // Tests come exclusively from the entry file. Imported modules
+        // may also define tests, but their `TestInfo` entries stay
+        // isolated so `oryn test <file>` only runs tests in the
+        // explicitly-matched file.
+        let entry_tests = entry_output.tests;
 
         Ok(Chunk {
             instructions: merged.instructions,
             spans: merged.spans,
             functions: merged.functions,
             obj_defs: merged.obj_defs,
+            tests: entry_tests,
         })
     }
 
@@ -436,6 +457,11 @@ fn compile_module(
     }
 
     // ---- Validate definitions-only ----
+    // `test` blocks are allowed alongside regular definitions so that a
+    // module can carry its own tests; they compile into the merged
+    // function table but their metadata is NOT propagated into the
+    // entry chunk's `tests` vec, so `oryn test importer.on` never
+    // silently runs tests defined in modules it imports.
     let mut errors: Vec<OrynError> = Vec::new();
     for stmt in &statements {
         match &stmt.node {
@@ -443,12 +469,14 @@ fn compile_module(
             | Statement::Val { .. }
             | Statement::Function { .. }
             | Statement::ObjDef { .. }
-            | Statement::Import { .. } => {}
+            | Statement::Import { .. }
+            | Statement::Test { .. } => {}
             _ => {
                 errors.push(OrynError::Module {
                     path: file_path.to_string_lossy().into_owned(),
-                    message: "only definitions (let, val, fn, obj, import) are allowed in modules"
-                        .to_string(),
+                    message:
+                        "only definitions (let, val, fn, obj, import, test) are allowed in modules"
+                            .to_string(),
                 });
             }
         }
@@ -591,6 +619,7 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::JumpIfError(target) => format!("JumpIfError -> {target:04}"),
             Instruction::UnwrapErrorOrTrap => "UnwrapErrorOrTrap".to_string(),
             Instruction::MakeError => "MakeError".to_string(),
+            Instruction::Assert => "Assert".to_string(),
         };
 
         writeln!(out, "{i:04}  {formatted}").unwrap();

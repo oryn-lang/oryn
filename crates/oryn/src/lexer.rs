@@ -38,6 +38,10 @@ pub enum Token {
     Try,
     #[token("nil")]
     Nil,
+    #[token("test")]
+    Test,
+    #[token("assert")]
+    Assert,
 
     // Literals.
     #[token("true")]
@@ -161,6 +165,8 @@ impl Display for Token {
             Token::Import => write!(f, "import"),
             Token::Try => write!(f, "try"),
             Token::Nil => write!(f, "nil"),
+            Token::Test => write!(f, "test"),
+            Token::Assert => write!(f, "assert"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::Float(n) => write!(f, "{n}"),
@@ -416,6 +422,41 @@ mod tests {
                 Token::Int(0),
                 Token::RightParen,
                 Token::RightCurly,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_test_and_assert_keywords() {
+        let (tokens, errors) = lex("test \"adds\" { assert(1 == 1) }");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Test,
+                Token::String("adds".into()),
+                Token::LeftCurly,
+                Token::Assert,
+                Token::LeftParen,
+                Token::Int(1),
+                Token::EqualsEquals,
+                Token::Int(1),
+                Token::RightParen,
+                Token::RightCurly,
+            ]
+        );
+
+        // Identifiers that start with `test`/`assert` stay as identifiers.
+        let (tokens, errors) = lex("tester asserting");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Ident("tester".into()),
+                Token::Ident("asserting".into()),
             ]
         );
     }

@@ -464,6 +464,7 @@ dependencies = [
  "ariadne",
  "clap",
  "console",
+ "glob",
  "indicatif",
  "oryn",
  "oryn-fmt",

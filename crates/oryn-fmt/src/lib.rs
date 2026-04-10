@@ -551,6 +551,17 @@ impl Formatter {
                     self.write_block_expression(else_body);
                 }
             }
+            Statement::Test { name, body } => {
+                self.out.push_str("test \"");
+                self.out.push_str(name);
+                self.out.push_str("\" ");
+                self.write_block_expression(body);
+            }
+            Statement::Assert { condition } => {
+                self.out.push_str("assert(");
+                self.write_expression(condition, 0);
+                self.out.push(')');
+            }
         }
     }
 

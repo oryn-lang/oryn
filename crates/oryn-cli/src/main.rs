@@ -38,6 +38,17 @@ enum Command {
     Disasm { file: PathBuf },
     /// Format Oryn source files in place
     Fmt { path: String },
+    /// Run `test` blocks in the given files or globs. With no arguments,
+    /// walks the project root (nearest `package.on`) and runs every
+    /// `.on` file that contains test blocks. Files without tests are
+    /// silently skipped. Exits non-zero if any test fails or any file
+    /// fails to compile.
+    Test {
+        /// File paths, directory paths, or glob patterns. Directories
+        /// expand to `dir/**/*.on`; bare file paths pass through.
+        #[arg(value_name = "PATTERN")]
+        patterns: Vec<String>,
+    },
     /// Start the LSP server (stdio transport)
     Lsp,
 }
@@ -50,6 +61,7 @@ fn main() {
         (Some(Command::Check { paths }), _) => commands::check::run(&paths),
         (Some(Command::Disasm { file }), _) => commands::disasm::run(&file),
         (Some(Command::Fmt { path }), _) => commands::fmt::run(&path),
+        (Some(Command::Test { patterns }), _) => commands::test::run(&patterns),
         (Some(Command::Lsp), _) => commands::lsp::run(),
         (None, Some(file)) => commands::run::run(&file),
         (None, None) => {
