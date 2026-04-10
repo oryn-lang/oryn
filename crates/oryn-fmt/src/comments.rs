@@ -152,6 +152,12 @@ impl CommentAttachments {
                     self.walk_expression(element, parsed);
                 }
             }
+            Expression::MapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.walk_expression(key, parsed);
+                    self.walk_expression(value, parsed);
+                }
+            }
             Expression::Index { object, index } => {
                 self.walk_expression(object, parsed);
                 self.walk_expression(index, parsed);

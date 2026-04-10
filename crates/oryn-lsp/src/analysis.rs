@@ -14,6 +14,13 @@ fn format_type_annotation(ann: &TypeAnnotation) -> String {
         TypeAnnotation::Nillable(inner) => format!("{}?", format_type_annotation(inner)),
         TypeAnnotation::ErrorUnion(inner) => format!("!{}", format_type_annotation(inner)),
         TypeAnnotation::List(inner) => format!("[{}]", format_type_annotation(inner)),
+        TypeAnnotation::Map(key, value) => {
+            format!(
+                "{{{}: {}}}",
+                format_type_annotation(key),
+                format_type_annotation(value)
+            )
+        }
     }
 }
 

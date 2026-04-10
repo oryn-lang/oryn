@@ -23,6 +23,10 @@ from the `oryn/` directory (where `Cargo.toml` lives).
 | [`04_objects.on`](04_objects.on)               | `obj` declarations, fields, instance methods with `self`, static methods, object literals. The struct-with-methods that replaces Lua tables. |
 | [`05_composition.on`](05_composition.on)       | `use` for field/method composition — Oryn's answer to shared health, inventory, etc. without inheritance trees. |
 | [`06_private_fields.on`](06_private_fields.on) | `pub` visibility on fields and the static-constructor pattern for enforcing invariants. |
+| [`07_nil_and_errors.on`](07_nil_and_errors.on) | `nil`, nillable values, error unions, `try`, `orelse`, and explicit error construction. |
+| [`08_tests.on`](08_tests.on)                   | `test` blocks and `assert(...)`. |
+| [`09_lists.on`](09_lists.on)                   | `[T]` list types, list literals, indexing, assignment, methods, and iteration. |
+| [`10_maps.on`](10_maps.on)                     | `{K: V}` map types, map literals, empty maps, indexing, and index assignment. |
 
 ## Multi-file example
 

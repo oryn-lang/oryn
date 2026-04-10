@@ -171,6 +171,12 @@ pub enum Instruction {
     /// methods that don't logically return anything) so expression
     /// statement discipline stays uniform.
     CallListMethod(u8, u8),
+    /// Pop `2 * n` values as key/value pairs and push a new map.
+    MakeMap(u32),
+    /// Pop key and map; push `value` when present or `nil` when absent.
+    MapGet,
+    /// Pop value, key, and map; insert or replace the entry.
+    MapSet,
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +406,9 @@ pub(crate) enum ResolvedType {
     /// `[T]` — a homogeneous list whose element type is tracked
     /// statically but erased at runtime.
     List(Box<ResolvedType>),
+    /// `{K: V}` — a homogeneous map whose key/value types are tracked
+    /// statically but erased at runtime.
+    Map(Box<ResolvedType>, Box<ResolvedType>),
     /// Internal-only nil type. Used for contextual typing of the `nil`
     /// literal. Not user-declarable.
     Nil,
@@ -473,6 +482,9 @@ impl ResolvedType {
             ResolvedType::Nillable(inner) => format!("{}?", inner.display_name()).into(),
             ResolvedType::ErrorUnion(inner) => format!("!{}", inner.display_name()).into(),
             ResolvedType::List(inner) => format!("[{}]", inner.display_name()).into(),
+            ResolvedType::Map(key, value) => {
+                format!("{{{}: {}}}", key.display_name(), value.display_name()).into()
+            }
             ResolvedType::Nil => "nil".into(),
             ResolvedType::Error => "error".into(),
             ResolvedType::Unknown => "unknown".into(),
@@ -495,6 +507,13 @@ impl ResolvedType {
     /// Returns `true` if this is an `ErrorUnion` type.
     pub(crate) fn is_error_union(&self) -> bool {
         matches!(self, ResolvedType::ErrorUnion(_))
+    }
+
+    pub(crate) fn is_map_key_type(&self) -> bool {
+        matches!(
+            self,
+            ResolvedType::Str | ResolvedType::Int | ResolvedType::Bool | ResolvedType::Unknown
+        )
     }
 
     /// If this is `ErrorUnion(T)`, returns `Some(&T)`. Otherwise `None`.
@@ -560,6 +579,22 @@ impl ResolvedType {
             return expected_inner.as_ref() == actual_inner.as_ref()
                 || matches!(expected_inner.as_ref(), ResolvedType::Unknown)
                 || matches!(actual_inner.as_ref(), ResolvedType::Unknown);
+        }
+
+        // Maps are invariant in key/value types, except that `Unknown`
+        // from an empty literal `{}` can flow into a declared map type.
+        if let (
+            ResolvedType::Map(expected_key, expected_value),
+            ResolvedType::Map(actual_key, actual_value),
+        ) = (self, actual)
+        {
+            let key_matches = expected_key.as_ref() == actual_key.as_ref()
+                || matches!(expected_key.as_ref(), ResolvedType::Unknown)
+                || matches!(actual_key.as_ref(), ResolvedType::Unknown);
+            let value_matches = expected_value.as_ref() == actual_value.as_ref()
+                || matches!(expected_value.as_ref(), ResolvedType::Unknown)
+                || matches!(actual_value.as_ref(), ResolvedType::Unknown);
+            return key_matches && value_matches;
         }
 
         false

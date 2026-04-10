@@ -381,6 +381,7 @@ impl Compiler {
             // `items[0].method()` resolve correctly.
             Expression::Index { object, .. } => match self.infer_object_type(&object.node) {
                 ResolvedType::List(inner) => *inner,
+                ResolvedType::Map(_, value) => ResolvedType::Nillable(value),
                 _ => ResolvedType::Unknown,
             },
             _ => ResolvedType::Unknown,
@@ -1560,36 +1561,109 @@ impl Compiler {
                 ResolvedType::List(Box::new(elem_ty))
             }
 
+            // -- Maps --
+            Expression::MapLiteral(entries) => {
+                if entries.is_empty() {
+                    // Empty literals carry no key/value types. The
+                    // surrounding context reconciles this against any
+                    // declared annotation and reports "cannot infer" if
+                    // none is present.
+                    self.emit(Instruction::MakeMap(0), &span);
+                    return ResolvedType::Map(
+                        Box::new(ResolvedType::Unknown),
+                        Box::new(ResolvedType::Unknown),
+                    );
+                }
+
+                let count = entries.len();
+                let mut entries = entries.into_iter();
+                let (first_key, first_value) = entries.next().unwrap();
+                let key_ty = self.compile_expr(first_key);
+                if !key_ty.is_map_key_type() {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        format!(
+                            "map key type must be `String`, `int`, or `bool`, got `{}`",
+                            key_ty.display_name()
+                        ),
+                    ));
+                }
+                let value_ty = self.compile_expr(first_value);
+
+                for (key, value) in entries {
+                    let key_span = key.span.clone();
+                    let actual_key_ty = self.compile_expr(key);
+                    if !actual_key_ty.is_map_key_type() {
+                        self.output.errors.push(OrynError::compiler(
+                            key_span.clone(),
+                            format!(
+                                "map key type must be `String`, `int`, or `bool`, got `{}`",
+                                actual_key_ty.display_name()
+                            ),
+                        ));
+                    }
+                    self.check_types(&key_ty, &actual_key_ty, &key_span, "map key type mismatch");
+
+                    let value_span = value.span.clone();
+                    let actual_value_ty = self.compile_expr(value);
+                    self.check_types(
+                        &value_ty,
+                        &actual_value_ty,
+                        &value_span,
+                        "map value type mismatch",
+                    );
+                }
+
+                self.emit(Instruction::MakeMap(count as u32), &span);
+                ResolvedType::Map(Box::new(key_ty), Box::new(value_ty))
+            }
+
             Expression::Index { object, index } => {
                 let object_span = object.span.clone();
                 let object_ty = self.compile_expr(*object);
 
-                let element_ty = match &object_ty {
-                    ResolvedType::List(inner) => (**inner).clone(),
-                    ResolvedType::Unknown => ResolvedType::Unknown,
+                let (key_ty, result_ty, instruction, key_message) = match &object_ty {
+                    ResolvedType::List(inner) => (
+                        ResolvedType::Int,
+                        (**inner).clone(),
+                        Instruction::ListGet,
+                        "list index must be `int`",
+                    ),
+                    ResolvedType::Map(key, value) => (
+                        (**key).clone(),
+                        ResolvedType::Nillable(Box::new((**value).clone())),
+                        Instruction::MapGet,
+                        "map key type mismatch",
+                    ),
+                    ResolvedType::Unknown => (
+                        ResolvedType::Unknown,
+                        ResolvedType::Unknown,
+                        Instruction::ListGet,
+                        "index type mismatch",
+                    ),
                     _ => {
                         self.output.errors.push(OrynError::compiler(
                             object_span,
                             format!(
-                                "cannot index into non-list type `{}`",
+                                "cannot index into non-list/map type `{}`",
                                 object_ty.display_name()
                             ),
                         ));
-                        ResolvedType::Unknown
+                        (
+                            ResolvedType::Unknown,
+                            ResolvedType::Unknown,
+                            Instruction::ListGet,
+                            "index type mismatch",
+                        )
                     }
                 };
 
                 let index_span = index.span.clone();
                 let index_ty = self.compile_expr(*index);
-                self.check_types(
-                    &ResolvedType::Int,
-                    &index_ty,
-                    &index_span,
-                    "list index must be `int`",
-                );
+                self.check_types(&key_ty, &index_ty, &index_span, key_message);
 
-                self.emit(Instruction::ListGet, &span);
-                element_ty
+                self.emit(instruction, &span);
+                result_ty
             }
         }
     }

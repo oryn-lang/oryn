@@ -178,7 +178,11 @@ pub enum Expression {
     /// empty literals have no context-free element type and are rejected
     /// at the compiler level with a clearer error than the parser could give.
     ListLiteral(Vec<Spanned<Expression>>),
-    /// `object[index]` — list indexing. Also parses on non-list receivers
+    /// `{ key: value }` — a homogeneous map literal. Empty literals
+    /// have no context-free key/value types and are reconciled against
+    /// annotations by the compiler.
+    MapLiteral(Vec<(Spanned<Expression>, Spanned<Expression>)>),
+    /// `object[index]` — list or map indexing. Also parses on other receivers
     /// but the compiler rejects those with a type error.
     Index {
         object: Box<Spanned<Expression>>,
@@ -223,6 +227,9 @@ pub enum TypeAnnotation {
     /// `[T]` — a homogeneous list whose element type is tracked statically
     /// but erased at runtime.
     List(Box<TypeAnnotation>),
+    /// `{K: V}` — a homogeneous map whose key and value types are tracked
+    /// statically but erased at runtime.
+    Map(Box<TypeAnnotation>, Box<TypeAnnotation>),
 }
 
 /// A field declared inside an `obj` body. The `is_pub` flag controls

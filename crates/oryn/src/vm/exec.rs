@@ -6,7 +6,7 @@ use gc_arena::{Arena, Gc, Rootable};
 
 use crate::compiler::{BuiltinFunction, Instruction, ListMethod};
 use crate::errors::{RuntimeError, ValueType};
-use crate::vm::value::{ListData, ObjData, RangeValue};
+use crate::vm::value::{ListData, MapData, MapKey, ObjData, RangeValue};
 
 use super::chunk::Chunk;
 use super::value::{CallFrame, Value, VmState};
@@ -344,6 +344,10 @@ impl VM {
                                 let data = list_ref.borrow();
                                 format!("<list of {}>", data.elements.len())
                             }
+                            Value::Map(map_ref) => {
+                                let data = map_ref.borrow();
+                                format!("<map of {}>", data.entries.len())
+                            }
                             Value::Nil => "nil".to_string(),
                             Value::Error(msg) => format!("error: {}", msg.as_str()),
                             Value::Uninitialized => {
@@ -679,6 +683,10 @@ impl VM {
                                             let data = list_ref.borrow();
                                             format!("<list of {}>", data.elements.len())
                                         }
+                                        Value::Map(map_ref) => {
+                                            let data = map_ref.borrow();
+                                            format!("<map of {}>", data.entries.len())
+                                        }
                                         Value::String(s) => s.as_str().to_string(),
                                         Value::Nil => "nil".to_string(),
                                         Value::Error(msg) => format!("error: {}", msg.as_str()),
@@ -964,6 +972,115 @@ impl VM {
                         }
                         list_ref.borrow_mut(mc).elements[index as usize] = value;
                     }
+                    Instruction::MakeMap(n) => {
+                        let n = *n as usize;
+                        let mut entries = Vec::with_capacity(n);
+                        let values = state.stack.split_off(state.stack.len() - (n * 2));
+                        let mut values = values.into_iter();
+
+                        while let Some(key_value) = values.next() {
+                            let value = values.next().ok_or(RuntimeError::StackUnderflow)?;
+                            let key = match Self::map_key_from_value(&key_value) {
+                                Some(key) => key,
+                                None => {
+                                    let span = Self::current_span_from_state(&state.frames, chunk);
+                                    return Err(RuntimeError::TypeError {
+                                        expected: ValueType::MapKey,
+                                        actual: ValueType::from(&key_value),
+                                        span,
+                                    });
+                                }
+                            };
+
+                            if let Some((_, existing)) =
+                                entries.iter_mut().find(|(existing, _)| existing == &key)
+                            {
+                                *existing = value;
+                            } else {
+                                entries.push((key, value));
+                            }
+                        }
+
+                        let map = MapData { entries };
+                        state.stack.push(Value::Map(Gc::new(mc, RefLock::new(map))));
+                    }
+                    Instruction::MapGet => {
+                        let key_value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let map = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        let key = match Self::map_key_from_value(&key_value) {
+                            Some(key) => key,
+                            None => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::MapKey,
+                                    actual: ValueType::from(&key_value),
+                                    span,
+                                });
+                            }
+                        };
+
+                        match map {
+                            Value::Map(map_ref) => {
+                                let data = map_ref.borrow();
+                                let value = data
+                                    .entries
+                                    .iter()
+                                    .find(|(existing, _)| existing == &key)
+                                    .map(|(_, value)| value.clone())
+                                    .unwrap_or(Value::Nil);
+                                state.stack.push(value);
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Map,
+                                    actual: ValueType::from(&map),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    Instruction::MapSet => {
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let key_value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let map = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        let key = match Self::map_key_from_value(&key_value) {
+                            Some(key) => key,
+                            None => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::MapKey,
+                                    actual: ValueType::from(&key_value),
+                                    span,
+                                });
+                            }
+                        };
+
+                        match map {
+                            Value::Map(map_ref) => {
+                                let mut data = map_ref.borrow_mut(mc);
+                                if let Some((_, existing)) = data
+                                    .entries
+                                    .iter_mut()
+                                    .find(|(existing, _)| existing == &key)
+                                {
+                                    *existing = value;
+                                } else {
+                                    data.entries.push((key, value));
+                                }
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Map,
+                                    actual: ValueType::from(&map),
+                                    span,
+                                });
+                            }
+                        }
+                    }
                     Instruction::CallListMethod(id, _arity) => {
                         // Decode the method id. An unknown id is a
                         // compiler bug — the compiler only ever emits
@@ -1080,6 +1197,15 @@ impl VM {
                 &chunk.functions[idx].instructions,
                 &chunk.functions[idx].spans,
             ),
+        }
+    }
+
+    fn map_key_from_value(value: &Value<'_>) -> Option<MapKey> {
+        match value {
+            Value::String(s) => Some(MapKey::String(s.as_str().to_string())),
+            Value::Int(i) => Some(MapKey::Int(*i)),
+            Value::Bool(b) => Some(MapKey::Bool(*b)),
+            _ => None,
         }
     }
 
@@ -1259,6 +1385,29 @@ mod tests {
     fn list_index_assignment_mutates_in_place() {
         let out = run_source("let xs: [int] = [1, 2, 3]\nxs[1] = 99\nprint(xs[1])");
         assert_eq!(String::from_utf8(out).unwrap(), "99\n");
+    }
+
+    #[test]
+    fn map_literal_and_index_round_trip() {
+        let out = run_source(
+            "let stats: {String: int} = {\"hp\": 10, \"mp\": 4}\nprint(stats[\"hp\"] orelse 0)\nprint(stats[\"mp\"] orelse 0)",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "10\n4\n");
+    }
+
+    #[test]
+    fn missing_map_key_returns_nil() {
+        let out =
+            run_source("let stats: {String: int} = {\"hp\": 10}\nprint(stats[\"xp\"] orelse 99)");
+        assert_eq!(String::from_utf8(out).unwrap(), "99\n");
+    }
+
+    #[test]
+    fn map_index_assignment_inserts_and_replaces() {
+        let out = run_source(
+            "let stats: {String: int} = {}\nstats[\"hp\"] = 10\nstats[\"hp\"] = 12\nprint(stats[\"hp\"] orelse 0)",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "12\n");
     }
 
     #[test]

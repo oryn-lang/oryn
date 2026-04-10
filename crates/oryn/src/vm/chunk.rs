@@ -630,6 +630,9 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
                 let s = if *arity == 1 { "arg" } else { "args" };
                 format!("CallListMethod {name} ({arity} {s} + self)")
             }
+            Instruction::MakeMap(n) => format!("MakeMap {n}"),
+            Instruction::MapGet => "MapGet".to_string(),
+            Instruction::MapSet => "MapSet".to_string(),
         };
 
         writeln!(out, "{i:04}  {formatted}").unwrap();

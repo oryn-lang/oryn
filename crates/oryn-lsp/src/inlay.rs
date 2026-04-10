@@ -135,6 +135,16 @@ mod tests {
     }
 
     #[test]
+    fn inlay_hint_for_inferred_map_type() {
+        let hints = hints_for("let stats = {\"hp\": 10}");
+        assert_eq!(hints.len(), 1);
+        match &hints[0].label {
+            InlayHintLabel::String(s) => assert_eq!(s, ": {String: int}"),
+            other => panic!("unexpected label: {other:?}"),
+        }
+    }
+
+    #[test]
     fn inlay_hint_hidden_outside_viewport() {
         let source = "let x = 1\nlet y = 2\nlet z = 3";
         let symbols = analyze(source);

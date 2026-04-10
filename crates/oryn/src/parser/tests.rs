@@ -781,6 +781,44 @@ fn parses_list_method_calls() {
 }
 
 #[test]
+fn parses_map_type_annotation() {
+    let stmts = parse_ok(r#"let stats: {String: int} = {"hp": 10}"#);
+    match &stmts[0].node {
+        Statement::Let {
+            type_ann: Some(TypeAnnotation::Map(key, value)),
+            ..
+        } => {
+            assert!(matches!(key.as_ref(), TypeAnnotation::Named(s) if s == &["String"]));
+            assert!(matches!(value.as_ref(), TypeAnnotation::Named(s) if s == &["int"]));
+        }
+        other => panic!("expected Let with Map type, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_map_literal_expression() {
+    let stmts = parse_ok(r#"{"hp": 10, "mp": 4}"#);
+    match &stmts[0].node {
+        Statement::Expression(Spanned {
+            node: Expression::MapLiteral(entries),
+            ..
+        }) => assert_eq!(entries.len(), 2),
+        other => panic!("expected MapLiteral expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_empty_map_literal() {
+    let stmts = parse_ok("let stats: {String: int} = {}");
+    match &stmts[0].node {
+        Statement::Let { value, .. } => {
+            assert!(matches!(value.node, Expression::MapLiteral(ref v) if v.is_empty()));
+        }
+        other => panic!("expected Let with empty MapLiteral, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_nested_field_assignment() {
     let stmts = parse_ok("holder.counter.count = 5");
     match &stmts[0].node {

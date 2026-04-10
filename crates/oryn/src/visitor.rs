@@ -281,6 +281,13 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
             }
         }
 
+        Expression::MapLiteral(entries) => {
+            for (key, value) in entries {
+                visitor.visit_expr(key);
+                visitor.visit_expr(value);
+            }
+        }
+
         Expression::Index { object, index } => {
             visitor.visit_expr(object);
             visitor.visit_expr(index);

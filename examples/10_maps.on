@@ -1,0 +1,36 @@
+// ---------------------------------------------------------------------
+// Maps
+// ---------------------------------------------------------------------
+// Shows: `{K: V}` map type syntax, map literals, empty maps, indexing,
+// and index assignment.
+//
+// Map keys can be `String`, `int`, or `bool`. Values can be any Oryn
+// type. Indexing returns `V?` because the key might not be present.
+//
+// Run with:
+//   cargo run --bin oryn -- examples/10_maps.on
+
+let stats: {String: int} = { "hp": 100, "mp": 25 }
+
+print("initial hp:")
+print(stats["hp"] orelse 0)
+
+// Assigning through an index inserts a new key or replaces an existing one.
+stats["hp"] = 80
+stats["xp"] = 1200
+
+print("after changes:")
+print(stats["hp"] orelse 0)
+print(stats["xp"] orelse 0)
+
+// A missing key returns nil, so use `orelse` or `if let`.
+print("missing stamina fallback:")
+print(stats["stamina"] orelse 50)
+
+let flags: {String: bool} = {}
+flags["door_open"] = true
+
+if let door_open = flags["door_open"] {
+    print("door open:")
+    print(door_open)
+}

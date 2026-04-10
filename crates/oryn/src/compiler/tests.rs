@@ -245,7 +245,7 @@ fn indexing_non_list_is_error() {
     assert!(
         errors
             .iter()
-            .any(|e| format!("{e}").contains("cannot index into non-list type")),
+            .any(|e| format!("{e}").contains("cannot index into non-list/map type")),
         "expected non-list index error, got {errors:?}"
     );
 }
@@ -269,6 +269,83 @@ fn push_argument_type_checked_against_element_type() {
             .iter()
             .any(|e| format!("{e}").contains("list `push` argument 1 type mismatch")),
         "expected push type mismatch, got {errors:?}"
+    );
+}
+
+#[test]
+fn map_literal_emits_make_map() {
+    let chunk = crate::Chunk::compile(r#"let stats: {String: int} = {"hp": 10}"#).unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::MakeMap(1))),
+        "expected MakeMap(1), got {:?}",
+        chunk.instructions
+    );
+}
+
+#[test]
+fn map_index_emits_map_get() {
+    let chunk =
+        crate::Chunk::compile("let stats: {String: int} = {\"hp\": 10}\nlet hp = stats[\"hp\"]")
+            .unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::MapGet)),
+        "expected MapGet, got {:?}",
+        chunk.instructions
+    );
+}
+
+#[test]
+fn map_index_assignment_emits_map_set() {
+    let chunk = crate::Chunk::compile("let stats: {String: int} = {}\nstats[\"hp\"] = 10").unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::MapSet)),
+        "expected MapSet, got {:?}",
+        chunk.instructions
+    );
+}
+
+#[test]
+fn empty_map_without_annotation_is_error() {
+    let errors = crate::Chunk::compile("let stats = {}").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("empty map literal")),
+        "expected empty-map error, got {errors:?}"
+    );
+}
+
+#[test]
+fn map_key_type_is_checked() {
+    let errors =
+        crate::Chunk::compile("let stats: {String: int} = {\"hp\": 10}\nlet hp = stats[1]")
+            .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("map key type mismatch")),
+        "expected map key type error, got {errors:?}"
+    );
+}
+
+#[test]
+fn map_value_type_is_checked() {
+    let errors = crate::Chunk::compile(r#"let stats: {String: int} = {"hp": "full"}"#).unwrap_err();
+    assert!(
+        errors.iter().any(|e| {
+            let s = format!("{e}");
+            s.contains("type mismatch") || s.contains("map value type mismatch")
+        }),
+        "expected map value type error, got {errors:?}"
     );
 }
 

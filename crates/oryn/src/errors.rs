@@ -148,6 +148,8 @@ pub enum ValueType {
     Range,
     String,
     List,
+    Map,
+    MapKey,
 }
 
 impl From<&Value<'_>> for ValueType {
@@ -165,6 +167,7 @@ impl From<&Value<'_>> for ValueType {
             Value::Range(_) => ValueType::Range,
             Value::String(_) => ValueType::String,
             Value::List(_) => ValueType::List,
+            Value::Map(_) => ValueType::Map,
         }
     }
 }
@@ -181,6 +184,8 @@ impl fmt::Display for ValueType {
             ValueType::Range => write!(f, "range"),
             ValueType::String => write!(f, "string"),
             ValueType::List => write!(f, "list"),
+            ValueType::Map => write!(f, "map"),
+            ValueType::MapKey => write!(f, "map key"),
         }
     }
 }

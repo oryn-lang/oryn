@@ -79,10 +79,17 @@ pub fn hover(
         oryn::Token::LessThanEquals => Some("`<=` - less than or equal".to_string()),
         oryn::Token::GreaterThanEquals => Some("`>=` - greater than or equal".to_string()),
         oryn::Token::LeftBracket => Some(
-            "`[` - list literal or list index (e.g. `[1, 2, 3]`, `xs[0]`, `[int]`)".to_string(),
+            "`[` - list literal or index expression (e.g. `[1, 2, 3]`, `xs[0]`, `[int]`)"
+                .to_string(),
         ),
         oryn::Token::RightBracket => {
             Some("`]` - closes a list literal, index expression, or list type".to_string())
+        }
+        oryn::Token::LeftCurly => {
+            Some("`{` - opens a block, object literal, map literal, or map type".to_string())
+        }
+        oryn::Token::RightCurly => {
+            Some("`}` - closes a block, object literal, map literal, or map type".to_string())
         }
         _ => None,
     }?;
@@ -504,6 +511,20 @@ mod tests {
         let source = "let xs = [1, 2, 3]";
         let out = hover_at(source, "xs =");
         assert!(out.contains("let xs: [int]"), "got: {out}");
+    }
+
+    #[test]
+    fn map_typed_let_shows_map_type() {
+        let source = "let stats: {String: int} = {\"hp\": 10}";
+        let out = hover_at(source, "stats:");
+        assert!(out.contains("let stats: {String: int}"), "got: {out}");
+    }
+
+    #[test]
+    fn inferred_map_type_is_shown() {
+        let source = "let stats = {\"hp\": 10}";
+        let out = hover_at(source, "stats =");
+        assert!(out.contains("let stats: {String: int}"), "got: {out}");
     }
 
     /// Hovering on a static method call that crosses module boundaries

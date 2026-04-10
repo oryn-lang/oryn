@@ -28,6 +28,10 @@ pub(crate) enum Value<'gc> {
     /// compile time and erased at runtime; storage is just a
     /// `Vec<Value<'gc>>` wrapped in `RefLock` for in-place mutation.
     List(Gc<'gc, RefLock<ListData<'gc>>>),
+    /// A homogeneous map. Key/value typing is enforced statically at
+    /// compile time and erased at runtime; keys are stored as primitive
+    /// owned values so lookup does not depend on GC pointer identity.
+    Map(Gc<'gc, RefLock<MapData<'gc>>>),
 }
 
 /// Runtime storage for a list value. Mirrors [`ObjData`] — the fields
@@ -37,6 +41,20 @@ pub(crate) enum Value<'gc> {
 #[collect(no_drop)]
 pub(crate) struct ListData<'gc> {
     pub elements: Vec<Value<'gc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Collect)]
+#[collect(no_drop)]
+pub(crate) enum MapKey {
+    String(String),
+    Int(i32),
+    Bool(bool),
+}
+
+#[derive(Debug, PartialEq, Collect)]
+#[collect(no_drop)]
+pub(crate) struct MapData<'gc> {
+    pub entries: Vec<(MapKey, Value<'gc>)>,
 }
 
 #[derive(Debug, PartialEq, Collect)]

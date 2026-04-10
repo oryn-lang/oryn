@@ -49,6 +49,15 @@ impl Compiler {
                 "cannot infer element type of empty list literal; add a type annotation like `let xs: [int] = []`",
             ));
         }
+        if declared_type.is_none()
+            && let ResolvedType::Map(key, value) = &inferred_type
+            && (matches!(**key, ResolvedType::Unknown) || matches!(**value, ResolvedType::Unknown))
+        {
+            self.output.errors.push(OrynError::compiler(
+                span.clone(),
+                "cannot infer key/value types of empty map literal; add a type annotation like `let m: {String: int} = {}`",
+            ));
+        }
 
         if let Some(ref decl) = declared_type {
             self.check_types(decl, &inferred_type, span, "type mismatch");
@@ -235,47 +244,63 @@ impl Compiler {
                 {
                     self.output.errors.push(OrynError::compiler(
                         stmt_span.clone(),
-                        format!("cannot mutate list through val binding `{name}`"),
+                        format!("cannot mutate indexed value through val binding `{name}`"),
                     ));
                 }
 
                 let object_span = object.span.clone();
                 let object_ty = self.compile_expr(object);
 
-                let elem_ty = match &object_ty {
-                    ResolvedType::List(inner) => (**inner).clone(),
-                    ResolvedType::Unknown => ResolvedType::Unknown,
-                    _ => {
-                        self.output.errors.push(OrynError::compiler(
-                            object_span,
-                            format!(
-                                "cannot index into non-list type `{}`",
-                                object_ty.display_name()
-                            ),
-                        ));
-                        ResolvedType::Unknown
-                    }
-                };
+                let (key_ty, value_slot_ty, instruction, key_message, value_message) =
+                    match &object_ty {
+                        ResolvedType::List(inner) => (
+                            ResolvedType::Int,
+                            (**inner).clone(),
+                            Instruction::ListSet,
+                            "list index must be `int`",
+                            "list element type mismatch",
+                        ),
+                        ResolvedType::Map(key, value) => (
+                            (**key).clone(),
+                            (**value).clone(),
+                            Instruction::MapSet,
+                            "map key type mismatch",
+                            "map value type mismatch",
+                        ),
+                        ResolvedType::Unknown => (
+                            ResolvedType::Unknown,
+                            ResolvedType::Unknown,
+                            Instruction::ListSet,
+                            "index type mismatch",
+                            "indexed assignment value type mismatch",
+                        ),
+                        _ => {
+                            self.output.errors.push(OrynError::compiler(
+                                object_span,
+                                format!(
+                                    "cannot index into non-list/map type `{}`",
+                                    object_ty.display_name()
+                                ),
+                            ));
+                            (
+                                ResolvedType::Unknown,
+                                ResolvedType::Unknown,
+                                Instruction::ListSet,
+                                "index type mismatch",
+                                "indexed assignment value type mismatch",
+                            )
+                        }
+                    };
 
                 let index_span = index.span.clone();
                 let index_ty = self.compile_expr(index);
-                self.check_types(
-                    &ResolvedType::Int,
-                    &index_ty,
-                    &index_span,
-                    "list index must be `int`",
-                );
+                self.check_types(&key_ty, &index_ty, &index_span, key_message);
 
                 let value_span = value.span.clone();
                 let value_ty = self.compile_expr(value);
-                self.check_types(
-                    &elem_ty,
-                    &value_ty,
-                    &value_span,
-                    "list element type mismatch",
-                );
+                self.check_types(&value_slot_ty, &value_ty, &value_span, value_message);
 
-                self.emit(Instruction::ListSet, &stmt_span);
+                self.emit(instruction, &stmt_span);
             }
             Statement::FieldAssignment {
                 object,

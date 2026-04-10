@@ -532,6 +532,18 @@ impl<'a> Formatter<'a> {
                 }
                 self.out.push(']');
             }
+            Expression::MapLiteral(entries) => {
+                self.out.push('{');
+                for (i, (key, value)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        self.out.push_str(", ");
+                    }
+                    self.write_expression(key, 0);
+                    self.out.push_str(": ");
+                    self.write_expression(value, 0);
+                }
+                self.out.push('}');
+            }
             Expression::Index { object, index } => {
                 self.write_expression(object, PREC_POSTFIX);
                 self.out.push('[');
@@ -576,6 +588,13 @@ impl<'a> Formatter<'a> {
                 self.out.push('[');
                 self.write_type_name(inner);
                 self.out.push(']');
+            }
+            TypeAnnotation::Map(key, value) => {
+                self.out.push('{');
+                self.write_type_name(key);
+                self.out.push_str(": ");
+                self.write_type_name(value);
+                self.out.push('}');
             }
         }
     }

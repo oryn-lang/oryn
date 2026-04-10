@@ -154,6 +154,7 @@ fn atom<'src>(
     // multi-line literals. The compiler rejects empty literals because
     // an empty `[]` has no context-free element type.
     let list_literal = expr
+        .clone()
         .separated_by(just(Token::Comma).then(nl.clone()))
         .allow_trailing()
         .collect::<Vec<Spanned<Expression>>>()
@@ -163,6 +164,22 @@ fn atom<'src>(
         )
         .map(Expression::ListLiteral);
 
+    // { key: value, ... } — a map literal. Empty `{}` is allowed; the
+    // compiler reconciles it against a declared `{K: V}` annotation.
+    let map_entry = expr
+        .clone()
+        .then_ignore(just(Token::Colon))
+        .then(expr.clone());
+    let map_literal = map_entry
+        .separated_by(just(Token::Comma).then(nl.clone()))
+        .allow_trailing()
+        .collect::<Vec<(Spanned<Expression>, Spanned<Expression>)>>()
+        .delimited_by(
+            just(Token::LeftCurly).then(nl.clone()),
+            nl.clone().then(just(Token::RightCurly)),
+        )
+        .map(Expression::MapLiteral);
+
     bool_lit
         .or(nil_lit)
         .or(float)
@@ -171,6 +188,7 @@ fn atom<'src>(
         .or(ident_or_call)
         .or(paren)
         .or(list_literal)
+        .or(map_literal)
         .map_with(|node, extra| Spanned::new(node, extra.span()))
         .labelled("expression")
 }
@@ -481,6 +499,7 @@ fn program<'src>() -> impl Parser<
         //   T?              → TypeAnnotation::Nillable
         //   !T              → TypeAnnotation::ErrorUnion
         //   [T]             → TypeAnnotation::List
+        //   {K: V}          → TypeAnnotation::Map
         //   !(T?), (!T)?    → allowed with parentheses
         //   !T?             → rejected (ambiguous without parentheses)
         let type_ann_parser = recursive(|type_ann_rec| {
@@ -495,10 +514,18 @@ fn program<'src>() -> impl Parser<
                 .delimited_by(just(Token::LeftParen), just(Token::RightParen));
 
             let list_type = type_ann_rec
+                .clone()
                 .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
                 .map(|inner| TypeAnnotation::List(Box::new(inner)));
 
-            let base_type = paren_type.or(list_type).or(dotted_name);
+            let map_type = type_ann_rec
+                .clone()
+                .then_ignore(just(Token::Colon))
+                .then(type_ann_rec.clone())
+                .delimited_by(just(Token::LeftCurly), just(Token::RightCurly))
+                .map(|(key, value)| TypeAnnotation::Map(Box::new(key), Box::new(value)));
+
+            let base_type = paren_type.or(list_type).or(map_type).or(dotted_name);
 
             // T? — nillable (base + postfix ?)
             let nillable = base_type

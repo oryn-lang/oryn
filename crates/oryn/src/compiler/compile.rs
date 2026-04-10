@@ -181,6 +181,20 @@ pub(super) fn resolve_type(
             let inner_resolved = resolve_type(inner, obj_table, modules)?;
             Ok(ResolvedType::List(Box::new(inner_resolved)))
         }
+        TypeAnnotation::Map(key, value) => {
+            let key_resolved = resolve_type(key, obj_table, modules)?;
+            if !key_resolved.is_map_key_type() {
+                return Err(format!(
+                    "map key type must be `String`, `int`, or `bool`, got `{}`",
+                    key_resolved.display_name()
+                ));
+            }
+            let value_resolved = resolve_type(value, obj_table, modules)?;
+            Ok(ResolvedType::Map(
+                Box::new(key_resolved),
+                Box::new(value_resolved),
+            ))
+        }
     }
 }
 
@@ -300,6 +314,15 @@ impl Compiler {
                 name: name.clone(),
                 module: self.current_module_path.clone(),
             };
+        }
+        if let ResolvedType::List(inner) = ty {
+            return ResolvedType::List(Box::new(self.attach_current_module(*inner)));
+        }
+        if let ResolvedType::Map(key, value) = ty {
+            return ResolvedType::Map(
+                Box::new(self.attach_current_module(*key)),
+                Box::new(self.attach_current_module(*value)),
+            );
         }
         ty
     }
