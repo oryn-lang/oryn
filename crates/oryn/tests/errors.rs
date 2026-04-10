@@ -248,23 +248,19 @@ fn assignment_to_undefined_is_compile_error() {
 }
 
 #[test]
-fn and_with_non_bool_is_type_error() {
-    let chunk = oryn::Chunk::compile("print(5 and true)").expect("compile error");
-    let mut vm = oryn::VM::new();
-    let mut output = Vec::new();
-
-    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
-    assert!(matches!(err, oryn::RuntimeError::TypeError { .. }));
+fn and_with_non_bool_is_compile_error() {
+    let errors = oryn::Chunk::compile("print(5 and true)").unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("logical operand must be `bool`"))
+    }));
 }
 
 #[test]
-fn or_with_non_bool_is_type_error() {
-    let chunk = oryn::Chunk::compile("print(true or 5)").expect("compile error");
-    let mut vm = oryn::VM::new();
-    let mut output = Vec::new();
-
-    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
-    assert!(matches!(err, oryn::RuntimeError::TypeError { .. }));
+fn or_with_non_bool_is_compile_error() {
+    let errors = oryn::Chunk::compile("print(false or 5)").unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("logical operand must be `bool`"))
+    }));
 }
 
 #[test]

@@ -115,38 +115,6 @@ macro_rules! ordering_op {
     }};
 }
 
-/// Helper macro for boolean logic ops (And, Or).
-/// Pops two values, checks both are Bool, applies the operator.
-/// Reports TypeError if either operand is not a Bool.
-macro_rules! bool_binary_op {
-    ($state:expr, $frames:expr, $chunk:expr, $op:tt) => {{
-        let right = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-        let left = $state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-
-        match (left, right) {
-            (Value::Bool(l), Value::Bool(r)) => {
-                $state.stack.push(Value::Bool(l $op r));
-            }
-            (Value::Bool(_), ref other) | (ref other, Value::Bool(_)) => {
-                let span = VM::current_span_from_state($frames, $chunk);
-                return Err(RuntimeError::TypeError {
-                    expected: ValueType::Bool,
-                    actual: ValueType::from(other),
-                    span,
-                });
-            }
-            (ref left_val, _) => {
-                let span = VM::current_span_from_state($frames, $chunk);
-                return Err(RuntimeError::TypeError {
-                    expected: ValueType::Bool,
-                    actual: ValueType::from(left_val),
-                    span,
-                });
-            }
-        }
-    }};
-}
-
 /// Stack-based virtual machine that executes compiled [`Chunk`]s.
 ///
 /// ```
@@ -517,12 +485,6 @@ impl VM {
                     }
                     Instruction::GreaterThanEquals => {
                         ordering_op!(state, &state.frames, chunk, >=);
-                    }
-                    Instruction::And => {
-                        bool_binary_op!(state, &state.frames, chunk, &&);
-                    }
-                    Instruction::Or => {
-                        bool_binary_op!(state, &state.frames, chunk, ||);
                     }
                     Instruction::Not => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;

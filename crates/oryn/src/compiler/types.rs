@@ -32,8 +32,6 @@ pub enum Instruction {
     GreaterThan,
     LessThanEquals,
     GreaterThanEquals,
-    And,
-    Or,
     Not,
     Negate,
     Add,

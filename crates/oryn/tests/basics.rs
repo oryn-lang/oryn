@@ -120,6 +120,32 @@ fn logical_precedence() {
     assert_eq!(run("print(false or true and true)"), "true\n");
 }
 
+#[test]
+fn and_short_circuits_on_false() {
+    // Without short-circuit this would divide by zero at runtime. The RHS
+    // must be skipped when the LHS is false.
+    assert_eq!(run("print(false and (1 / 0 == 0))"), "false\n");
+}
+
+#[test]
+fn or_short_circuits_on_true() {
+    // Without short-circuit this would divide by zero at runtime. The RHS
+    // must be skipped when the LHS is true.
+    assert_eq!(run("print(true or (1 / 0 == 0))"), "true\n");
+}
+
+#[test]
+fn and_evaluates_rhs_when_lhs_true() {
+    assert_eq!(run("print(true and (1 == 1))"), "true\n");
+    assert_eq!(run("print(true and (1 == 2))"), "false\n");
+}
+
+#[test]
+fn or_evaluates_rhs_when_lhs_false() {
+    assert_eq!(run("print(false or (1 == 1))"), "true\n");
+    assert_eq!(run("print(false or (1 == 2))"), "false\n");
+}
+
 // --- Mixed expressions ---
 
 #[test]

@@ -611,6 +611,70 @@ impl Compiler {
 
             // -- Operators --
             Expression::BinaryOp { op, left, right } => {
+                // Short-circuit `and` / `or` — must be handled before the
+                // general path so the RHS is only compiled on the taken branch.
+                if matches!(op, BinOp::And | BinOp::Or) {
+                    let left_span = left.span.clone();
+                    let right_span = right.span.clone();
+
+                    let left_type = self.compile_expr(*left);
+                    self.check_types(
+                        &ResolvedType::Bool,
+                        &left_type,
+                        &left_span,
+                        "logical operand must be `bool`",
+                    );
+
+                    let jump_if_false_idx = self.output.instructions.len();
+                    self.emit(Instruction::JumpIfFalse(0), &span);
+
+                    match op {
+                        BinOp::And => {
+                            // LHS was true; evaluate RHS as the result.
+                            let right_type = self.compile_expr(*right);
+                            self.check_types(
+                                &ResolvedType::Bool,
+                                &right_type,
+                                &right_span,
+                                "logical operand must be `bool`",
+                            );
+                            let jump_to_end_idx = self.output.instructions.len();
+                            self.emit(Instruction::Jump(0), &span);
+
+                            let false_target = self.output.instructions.len();
+                            self.emit(Instruction::PushBool(false), &span);
+                            let end_addr = self.output.instructions.len();
+
+                            self.output.instructions[jump_if_false_idx] =
+                                Instruction::JumpIfFalse(false_target);
+                            self.output.instructions[jump_to_end_idx] = Instruction::Jump(end_addr);
+                        }
+                        BinOp::Or => {
+                            // LHS was true — the result is true; skip RHS.
+                            self.emit(Instruction::PushBool(true), &span);
+                            let jump_to_end_idx = self.output.instructions.len();
+                            self.emit(Instruction::Jump(0), &span);
+
+                            let rhs_target = self.output.instructions.len();
+                            let right_type = self.compile_expr(*right);
+                            self.check_types(
+                                &ResolvedType::Bool,
+                                &right_type,
+                                &right_span,
+                                "logical operand must be `bool`",
+                            );
+                            let end_addr = self.output.instructions.len();
+
+                            self.output.instructions[jump_if_false_idx] =
+                                Instruction::JumpIfFalse(rhs_target);
+                            self.output.instructions[jump_to_end_idx] = Instruction::Jump(end_addr);
+                        }
+                        _ => unreachable!(),
+                    }
+
+                    return ResolvedType::Bool;
+                }
+
                 match (&left.node, &right.node) {
                     (Expression::Int(l), Expression::Int(r)) => {
                         let folded = match &op {
@@ -654,12 +718,11 @@ impl Compiler {
                         BinOp::GreaterThan => Instruction::GreaterThan,
                         BinOp::LessThanEquals => Instruction::LessThanEquals,
                         BinOp::GreaterThanEquals => Instruction::GreaterThanEquals,
-                        BinOp::And => Instruction::And,
-                        BinOp::Or => Instruction::Or,
                         BinOp::Add => Instruction::Add,
                         BinOp::Sub => Instruction::Sub,
                         BinOp::Mul => Instruction::Mul,
                         BinOp::Div => Instruction::Div,
+                        BinOp::And | BinOp::Or => unreachable!("handled above"),
                     },
                     &span,
                 );
@@ -671,8 +734,8 @@ impl Compiler {
                     | BinOp::GreaterThan
                     | BinOp::LessThanEquals
                     | BinOp::GreaterThanEquals => ResolvedType::Bool,
-                    BinOp::And | BinOp::Or => ResolvedType::Bool,
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => left_type,
+                    BinOp::And | BinOp::Or => unreachable!("handled above"),
                 }
             }
             Expression::Range {
