@@ -10,7 +10,7 @@
 // All parameters MUST have type annotations — Oryn intentionally
 // doesn't try to infer them. Return types are inferred when omitted,
 // though writing them out is the norm at public boundaries.
-fn add(a: i32, b: i32) -> i32 {
+fn add(a: int, b: int) -> int {
     rn a + b
 }
 
@@ -27,7 +27,7 @@ fn shout(message: String) {
 }
 
 // Recursion is straightforward. The classic fibonacci:
-fn fib(n: i32) -> i32 {
+fn fib(n: int) -> int {
     if n < 2 {
         rn n
     }

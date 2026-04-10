@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn indented_comment_block_is_accepted() {
-        let source = "obj Foo {\n    // field doc\n    x: i32\n}";
-        assert_eq!(doc_above(source, "x: i32"), Some("field doc".into()));
+        let source = "obj Foo {\n    // field doc\n    x: int\n}";
+        assert_eq!(doc_above(source, "x: int"), Some("field doc".into()));
     }
 }

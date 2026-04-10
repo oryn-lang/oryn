@@ -77,7 +77,7 @@ fn float_division_by_zero_is_error() {
 
 #[test]
 fn arity_mismatch_is_runtime_error() {
-    let chunk = oryn::Chunk::compile("fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nadd(1)")
+    let chunk = oryn::Chunk::compile("fn add(a: int, b: int) -> int {\nrn a + b\n}\nadd(1)")
         .expect("compile error");
     let mut vm = oryn::VM::new();
     let mut output = Vec::new();
@@ -128,7 +128,7 @@ fn integer_multiply_overflow_is_runtime_error() {
 
 #[test]
 fn negate_min_int_is_overflow() {
-    // -2147483647 - 1 produces i32::MIN, then negating it overflows.
+    // -2147483647 - 1 produces int::MIN, then negating it overflows.
     let chunk = oryn::Chunk::compile("let x = -2147483647 - 1\nprint(-x)").expect("compile error");
     let mut vm = oryn::VM::new();
     let mut output = Vec::new();
@@ -140,7 +140,7 @@ fn negate_min_int_is_overflow() {
 #[test]
 fn method_wrong_arity_is_runtime_error() {
     let chunk = oryn::Chunk::compile(
-        "obj Foo {\nx: i32\nfn add(self, n: i32) {\nrn self.x + n\n}\n}\nlet f = Foo { x: 1 }\nf.add()",
+        "obj Foo {\nx: int\nfn add(self, n: int) {\nrn self.x + n\n}\n}\nlet f = Foo { x: 1 }\nf.add()",
     )
     .expect("compile error");
     let mut vm = oryn::VM::new();
@@ -153,7 +153,7 @@ fn method_wrong_arity_is_runtime_error() {
 #[test]
 fn method_too_many_args_is_runtime_error() {
     let chunk = oryn::Chunk::compile(
-        "obj Foo {\nx: i32\nfn get(self) {\nrn self.x\n}\n}\nlet f = Foo { x: 1 }\nf.get(1, 2)",
+        "obj Foo {\nx: int\nfn get(self) {\nrn self.x\n}\n}\nlet f = Foo { x: 1 }\nf.get(1, 2)",
     )
     .expect("compile error");
     let mut vm = oryn::VM::new();
@@ -177,7 +177,7 @@ fn undefined_static_method_is_compile_error() {
 #[test]
 fn static_method_argument_type_mismatch_is_compile_error() {
     let result = oryn::Chunk::compile(
-        "obj Foo {\nfn make(x: i32) -> Foo {\nrn Foo { }\n}\n}\nFoo.make(\"nope\")",
+        "obj Foo {\nfn make(x: int) -> Foo {\nrn Foo { }\n}\n}\nFoo.make(\"nope\")",
     );
     assert!(result.is_err());
 

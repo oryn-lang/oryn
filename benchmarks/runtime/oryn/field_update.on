@@ -1,5 +1,5 @@
 obj Counter {
-    value: i32
+    value: int
 }
 
 let c = Counter { value: 0 }

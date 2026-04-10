@@ -26,9 +26,9 @@ pub struct SymbolInfo {
     /// Byte span of the entire enclosing statement.
     pub full_span: Range<usize>,
     pub kind: SymbolKind,
-    /// For functions, the parameter names with types (e.g. "a: i32").
+    /// For functions, the parameter names with types (e.g. "a: int").
     pub params: Option<Vec<String>>,
-    /// The type annotation as a string (e.g. "i32", "Vec2").
+    /// The type annotation as a string (e.g. "int", "Vec2").
     pub type_name: Option<String>,
     /// For functions, the return type annotation.
     pub return_type: Option<String>,
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn obj_def_creates_definition() {
-        let table = analyze("obj Vec2 {\nx: i32\ny: i32\n}");
+        let table = analyze("obj Vec2 {\nx: int\ny: int\n}");
 
         let obj_defs: Vec<&SymbolInfo> = table
             .definitions
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn obj_fields_are_registered() {
-        let source = "obj Vec2 {\nx: i32\ny: i32\n}";
+        let source = "obj Vec2 {\nx: int\ny: int\n}";
         let table = analyze(source);
 
         let fields: Vec<&SymbolInfo> = table
@@ -522,13 +522,13 @@ mod tests {
             .collect();
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name, "x");
-        assert_eq!(fields[0].type_name.as_deref(), Some("i32"));
+        assert_eq!(fields[0].type_name.as_deref(), Some("int"));
         assert_eq!(fields[1].name, "y");
     }
 
     #[test]
     fn obj_field_full_span_covers_only_the_field_line() {
-        let source = "obj Vec2 {\nx: i32\ny: i32\n}";
+        let source = "obj Vec2 {\nx: int\ny: int\n}";
         let table = analyze(source);
 
         let field = table
@@ -538,7 +538,7 @@ mod tests {
             .expect("missing field x");
         // The field's full_span should not cover the entire obj.
         assert!(field.full_span.end - field.full_span.start < source.len());
-        assert_eq!(&source[field.full_span.clone()], "x: i32");
+        assert_eq!(&source[field.full_span.clone()], "x: int");
     }
 
     #[test]

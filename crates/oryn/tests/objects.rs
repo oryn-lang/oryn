@@ -6,7 +6,7 @@ use common::run;
 #[test]
 fn object_definition_and_instantiation() {
     assert_eq!(
-        run("obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.x)"),
+        run("obj Vec2 {\nx: int\ny: int\n}\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.x)"),
         "1\n",
     );
 }
@@ -14,7 +14,7 @@ fn object_definition_and_instantiation() {
 #[test]
 fn object_field_read_second_field() {
     assert_eq!(
-        run("obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.y)"),
+        run("obj Vec2 {\nx: int\ny: int\n}\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.y)"),
         "2\n",
     );
 }
@@ -22,7 +22,7 @@ fn object_field_read_second_field() {
 #[test]
 fn object_field_mutation() {
     assert_eq!(
-        run("obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }\nv.x = 99\nprint(v.x)"),
+        run("obj Vec2 {\nx: int\ny: int\n}\nlet v = Vec2 { x: 1, y: 2 }\nv.x = 99\nprint(v.x)"),
         "99\n",
     );
 }
@@ -31,7 +31,7 @@ fn object_field_mutation() {
 fn object_reference_aliasing() {
     assert_eq!(
         run(
-            "obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }\nlet w = v\nw.y = 50\nprint(v.y)"
+            "obj Vec2 {\nx: int\ny: int\n}\nlet v = Vec2 { x: 1, y: 2 }\nlet w = v\nw.y = 50\nprint(v.y)"
         ),
         "50\n",
     );
@@ -40,7 +40,7 @@ fn object_reference_aliasing() {
 #[test]
 fn object_fields_out_of_order() {
     assert_eq!(
-        run("obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { y: 20, x: 10 }\nprint(v.x)\nprint(v.y)"),
+        run("obj Vec2 {\nx: int\ny: int\n}\nlet v = Vec2 { y: 20, x: 10 }\nprint(v.x)\nprint(v.y)"),
         "10\n20\n",
     );
 }
@@ -48,14 +48,14 @@ fn object_fields_out_of_order() {
 #[test]
 fn object_print_shows_instance() {
     assert_eq!(
-        run("obj Foo {\nx: i32\n}\nlet f = Foo { x: 1 }\nprint(f)"),
+        run("obj Foo {\nx: int\n}\nlet f = Foo { x: 1 }\nprint(f)"),
         "<Foo instance>\n",
     );
 }
 
 #[test]
 fn val_prevents_field_mutation() {
-    let result = oryn::Chunk::compile("obj Foo {\nx: i32\n}\nval f = Foo { x: 1 }\nf.x = 2");
+    let result = oryn::Chunk::compile("obj Foo {\nx: int\n}\nval f = Foo { x: 1 }\nf.x = 2");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -77,7 +77,7 @@ fn undefined_type_is_compile_error() {
 
 #[test]
 fn unknown_field_is_compile_error() {
-    let result = oryn::Chunk::compile("obj Foo {\nx: i32\n}\nlet f = Foo { x: 1, z: 2 }");
+    let result = oryn::Chunk::compile("obj Foo {\nx: int\n}\nlet f = Foo { x: 1, z: 2 }");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -88,7 +88,7 @@ fn unknown_field_is_compile_error() {
 
 #[test]
 fn missing_field_is_compile_error() {
-    let result = oryn::Chunk::compile("obj Foo {\nx: i32\ny: i32\n}\nlet f = Foo { x: 1 }");
+    let result = oryn::Chunk::compile("obj Foo {\nx: int\ny: int\n}\nlet f = Foo { x: 1 }");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -100,7 +100,7 @@ fn missing_field_is_compile_error() {
 #[test]
 fn object_inline_definition() {
     assert_eq!(
-        run("obj Vec2 { x: i32, y: i32 }\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.x)"),
+        run("obj Vec2 { x: int, y: int }\nlet v = Vec2 { x: 1, y: 2 }\nprint(v.x)"),
         "1\n",
     );
 }
@@ -108,7 +108,7 @@ fn object_inline_definition() {
 #[test]
 fn object_with_float_fields() {
     assert_eq!(
-        run("obj Point {\nx: f32\ny: f32\n}\nlet p = Point { x: 3.14, y: 2.71 }\nprint(p.x)"),
+        run("obj Point {\nx: float\ny: float\n}\nlet p = Point { x: 3.14, y: 2.71 }\nprint(p.x)"),
         "3.14\n",
     );
 }
@@ -117,7 +117,7 @@ fn object_with_float_fields() {
 fn object_in_function() {
     assert_eq!(
         run(
-            "obj Vec2 {\nx: i32\ny: i32\n}\nfn get_x(v: Vec2) -> i32 {\nrn v.x\n}\nlet v = Vec2 { x: 42, y: 0 }\nprint(get_x(v))"
+            "obj Vec2 {\nx: int\ny: int\n}\nfn get_x(v: Vec2) -> int {\nrn v.x\n}\nlet v = Vec2 { x: 42, y: 0 }\nprint(get_x(v))"
         ),
         "42\n",
     );
@@ -140,7 +140,7 @@ fn obj_field_unknown_type_is_compile_error() {
 fn method_no_params() {
     assert_eq!(
         run(
-            "obj Vec2 {\nx: i32\ny: i32\nfn sum(self) {\nrn self.x + self.y\n}\n}\nlet v = Vec2 { x: 3, y: 4 }\nprint(v.sum())"
+            "obj Vec2 {\nx: int\ny: int\nfn sum(self) {\nrn self.x + self.y\n}\n}\nlet v = Vec2 { x: 3, y: 4 }\nprint(v.sum())"
         ),
         "7\n",
     );
@@ -150,7 +150,7 @@ fn method_no_params() {
 fn method_with_params() {
     assert_eq!(
         run(
-            "obj Counter {\ncount: i32\nfn add(self, n: i32) {\nrn self.count + n\n}\n}\nlet c = Counter { count: 10 }\nprint(c.add(5))"
+            "obj Counter {\ncount: int\nfn add(self, n: int) {\nrn self.count + n\n}\n}\nlet c = Counter { count: 10 }\nprint(c.add(5))"
         ),
         "15\n",
     );
@@ -160,7 +160,7 @@ fn method_with_params() {
 fn method_mutates_field() {
     assert_eq!(
         run(
-            "obj Counter {\ncount: i32\nfn inc(self) {\nself.count = self.count + 1\n}\n}\nlet c = Counter { count: 0 }\nc.inc()\nprint(c.count)"
+            "obj Counter {\ncount: int\nfn inc(self) {\nself.count = self.count + 1\n}\n}\nlet c = Counter { count: 0 }\nc.inc()\nprint(c.count)"
         ),
         "1\n",
     );
@@ -171,7 +171,7 @@ fn method_on_val_binding() {
     // Methods should still work on val bindings (calling doesn't reassign).
     assert_eq!(
         run(
-            "obj Vec2 {\nx: i32\ny: i32\nfn sum(self) {\nrn self.x + self.y\n}\n}\nval v = Vec2 { x: 1, y: 2 }\nprint(v.sum())"
+            "obj Vec2 {\nx: int\ny: int\nfn sum(self) {\nrn self.x + self.y\n}\n}\nval v = Vec2 { x: 1, y: 2 }\nprint(v.sum())"
         ),
         "3\n",
     );
@@ -181,7 +181,7 @@ fn method_on_val_binding() {
 fn method_with_float_fields() {
     assert_eq!(
         run(
-            "obj Circle {\nradius: f32\nfn area(self) {\nrn self.radius * self.radius * 3.14\n}\n}\nlet c = Circle { radius: 2.0 }\nprint(c.area())"
+            "obj Circle {\nradius: float\nfn area(self) {\nrn self.radius * self.radius * 3.14\n}\n}\nlet c = Circle { radius: 2.0 }\nprint(c.area())"
         ),
         "12.56\n",
     );
@@ -191,7 +191,7 @@ fn method_with_float_fields() {
 fn multiple_methods() {
     assert_eq!(
         run(
-            "obj Vec2 {\nx: i32\ny: i32\nfn get_x(self) {\nrn self.x\n}\nfn get_y(self) {\nrn self.y\n}\n}\nlet v = Vec2 { x: 10, y: 20 }\nprint(v.get_x())\nprint(v.get_y())"
+            "obj Vec2 {\nx: int\ny: int\nfn get_x(self) {\nrn self.x\n}\nfn get_y(self) {\nrn self.y\n}\n}\nlet v = Vec2 { x: 10, y: 20 }\nprint(v.get_x())\nprint(v.get_y())"
         ),
         "10\n20\n",
     );
@@ -199,7 +199,7 @@ fn multiple_methods() {
 
 #[test]
 fn undefined_method_is_runtime_error() {
-    let chunk = oryn::Chunk::compile("obj Foo {\nx: i32\n}\nlet f = Foo { x: 1 }\nf.nope()")
+    let chunk = oryn::Chunk::compile("obj Foo {\nx: int\n}\nlet f = Foo { x: 1 }\nf.nope()")
         .expect("compile error");
     let mut vm = oryn::VM::new();
     let mut output = Vec::new();
@@ -212,7 +212,7 @@ fn undefined_method_is_runtime_error() {
 fn static_method_no_params() {
     assert_eq!(
         run(
-            "obj Vec2 {\nx: i32\ny: i32\nfn zero() -> Vec2 {\nrn Vec2 { x: 0, y: 0 }\n}\n}\nlet v = Vec2.zero()\nprint(v.x)\nprint(v.y)"
+            "obj Vec2 {\nx: int\ny: int\nfn zero() -> Vec2 {\nrn Vec2 { x: 0, y: 0 }\n}\n}\nlet v = Vec2.zero()\nprint(v.x)\nprint(v.y)"
         ),
         "0\n0\n",
     );
@@ -222,7 +222,7 @@ fn static_method_no_params() {
 fn static_method_with_params() {
     assert_eq!(
         run(
-            "obj Counter {\ncount: i32\nfn make(n: i32) -> Counter {\nrn Counter { count: n }\n}\n}\nlet c = Counter.make(10)\nprint(c.count)"
+            "obj Counter {\ncount: int\nfn make(n: int) -> Counter {\nrn Counter { count: n }\n}\n}\nlet c = Counter.make(10)\nprint(c.count)"
         ),
         "10\n",
     );
@@ -232,7 +232,7 @@ fn static_method_with_params() {
 fn static_method_can_call_other_static_method() {
     assert_eq!(
         run(
-            "obj Vec2 {\nx: i32\ny: i32\nfn zero() -> Vec2 {\nrn Vec2 { x: 0, y: 0 }\n}\nfn unit_x() -> Vec2 {\nrn Vec2.zero()\n}\n}\nlet v = Vec2.unit_x()\nprint(v.x)\nprint(v.y)"
+            "obj Vec2 {\nx: int\ny: int\nfn zero() -> Vec2 {\nrn Vec2 { x: 0, y: 0 }\n}\nfn unit_x() -> Vec2 {\nrn Vec2.zero()\n}\n}\nlet v = Vec2.unit_x()\nprint(v.x)\nprint(v.y)"
         ),
         "0\n0\n",
     );
@@ -242,7 +242,7 @@ fn static_method_can_call_other_static_method() {
 fn use_inherits_static_methods() {
     assert_eq!(
         run(
-            "obj Factory {\nfn answer() -> i32 {\nrn 42\n}\n}\nobj Wrapper {\nuse Factory\n}\nprint(Wrapper.answer())"
+            "obj Factory {\nfn answer() -> int {\nrn 42\n}\n}\nobj Wrapper {\nuse Factory\n}\nprint(Wrapper.answer())"
         ),
         "42\n",
     );
@@ -254,7 +254,7 @@ fn use_inherits_static_methods() {
 fn use_inherits_fields() {
     assert_eq!(
         run(
-            "obj Health { hp: i32 }\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 100, name: \"Alice\" }\nprint(p.hp)"
+            "obj Health { hp: int }\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 100, name: \"Alice\" }\nprint(p.hp)"
         ),
         "100\n",
     );
@@ -264,7 +264,7 @@ fn use_inherits_fields() {
 fn use_inherits_methods() {
     assert_eq!(
         run(
-            "obj Health {\nhp: i32\nfn heal(self, amount: i32) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 50, name: \"Bob\" }\np.heal(20)\nprint(p.hp)"
+            "obj Health {\nhp: int\nfn heal(self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 50, name: \"Bob\" }\np.heal(20)\nprint(p.hp)"
         ),
         "70\n",
     );
@@ -274,7 +274,7 @@ fn use_inherits_methods() {
 fn use_multiple_types() {
     assert_eq!(
         run(
-            "obj Health { hp: i32 }\nobj Named { name: String }\nobj Player {\nuse Health\nuse Named\n}\nlet p = Player { hp: 100, name: \"Alice\" }\nprint(p.hp)\nprint(p.name)"
+            "obj Health { hp: int }\nobj Named { name: String }\nobj Player {\nuse Health\nuse Named\n}\nlet p = Player { hp: 100, name: \"Alice\" }\nprint(p.hp)\nprint(p.name)"
         ),
         "100\nAlice\n",
     );
@@ -283,7 +283,7 @@ fn use_multiple_types() {
 #[test]
 fn use_field_conflict_is_compile_error() {
     let result =
-        oryn::Chunk::compile("obj A { x: i32 }\nobj B { x: i32 }\nobj C {\nuse A\nuse B\n}");
+        oryn::Chunk::compile("obj A { x: int }\nobj B { x: int }\nobj C {\nuse A\nuse B\n}");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -307,7 +307,7 @@ fn use_undefined_type_is_compile_error() {
 fn use_own_fields_after_composed() {
     assert_eq!(
         run(
-            "obj Position { x: i32, y: i32 }\nobj Entity {\nuse Position\nname: String\n}\nlet e = Entity { x: 5, y: 10, name: \"thing\" }\nprint(e.x)\nprint(e.name)"
+            "obj Position { x: int, y: int }\nobj Entity {\nuse Position\nname: String\n}\nlet e = Entity { x: 5, y: 10, name: \"thing\" }\nprint(e.x)\nprint(e.name)"
         ),
         "5\nthing\n",
     );
@@ -344,7 +344,7 @@ fn signature_satisfied_by_composed_method() {
     // Player uses both - heal() from Health satisfies Healable's requirement.
     assert_eq!(
         run(
-            "obj Healable {\nfn heal(self, amount: i32)\n}\nobj Health {\nhp: i32\nfn heal(self, amount: i32) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
+            "obj Healable {\nfn heal(self, amount: int)\n}\nobj Health {\nhp: int\nfn heal(self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
         ),
         "70\n",
     );
@@ -360,7 +360,7 @@ fn signature_on_type_with_no_uses() {
 #[test]
 fn multiple_signatures_all_must_be_satisfied() {
     let result = oryn::Chunk::compile(
-        "obj Serializable {\nfn to_string(self) -> String\nfn to_bytes(self) -> i32\n}\nobj Foo {\nuse Serializable\nfn to_string(self) -> String {\nrn \"foo\"\n}\n}",
+        "obj Serializable {\nfn to_string(self) -> String\nfn to_bytes(self) -> int\n}\nobj Foo {\nuse Serializable\nfn to_string(self) -> String {\nrn \"foo\"\n}\n}",
     );
 
     assert!(result.is_err());
@@ -398,9 +398,9 @@ fn method_correct_return_type_still_works() {
 
 #[test]
 fn signature_wrong_return_type_is_compile_error() {
-    // Signature requires -> String but impl returns i32.
+    // Signature requires -> String but impl returns int.
     let result = oryn::Chunk::compile(
-        "obj Printable {\nfn to_string(self) -> String\n}\nobj Foo {\nuse Printable\nfn to_string(self) -> i32 {\nrn 42\n}\n}",
+        "obj Printable {\nfn to_string(self) -> String\n}\nobj Foo {\nuse Printable\nfn to_string(self) -> int {\nrn 42\n}\n}",
     );
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -411,9 +411,9 @@ fn signature_wrong_return_type_is_compile_error() {
 
 #[test]
 fn signature_wrong_param_type_is_compile_error() {
-    // Signature requires fn process(self, x: i32) but impl has (self, x: String).
+    // Signature requires fn process(self, x: int) but impl has (self, x: String).
     let result = oryn::Chunk::compile(
-        "obj Processor {\nfn process(self, x: i32)\n}\nobj Foo {\nuse Processor\nfn process(self, x: String) {\nprint(x)\n}\n}",
+        "obj Processor {\nfn process(self, x: int)\n}\nobj Foo {\nuse Processor\nfn process(self, x: String) {\nprint(x)\n}\n}",
     );
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -424,9 +424,9 @@ fn signature_wrong_param_type_is_compile_error() {
 
 #[test]
 fn signature_wrong_param_count_is_compile_error() {
-    // Signature requires fn process(self, x: i32) but impl has (self).
+    // Signature requires fn process(self, x: int) but impl has (self).
     let result = oryn::Chunk::compile(
-        "obj Processor {\nfn process(self, x: i32)\n}\nobj Foo {\nuse Processor\nfn process(self) {\nprint(1)\n}\n}",
+        "obj Processor {\nfn process(self, x: int)\n}\nobj Foo {\nuse Processor\nfn process(self) {\nprint(1)\n}\n}",
     );
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -451,7 +451,7 @@ fn signature_with_params_matching_shape_compiles() {
     // Signature with extra params - shape must match.
     assert_eq!(
         run(
-            "obj Healable {\nfn heal(self, amount: i32)\n}\nobj Health {\nhp: i32\nfn heal(self, amount: i32) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
+            "obj Healable {\nfn heal(self, amount: int)\n}\nobj Health {\nhp: int\nfn heal(self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
         ),
         "70\n",
     );

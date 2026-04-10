@@ -6,21 +6,21 @@ pub val ORIGIN_X = 0.0
 pub val ORIGIN_Y = 0.0
 
 // Private helper — only callable from inside this module.
-fn scale(value: f32, factor: f32) -> f32 {
+fn scale(value: float, factor: float) -> float {
     rn value * factor
 }
 
 pub obj Vec2 {
-    pub x: f32
-    pub y: f32
+    pub x: float
+    pub y: float
 
     // Public method that returns the squared length.
-    pub fn length_sq(self) -> f32 {
+    pub fn length_sq(self) -> float {
         rn self.x * self.x + self.y * self.y
     }
 
     // Public method that uses a private helper internally.
-    pub fn scaled(self, factor: f32) -> Vec2 {
+    pub fn scaled(self, factor: float) -> Vec2 {
         rn Vec2 { x: scale(self.x, factor), y: scale(self.y, factor) }
     }
 

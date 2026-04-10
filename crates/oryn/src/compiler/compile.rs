@@ -116,7 +116,7 @@ pub(crate) fn compile(
 
 /// Resolves a type annotation against an ObjTable and a ModuleTable.
 ///
-/// - Single-segment names like `i32` or `Vec2` resolve as builtins or local
+/// - Single-segment names like `int` or `Vec2` resolve as builtins or local
 ///   types via `obj_table`.
 /// - Multi-segment names like `math.Vec2` resolve via `modules` — the prefix
 ///   names a module, the last segment names a type within that module.
@@ -134,8 +134,8 @@ pub(super) fn resolve_type(
             if path.len() == 1 {
                 let name = &path[0];
                 match name.as_str() {
-                    "i32" => Ok(ResolvedType::Int),
-                    "f32" => Ok(ResolvedType::Float),
+                    "int" => Ok(ResolvedType::Int),
+                    "float" => Ok(ResolvedType::Float),
                     "bool" => Ok(ResolvedType::Bool),
                     "String" => Ok(ResolvedType::Str),
                     "Range" => Ok(ResolvedType::Range),

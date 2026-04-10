@@ -11,10 +11,10 @@
 // A reusable chunk of behaviour. Notice: no `abstract`, no interface —
 // just an ordinary object that happens to be convenient to compose.
 obj Health {
-    hp: i32
-    max_hp: i32
+    hp: int
+    max_hp: int
 
-    fn new(max: i32) -> Health {
+    fn new(max: int) -> Health {
         rn Health { hp: max, max_hp: max }
     }
 
@@ -22,7 +22,7 @@ obj Health {
         rn self.hp > 0
     }
 
-    fn damage(self, amount: i32) {
+    fn damage(self, amount: int) {
         self.hp = self.hp - amount
     }
 }
@@ -56,7 +56,7 @@ obj Guard {
 
     // `take_hit` calls `damage()` and `is_alive()` — both inherited
     // via `use Health` — without ever mentioning Health explicitly.
-    fn take_hit(self, amount: i32) {
+    fn take_hit(self, amount: int) {
         self.damage(amount)
         if not self.is_alive() {
             print("{self.name} falls.")

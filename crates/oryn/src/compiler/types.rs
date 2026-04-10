@@ -80,7 +80,7 @@ pub struct CompilerOutput {
 /// same span the parser assigned — the LSP's [`SymbolInfo::full_span`]
 /// uses the exact same value.
 ///
-/// Values are pretty-printed type names (`"i32"`, `"math.vec2.Vec2"`)
+/// Values are pretty-printed type names (`"int"`, `"math.vec2.Vec2"`)
 /// rather than the internal [`ResolvedType`] enum, which keeps the
 /// public API stable while letting the LSP render hovers without
 /// peeking at compiler internals.
@@ -302,8 +302,8 @@ impl CompilerOutput {
 impl ResolvedType {
     pub fn display_name(&self) -> std::borrow::Cow<'_, str> {
         match self {
-            ResolvedType::Int => "i32".into(),
-            ResolvedType::Float => "f32".into(),
+            ResolvedType::Int => "int".into(),
+            ResolvedType::Float => "float".into(),
             ResolvedType::Bool => "bool".into(),
             ResolvedType::Str => "String".into(),
             ResolvedType::Range => "Range".into(),

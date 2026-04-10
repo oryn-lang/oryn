@@ -7,7 +7,7 @@
 //   cargo run --bin oryn -- examples/03_control_flow.on
 
 // `if` / `elif` / `else` — braces are required, parentheses are not.
-fn classify(n: i32) -> String {
+fn classify(n: int) -> String {
     if n < 0 {
         rn "negative"
     } elif n == 0 {

@@ -1,4 +1,4 @@
-//! Signature help — the popup that shows `fn rgb(r: i32, g: i32, b: i32) -> Color`
+//! Signature help — the popup that shows `fn rgb(r: int, g: int, b: int) -> Color`
 //! with the current argument highlighted as the user types inside a call.
 //!
 //! The algorithm is a pure token walk: starting from the cursor we
@@ -208,18 +208,18 @@ mod tests {
 
     #[test]
     fn signature_help_for_local_function_call_first_arg() {
-        let source = "fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nlet x = add(1, 2)";
+        let source = "fn add(a: int, b: int) -> int {\nrn a + b\n}\nlet x = add(1, 2)";
         // Cursor right after the `(` — should be active_param 0.
         let help = help_at(source, "1, 2").expect("expected signature help");
         assert_eq!(help.active_parameter, Some(0));
         assert_eq!(help.signatures.len(), 1);
         assert!(help.signatures[0].label.contains("fn add"));
-        assert!(help.signatures[0].label.contains("a: i32"));
+        assert!(help.signatures[0].label.contains("a: int"));
     }
 
     #[test]
     fn signature_help_active_param_advances_after_comma() {
-        let source = "fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nlet x = add(1, 2)";
+        let source = "fn add(a: int, b: int) -> int {\nrn a + b\n}\nlet x = add(1, 2)";
         // Cursor at the `2` (after the comma) — active_param should be 1.
         let help = help_at(source, "2)").expect("expected signature help");
         assert_eq!(help.active_parameter, Some(1));
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn signature_help_returns_none_outside_any_call() {
-        let source = "fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nlet x = 1";
+        let source = "fn add(a: int, b: int) -> int {\nrn a + b\n}\nlet x = 1";
         assert!(help_at(source, "x = 1").is_none());
     }
 
@@ -236,8 +236,8 @@ mod tests {
         // The inner `add(1, 2)` has a comma at depth 1 which should
         // NOT count toward the outer `outer(…)` active parameter.
         let source = "
-fn add(a: i32, b: i32) -> i32 { rn a + b }
-fn outer(x: i32, y: i32) -> i32 { rn x + y }
+fn add(a: int, b: int) -> int { rn a + b }
+fn outer(x: int, y: int) -> int { rn x + y }
 let z = outer(add(1, 2), 3)
 ";
         let help = help_at(source, "3)").expect("expected signature help");

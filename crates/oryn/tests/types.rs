@@ -77,7 +77,7 @@ fn float_comparison() {
 #[test]
 fn float_in_function() {
     assert_eq!(
-        run("fn half(x: f32) -> f32 {\nrn x / 2.0\n}\nprint(half(5.0))"),
+        run("fn half(x: float) -> float {\nrn x / 2.0\n}\nprint(half(5.0))"),
         "2.5\n",
     );
 }
@@ -129,7 +129,7 @@ fn let_reassignment_still_works() {
 #[test]
 fn val_in_function() {
     assert_eq!(
-        run("fn double(n: i32) -> i32 {\nval result = n * 2\nrn result\n}\nprint(double(5))"),
+        run("fn double(n: int) -> int {\nval result = n * 2\nrn result\n}\nprint(double(5))"),
         "10\n",
     );
 }
@@ -151,18 +151,18 @@ fn val_reassignment_in_function_is_compile_error() {
 
 #[test]
 fn let_with_type_annotation() {
-    assert_eq!(run("let x: i32 = 5\nprint(x)"), "5\n");
+    assert_eq!(run("let x: int = 5\nprint(x)"), "5\n");
 }
 
 #[test]
 fn val_with_type_annotation() {
-    assert_eq!(run("val x: f32 = 3.14\nprint(x)"), "3.14\n");
+    assert_eq!(run("val x: float = 3.14\nprint(x)"), "3.14\n");
 }
 
 #[test]
 fn function_with_param_types() {
     assert_eq!(
-        run("fn add(a: i32, b: i32) -> i32 {\nrn a + b\n}\nprint(add(2, 3))"),
+        run("fn add(a: int, b: int) -> int {\nrn a + b\n}\nprint(add(2, 3))"),
         "5\n",
     );
 }
@@ -170,19 +170,19 @@ fn function_with_param_types() {
 #[test]
 fn function_with_return_type() {
     assert_eq!(
-        run("fn double(x: i32) -> i32 {\nrn x * 2\n}\nprint(double(5))"),
+        run("fn double(x: int) -> int {\nrn x * 2\n}\nprint(double(5))"),
         "10\n",
     );
 }
 
 #[test]
 fn mixed_annotated_and_unannotated() {
-    assert_eq!(run("let x: i32 = 10\nlet y = 20\nprint(x + y)"), "30\n",);
+    assert_eq!(run("let x: int = 10\nlet y = 20\nprint(x + y)"), "30\n",);
 }
 
 #[test]
 fn function_missing_param_type_is_compile_error() {
-    let result = oryn::Chunk::compile("fn add(a: i32, b) -> i32 {\nrn a + b\n}");
+    let result = oryn::Chunk::compile("fn add(a: int, b) -> int {\nrn a + b\n}");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -206,7 +206,7 @@ fn unknown_type_annotation_is_compile_error() {
 
 #[test]
 fn let_type_mismatch_is_compile_error() {
-    let result = oryn::Chunk::compile("let x: i32 = \"hello\"");
+    let result = oryn::Chunk::compile("let x: int = \"hello\"");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -217,7 +217,7 @@ fn let_type_mismatch_is_compile_error() {
 
 #[test]
 fn val_type_mismatch_is_compile_error() {
-    let result = oryn::Chunk::compile("val x: f32 = 5");
+    let result = oryn::Chunk::compile("val x: float = 5");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -248,8 +248,8 @@ fn void_function_no_return_type_needed() {
 
 #[test]
 fn correct_type_annotations_pass() {
-    assert_eq!(run("let x: i32 = 5\nprint(x)"), "5\n");
-    assert_eq!(run("let x: f32 = 3.14\nprint(x)"), "3.14\n");
+    assert_eq!(run("let x: int = 5\nprint(x)"), "5\n");
+    assert_eq!(run("let x: float = 3.14\nprint(x)"), "3.14\n");
     assert_eq!(run("let x: bool = true\nprint(x)"), "true\n");
     assert_eq!(run("let x: String = \"hi\"\nprint(x)"), "hi\n");
 }

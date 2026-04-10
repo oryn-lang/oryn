@@ -12,17 +12,17 @@
 // example is single-file, visibility doesn't matter yet — see the
 // `modules/` example for cross-file visibility rules.
 obj Vec2 {
-    x: f32
-    y: f32
+    x: float
+    y: float
 
     // Instance method: first parameter is `self`, like Python/Rust.
     // Oryn enforces `self` as the receiver for instance methods.
-    fn length_sq(self) -> f32 {
+    fn length_sq(self) -> float {
         rn self.x * self.x + self.y * self.y
     }
 
     // Instance method that returns a brand new Vec2 — no mutation.
-    fn scaled(self, factor: f32) -> Vec2 {
+    fn scaled(self, factor: float) -> Vec2 {
         rn Vec2 { x: self.x * factor, y: self.y * factor }
     }
 

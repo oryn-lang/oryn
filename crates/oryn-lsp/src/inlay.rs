@@ -81,7 +81,7 @@ mod tests {
         let hints = hints_for("let x = 5");
         assert_eq!(hints.len(), 1);
         match &hints[0].label {
-            InlayHintLabel::String(s) => assert_eq!(s, ": i32"),
+            InlayHintLabel::String(s) => assert_eq!(s, ": int"),
             other => panic!("unexpected label: {other:?}"),
         }
         assert_eq!(hints[0].kind, Some(InlayHintKind::TYPE));
@@ -89,13 +89,13 @@ mod tests {
 
     #[test]
     fn no_inlay_hint_for_annotated_let() {
-        let hints = hints_for("let x: i32 = 5");
+        let hints = hints_for("let x: int = 5");
         assert!(hints.is_empty(), "got: {hints:?}");
     }
 
     #[test]
     fn inlay_hint_for_obj_literal() {
-        let source = "obj Point {\nx: i32\ny: i32\n}\nlet p = Point { x: 1, y: 2 }";
+        let source = "obj Point {\nx: int\ny: int\n}\nlet p = Point { x: 1, y: 2 }";
         let hints = hints_for(source);
         assert_eq!(hints.len(), 1);
         match &hints[0].label {

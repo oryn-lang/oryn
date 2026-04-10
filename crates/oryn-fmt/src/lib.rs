@@ -642,23 +642,23 @@ mod tests {
 
     #[test]
     fn formats_function_and_if() {
-        let source = "fn add(a:i32,b:i32)->i32{if a>b {rn a}else{rn b}}";
+        let source = "fn add(a:int,b:int)->int{if a>b {rn a}else{rn b}}";
         let formatted = format_source(source).unwrap();
 
         assert_eq!(
             formatted,
-            "fn add(a: i32, b: i32) -> i32 {\n    if a > b {\n        rn a\n    } else {\n        rn b\n    }\n}\n"
+            "fn add(a: int, b: int) -> int {\n    if a > b {\n        rn a\n    } else {\n        rn b\n    }\n}\n"
         );
     }
 
     #[test]
     fn formats_objects_and_static_methods() {
-        let source = "obj Vec2 {\nx:i32\ny:i32\nfn zero()->Vec2{rn Vec2{x:0,y:0}}\n}";
+        let source = "obj Vec2 {\nx:int\ny:int\nfn zero()->Vec2{rn Vec2{x:0,y:0}}\n}";
         let formatted = format_source(source).unwrap();
 
         assert_eq!(
             formatted,
-            "obj Vec2 {\n    x: i32\n    y: i32\n\n    fn zero() -> Vec2 {\n        rn Vec2 { x: 0, y: 0 }\n    }\n}\n"
+            "obj Vec2 {\n    x: int\n    y: int\n\n    fn zero() -> Vec2 {\n        rn Vec2 { x: 0, y: 0 }\n    }\n}\n"
         );
     }
 

@@ -1,4 +1,4 @@
-fn add_one(n: i32) -> i32 {
+fn add_one(n: int) -> int {
     rn n + 1
 }
 

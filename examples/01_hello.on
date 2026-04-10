@@ -10,14 +10,14 @@
 // `let` introduces a mutable binding; `val` introduces an immutable one.
 // Types are usually inferred, but you can annotate explicitly.
 let name = "Oryn"
-val version: f32 = 0.1
+val version: float = 0.1
 
 // String interpolation: anything inside `{...}` in a string literal is
 // an Oryn expression evaluated at runtime.
 print("Hello from {name} v{version}!")
 
-// Integers and floats are distinct. `i32` is the default integer type,
-// `f32` the default float.
+// Integers and floats are distinct. `int` is the default integer type,
+// `float` the default float.
 let a = 10
 let b = 3
 print("a + b = {a + b}")

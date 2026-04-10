@@ -81,7 +81,7 @@ fn assert_compile_error_contains(errors: &[oryn::OrynError], needle: &str) {
 #[test]
 fn flat_import_function_call() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: i32, b: i32) -> i32 { rn a + b }");
+    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
     p.write("main.on", "import math\nprint(math.add(3, 4))");
 
     assert_eq!(p.run("main.on").unwrap(), "7\n");
@@ -99,7 +99,7 @@ fn flat_import_pub_constant() {
 #[test]
 fn flat_import_private_function_rejected() {
     let p = TempProject::new();
-    p.write("math.on", "fn helper() -> i32 { rn 1 }");
+    p.write("math.on", "fn helper() -> int { rn 1 }");
     p.write("main.on", "import math\nprint(math.helper())");
 
     let err = p.run("main.on").unwrap_err();
@@ -115,7 +115,7 @@ fn nested_import_function_call() {
     let p = TempProject::new();
     p.write(
         "math/nested/lib.on",
-        "pub fn triple(n: i32) -> i32 { rn n * 3 }",
+        "pub fn triple(n: int) -> int { rn n * 3 }",
     );
     p.write(
         "main.on",
@@ -142,8 +142,8 @@ fn module_calling_internal_helper() {
     let p = TempProject::new();
     p.write(
         "math.on",
-        "fn double(n: i32) -> i32 { rn n + n }
-pub fn quadruple(n: i32) -> i32 { rn double(double(n)) }",
+        "fn double(n: int) -> int { rn n + n }
+pub fn quadruple(n: int) -> int { rn double(double(n)) }",
     );
     p.write("main.on", "import math\nprint(math.quadruple(5))");
 
@@ -160,8 +160,8 @@ fn qualified_object_literal_all_pub_fields() {
     p.write(
         "geom.on",
         "pub obj Vec2 {
-    pub x: f32
-    pub y: f32
+    pub x: float
+    pub y: float
 }",
     );
     p.write(
@@ -181,8 +181,8 @@ fn qualified_object_literal_with_private_field_rejected() {
     p.write(
         "geom.on",
         "pub obj Vec2 {
-    pub x: f32
-    y: f32
+    pub x: float
+    y: float
 }",
     );
     p.write(
@@ -202,10 +202,10 @@ fn cross_module_method_call_pub() {
     p.write(
         "geom.on",
         "pub obj Vec2 {
-    pub x: f32
-    pub y: f32
+    pub x: float
+    pub y: float
 
-    pub fn length_sq(self) -> f32 {
+    pub fn length_sq(self) -> float {
         rn self.x * self.x + self.y * self.y
     }
 }",
@@ -226,10 +226,10 @@ fn cross_module_private_method_rejected() {
     p.write(
         "geom.on",
         "pub obj Vec2 {
-    pub x: f32
-    pub y: f32
+    pub x: float
+    pub y: float
 
-    fn _hidden(self) -> f32 { rn self.x }
+    fn _hidden(self) -> float { rn self.x }
 }",
     );
     p.write(
@@ -250,10 +250,10 @@ fn cross_module_private_field_access_rejected() {
     p.write(
         "geom.on",
         "pub obj Vec2 {
-    pub x: f32
-    pub y: f32
+    pub x: float
+    pub y: float
 
-    pub fn make(a: f32, b: f32) -> Vec2 {
+    pub fn make(a: float, b: float) -> Vec2 {
         rn Vec2 { x: a, y: b }
     }
 }",
@@ -277,13 +277,13 @@ fn cross_module_static_constructor_for_private_fields() {
     p.write(
         "secrets.on",
         "pub obj Hidden {
-    secret: i32
+    secret: int
 
-    pub fn new(n: i32) -> Hidden {
+    pub fn new(n: int) -> Hidden {
         rn Hidden { secret: n }
     }
 
-    pub fn get(self) -> i32 {
+    pub fn get(self) -> int {
         rn self.secret
     }
 }",
@@ -346,7 +346,7 @@ print(config.ON)",
 #[test]
 fn check_module_passes_for_valid_project() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: i32, b: i32) -> i32 { rn a + b }");
+    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
     p.write("main.on", "import math\nprint(math.add(1, 2))");
     p.check("main.on").unwrap();
 }
@@ -358,7 +358,7 @@ fn check_module_passes_for_valid_project() {
 #[test]
 fn check_file_resolves_cross_module_references() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: i32, b: i32) -> i32 { rn a + b }");
+    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
     let main_src = "import math\nprint(math.add(1, 2))";
     p.write("main.on", main_src);
 
@@ -373,10 +373,10 @@ fn check_file_resolves_nested_imports() {
     p.write(
         "math/vec2.on",
         "pub obj Vec2 {
-    pub x: f32
-    pub y: f32
+    pub x: float
+    pub y: float
 
-    pub fn length_sq(self) -> f32 {
+    pub fn length_sq(self) -> float {
         rn self.x * self.x + self.y * self.y
     }
 }",
@@ -394,7 +394,7 @@ print(v.length_sq())";
 #[test]
 fn check_file_uses_in_memory_source_not_disk() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: i32, b: i32) -> i32 { rn a + b }");
+    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
     // Disk has a stale version that references a non-existent function.
     p.write("main.on", "import math\nprint(math.missing(1, 2))");
 
@@ -412,7 +412,7 @@ fn check_file_uses_in_memory_source_not_disk() {
 #[test]
 fn check_file_still_reports_real_errors() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: i32, b: i32) -> i32 { rn a + b }");
+    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
     let main_src = "import math\nprint(math.nonexistent(1, 2))";
     p.write("main.on", main_src);
 

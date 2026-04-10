@@ -5,22 +5,22 @@
 pub val MAX_CHANNEL = 255
 
 pub obj Color {
-    pub r: i32
-    pub g: i32
-    pub b: i32
-    alpha: i32
+    pub r: int
+    pub g: int
+    pub b: int
+    alpha: int
 
     // Static constructor — the only way for outsiders to make a Color
     // because the `alpha` field is private.
-    pub fn rgb(r: i32, g: i32, b: i32) -> Color {
+    pub fn rgb(r: int, g: int, b: int) -> Color {
         rn Color { r: r, g: g, b: b, alpha: MAX_CHANNEL }
     }
 
-    pub fn rgba(r: i32, g: i32, b: i32, a: i32) -> Color {
+    pub fn rgba(r: int, g: int, b: int, a: int) -> Color {
         rn Color { r: r, g: g, b: b, alpha: a }
     }
 
-    pub fn opacity(self) -> i32 {
+    pub fn opacity(self) -> int {
         rn self.alpha
     }
 }

@@ -1,5 +1,5 @@
 obj Counter {
-    value: i32
+    value: int
 
     fn inc(self) {
         self.value = self.value + 1

@@ -391,7 +391,7 @@ fn program<'src>() -> impl Parser<
             .labelled("import statement")
             .boxed();
 
-        // A dotted type path: `i32`, `Vec2`, or `math.Vec2`,
+        // A dotted type path: `int`, `Vec2`, or `math.Vec2`,
         // `std.collections.List`. Stored as a `Vec<String>` so the
         // compiler can look it up against `obj_table` (single segment)
         // or `ModuleTable` (multi-segment).

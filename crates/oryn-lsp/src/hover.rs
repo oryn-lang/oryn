@@ -42,8 +42,8 @@ pub fn hover(
         oryn::Token::Ident(name) => {
             hover_ident(name, offset, symbol_table, source, docs, types, file_path)
         }
-        oryn::Token::Int(n) => Some(format!("`{n}` - i32 literal")),
-        oryn::Token::Float(n) => Some(format!("`{n}` - f32 literal")),
+        oryn::Token::Int(n) => Some(format!("`{n}` - int literal")),
+        oryn::Token::Float(n) => Some(format!("`{n}` - float literal")),
         oryn::Token::String(s) => Some(format!("`\"{s}\"` - String literal")),
         oryn::Token::True => Some("`true` - bool literal".to_string()),
         oryn::Token::False => Some("`false` - bool literal".to_string()),
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn doc_comment_above_obj_is_shown() {
-        let source = "// 2D vector\nobj Vec2 {\nx: i32\ny: i32\n}";
+        let source = "// 2D vector\nobj Vec2 {\nx: int\ny: int\n}";
         let out = hover_at(source, "Vec2");
         assert!(out.contains("2D vector"), "got: {out}");
         assert!(out.contains("obj Vec2"), "got: {out}");
@@ -285,8 +285,8 @@ mod tests {
 
     #[test]
     fn doc_comment_above_obj_field_is_shown() {
-        let source = "obj Vec2 {\n// horizontal coordinate\nx: i32\ny: i32\n}";
-        let out = hover_at(source, "x: i32");
+        let source = "obj Vec2 {\n// horizontal coordinate\nx: int\ny: int\n}";
+        let out = hover_at(source, "x: int");
         assert!(out.contains("horizontal coordinate"), "got: {out}");
         assert!(out.contains("- field"), "got: {out}");
     }
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn doc_comment_above_obj_method_is_shown() {
         let source =
-            "obj Foo {\nx: i32\n// returns the value\nfn get(self) -> i32 {\nrn self.x\n}\n}";
+            "obj Foo {\nx: int\n// returns the value\nfn get(self) -> int {\nrn self.x\n}\n}";
         let out = hover_at(source, "get");
         assert!(out.contains("returns the value"), "got: {out}");
         assert!(out.contains("fn get"), "got: {out}");
@@ -320,12 +320,12 @@ mod tests {
     fn inferred_type_shown_for_let_with_no_annotation() {
         let source = "let x = 5";
         let out = hover_at(source, "x =");
-        assert!(out.contains("let x: i32"), "got: {out}");
+        assert!(out.contains("let x: int"), "got: {out}");
     }
 
     #[test]
     fn inferred_type_from_obj_literal() {
-        let source = "obj Vec2 {\nx: i32\ny: i32\n}\nlet v = Vec2 { x: 1, y: 2 }";
+        let source = "obj Vec2 {\nx: int\ny: int\n}\nlet v = Vec2 { x: 1, y: 2 }";
         let out = hover_at(source, "v =");
         assert!(out.contains("let v: Vec2"), "got: {out}");
     }
@@ -334,9 +334,9 @@ mod tests {
     fn annotation_still_wins_over_inference() {
         // Explicit annotation should be used verbatim (same spelling
         // the user wrote), not the compiler's normalized form.
-        let source = "let x: i32 = 5";
+        let source = "let x: int = 5";
         let out = hover_at(source, "x:");
-        assert!(out.contains("let x: i32"), "got: {out}");
+        assert!(out.contains("let x: int"), "got: {out}");
     }
 
     #[test]
