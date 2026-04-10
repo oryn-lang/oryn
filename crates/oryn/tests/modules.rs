@@ -380,13 +380,13 @@ fn module_private_constant_not_accessible_from_outside() {
 }
 
 #[test]
-fn module_non_literal_binding_is_compile_error() {
+fn module_constant_expression_is_folded_at_compile_time() {
     let p = TempProject::new();
-    p.write("config.on", "val X = 1 + 2");
-    p.write("main.on", "import config\nprint(0)");
+    p.write("config.on", "pub val X = 1 + 2");
+    p.write("main.on", "import config\nprint(config.X)");
 
-    let err = p.run("main.on").unwrap_err();
-    assert_compile_error_contains(&err, "must be a literal value");
+    let output = p.run("main.on").expect("runtime error");
+    assert_eq!(output, "3\n");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::OrynError;
-use crate::compiler::types::{ConstValue, ResolvedType};
+use crate::compiler::types::ResolvedType;
 use crate::parser::{Expression, Span, Spanned, Statement, TypeAnnotation};
 
 use super::compile::{Compiler, LoopContext};
@@ -60,31 +60,9 @@ impl Compiler {
         is_pub: bool,
         span: &Span,
     ) {
-        let const_value = match &value.node {
-            Expression::Int(n) => Some(ConstValue::Int(*n)),
-            Expression::Float(n) => Some(ConstValue::Float(*n)),
-            Expression::True => Some(ConstValue::Bool(true)),
-            Expression::False => Some(ConstValue::Bool(false)),
-            Expression::String(s) => Some(ConstValue::String(s.clone())),
-            Expression::UnaryOp {
-                op: crate::parser::UnaryOp::Negate,
-                expr,
-            } => match &expr.node {
-                Expression::Int(n) => match n.checked_neg() {
-                    Some(v) => Some(ConstValue::Int(v)),
-                    None => {
-                        self.output.errors.push(OrynError::compiler(
-                            span.clone(),
-                            format!("integer overflow in module constant `{name}`"),
-                        ));
-                        return;
-                    }
-                },
-                Expression::Float(n) => Some(ConstValue::Float(-n)),
-                _ => None,
-            },
-            _ => None,
-        };
+        let const_value = self
+            .try_fold_expr(&value.node)
+            .and_then(|value| value.to_const_value());
 
         match const_value {
             Some(v) => {
@@ -256,7 +234,7 @@ impl Compiler {
                     Some(rt) => self
                         .resolve_type_annotation(rt)
                         .unwrap_or(ResolvedType::Unknown),
-                    None => ResolvedType::Void,
+                    None => ResolvedType::Unknown,
                 };
 
                 self.output

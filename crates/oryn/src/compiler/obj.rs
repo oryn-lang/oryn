@@ -71,6 +71,12 @@ impl Compiler {
                         ));
                     } else {
                         field_names.push(field.clone());
+                        field_types.push(
+                            def.field_types
+                                .get(i)
+                                .cloned()
+                                .unwrap_or(ResolvedType::Unknown),
+                        );
                         field_is_pub.push(def.field_is_pub.get(i).copied().unwrap_or(false));
                     }
                 }
@@ -154,13 +160,13 @@ impl Compiler {
             field_names.clone(),
             field_types.clone(),
             field_is_pub.clone(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            Vec::new(),
+            method_indices.clone(),
+            static_method_indices.clone(),
+            method_is_pub.clone(),
+            static_method_is_pub.clone(),
+            method_signatures.clone(),
+            static_method_signatures.clone(),
+            all_required.clone(),
             is_pub,
         );
 
@@ -192,7 +198,7 @@ impl Compiler {
                         resolve_type(rt, &self.obj_table, &self.modules)
                             .unwrap_or(ResolvedType::Unknown),
                     ),
-                    None => ResolvedType::Void,
+                    None => ResolvedType::Unknown,
                 };
 
                 MethodSignature {
@@ -253,7 +259,7 @@ impl Compiler {
                         resolve_type(rt, &self.obj_table, &self.modules)
                             .unwrap_or(ResolvedType::Unknown),
                     ),
-                    None => ResolvedType::Void,
+                    None => ResolvedType::Unknown,
                 };
 
                 self.output

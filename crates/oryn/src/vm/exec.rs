@@ -4,7 +4,7 @@ use std::ops::Range;
 use gc_arena::lock::RefLock;
 use gc_arena::{Arena, Gc, Rootable};
 
-use crate::compiler::Instruction;
+use crate::compiler::{BuiltinFunction, Instruction};
 use crate::errors::{RuntimeError, ValueType};
 use crate::vm::value::{ObjData, RangeValue};
 
@@ -561,11 +561,11 @@ impl VM {
                             }
                         };
                     }
-                    Instruction::CallBuiltin(name, arity) => {
+                    Instruction::CallBuiltin(builtin, arity) => {
                         let arity = *arity;
 
-                        match name.as_str() {
-                            "print" => {
+                        match builtin {
+                            BuiltinFunction::Print => {
                                 let args: Vec<Value> =
                                     state.stack.split_off(state.stack.len() - arity);
 
@@ -605,14 +605,6 @@ impl VM {
                                 writer.write_all(b"\n").map_err(RuntimeError::IoError)?;
 
                                 state.stack.push(Value::Int(0));
-                            }
-                            _ => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-
-                                return Err(RuntimeError::UndefinedFunction {
-                                    name: name.clone(),
-                                    span,
-                                });
                             }
                         }
                     }
@@ -864,19 +856,16 @@ mod tests {
     }
 
     #[test]
-    fn undefined_function_is_runtime_error() {
+    fn builtin_print_executes() {
         let c = chunk(vec![
             Instruction::PushInt(1),
-            Instruction::CallBuiltin("nope".into(), 1),
+            Instruction::CallBuiltin(BuiltinFunction::Print, 1),
             Instruction::Pop,
         ]);
 
         let mut vm = VM::new();
-        let err = vm.run(&c).unwrap_err();
-
-        assert!(matches!(
-            err,
-            RuntimeError::UndefinedFunction { ref name, .. } if name == "nope"
-        ));
+        let mut output = Vec::new();
+        vm.run_with_writer(&c, &mut output).unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "1\n");
     }
 }

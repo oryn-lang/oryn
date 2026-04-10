@@ -11,6 +11,7 @@ mod types;
 mod tests;
 
 pub(crate) use compile::compile;
+pub(crate) use types::BuiltinFunction;
 pub(crate) use types::CompiledFunction;
 pub(crate) use types::CompilerOutput;
 pub(crate) use types::Instruction;

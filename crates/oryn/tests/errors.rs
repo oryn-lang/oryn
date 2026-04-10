@@ -237,6 +237,17 @@ fn undefined_variable_is_compile_error() {
 }
 
 #[test]
+fn undefined_function_is_compile_error() {
+    let result = oryn::Chunk::compile("nope()");
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined function"))
+    }));
+}
+
+#[test]
 fn assignment_to_undefined_is_compile_error() {
     let result = oryn::Chunk::compile("x = 5");
 
@@ -297,22 +308,14 @@ fn float_division_by_zero_is_error() {
 }
 
 #[test]
-fn arity_mismatch_is_runtime_error() {
-    let chunk = oryn::Chunk::compile("fn add(a: int, b: int) -> int {\nrn a + b\n}\nadd(1)")
-        .expect("compile error");
-    let mut vm = oryn::VM::new();
-    let mut output = Vec::new();
+fn arity_mismatch_is_compile_error() {
+    let result = oryn::Chunk::compile("fn add(a: int, b: int) -> int {\nrn a + b\n}\nadd(1)");
 
-    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
-
-    assert!(matches!(
-        err,
-        oryn::RuntimeError::ArityMismatch {
-            expected: 2,
-            actual: 1,
-            ..
-        }
-    ));
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("arity mismatch"))
+    }));
 }
 
 // --- Bug fix regression tests ---
@@ -359,29 +362,29 @@ fn negate_min_int_is_overflow() {
 }
 
 #[test]
-fn method_wrong_arity_is_runtime_error() {
-    let chunk = oryn::Chunk::compile(
-        "obj Foo {\nx: int\nfn add(self, n: int) {\nrn self.x + n\n}\n}\nlet f = Foo { x: 1 }\nf.add()",
-    )
-    .expect("compile error");
-    let mut vm = oryn::VM::new();
-    let mut output = Vec::new();
+fn method_wrong_arity_is_compile_error() {
+    let result = oryn::Chunk::compile(
+        "obj Foo {\nx: int\nfn add(self, n: int) -> int {\nrn self.x + n\n}\n}\nlet f = Foo { x: 1 }\nf.add()",
+    );
 
-    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
-    assert!(matches!(err, oryn::RuntimeError::ArityMismatch { .. }));
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("arity mismatch"))
+    }));
 }
 
 #[test]
-fn method_too_many_args_is_runtime_error() {
-    let chunk = oryn::Chunk::compile(
-        "obj Foo {\nx: int\nfn get(self) {\nrn self.x\n}\n}\nlet f = Foo { x: 1 }\nf.get(1, 2)",
-    )
-    .expect("compile error");
-    let mut vm = oryn::VM::new();
-    let mut output = Vec::new();
+fn method_too_many_args_is_compile_error() {
+    let result = oryn::Chunk::compile(
+        "obj Foo {\nx: int\nfn get(self) -> int {\nrn self.x\n}\n}\nlet f = Foo { x: 1 }\nf.get(1, 2)",
+    );
 
-    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
-    assert!(matches!(err, oryn::RuntimeError::ArityMismatch { .. }));
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("arity mismatch"))
+    }));
 }
 
 #[test]

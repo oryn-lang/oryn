@@ -119,3 +119,13 @@ print("the {x}")"#),
 fn empty_string() {
     assert_eq!(run(r#"print("")"#), "\n");
 }
+
+#[test]
+fn constant_string_interpolation_is_folded() {
+    let chunk = oryn::Chunk::compile(r#"print("sum: {1 + 2}")"#).expect("compile error");
+    let disassembly = chunk.disassemble();
+
+    assert!(disassembly.contains("PushString sum: 3"));
+    assert!(!disassembly.contains("ToString"));
+    assert!(!disassembly.contains("Concat"));
+}

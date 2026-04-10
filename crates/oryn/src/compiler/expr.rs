@@ -6,7 +6,7 @@ use crate::parser::{BinOp, Expression, Spanned, StringPart, UnaryOp};
 
 use super::block::BlockMode;
 use super::compile::Compiler;
-use super::types::Instruction;
+use super::types::{BuiltinFunction, ConstValue, Instruction};
 
 /// Walk a chain of `FieldAccess` nodes rooted in an `Ident` and collect
 /// the path segments. Returns `Some(["math", "nested", "lib"])` for an
@@ -24,7 +24,292 @@ fn extract_dotted_path(expr: &Expression) -> Option<Vec<String>> {
     }
 }
 
+#[derive(Clone)]
+pub(super) enum FoldedValue {
+    Bool(bool),
+    Float(f32),
+    Int(i32),
+    Nil,
+    String(String),
+}
+
+impl FoldedValue {
+    fn resolved_type(&self) -> ResolvedType {
+        match self {
+            FoldedValue::Bool(_) => ResolvedType::Bool,
+            FoldedValue::Float(_) => ResolvedType::Float,
+            FoldedValue::Int(_) => ResolvedType::Int,
+            FoldedValue::Nil => ResolvedType::Nil,
+            FoldedValue::String(_) => ResolvedType::Str,
+        }
+    }
+
+    fn to_instruction(&self) -> Instruction {
+        match self {
+            FoldedValue::Bool(v) => Instruction::PushBool(*v),
+            FoldedValue::Float(v) => Instruction::PushFloat(*v),
+            FoldedValue::Int(v) => Instruction::PushInt(*v),
+            FoldedValue::Nil => Instruction::PushNil,
+            FoldedValue::String(v) => Instruction::PushString(v.clone()),
+        }
+    }
+
+    pub(super) fn to_const_value(&self) -> Option<ConstValue> {
+        match self {
+            FoldedValue::Bool(v) => Some(ConstValue::Bool(*v)),
+            FoldedValue::Float(v) => Some(ConstValue::Float(*v)),
+            FoldedValue::Int(v) => Some(ConstValue::Int(*v)),
+            FoldedValue::String(v) => Some(ConstValue::String(v.clone())),
+            FoldedValue::Nil => None,
+        }
+    }
+
+    fn to_runtime_string(&self) -> String {
+        match self {
+            FoldedValue::Bool(v) => v.to_string(),
+            FoldedValue::Float(v) => {
+                let s = v.to_string();
+                if s.contains('.') { s } else { format!("{s}.0") }
+            }
+            FoldedValue::Int(v) => v.to_string(),
+            FoldedValue::Nil => "nil".to_string(),
+            FoldedValue::String(v) => v.clone(),
+        }
+    }
+}
+
 impl Compiler {
+    fn builtin_from_name(name: &str) -> Option<BuiltinFunction> {
+        match name {
+            "print" => Some(BuiltinFunction::Print),
+            _ => None,
+        }
+    }
+
+    fn module_const_from_path(
+        &self,
+        expr: &Expression,
+        field: Option<&str>,
+    ) -> Option<FoldedValue> {
+        let path = extract_dotted_path(expr)?;
+        let root = path.first()?;
+        if self.locals.resolve(root).is_some() {
+            return None;
+        }
+
+        match field {
+            Some(field) => {
+                let key = path.join(".");
+                self.modules
+                    .modules
+                    .get(&key)
+                    .and_then(|exports| exports.constants.get(field))
+                    .map(|value| match value {
+                        ConstValue::Int(v) => FoldedValue::Int(*v),
+                        ConstValue::Float(v) => FoldedValue::Float(*v),
+                        ConstValue::Bool(v) => FoldedValue::Bool(*v),
+                        ConstValue::String(v) => FoldedValue::String(v.clone()),
+                    })
+            }
+            None if path.len() == 1 => self
+                .output
+                .module_constants
+                .get(root)
+                .or_else(|| self.output.private_module_constants.get(root))
+                .map(|value| match value {
+                    ConstValue::Int(v) => FoldedValue::Int(*v),
+                    ConstValue::Float(v) => FoldedValue::Float(*v),
+                    ConstValue::Bool(v) => FoldedValue::Bool(*v),
+                    ConstValue::String(v) => FoldedValue::String(v.clone()),
+                }),
+            None => None,
+        }
+    }
+
+    pub(super) fn try_fold_expr(&self, expr: &Expression) -> Option<FoldedValue> {
+        match expr {
+            Expression::True => Some(FoldedValue::Bool(true)),
+            Expression::False => Some(FoldedValue::Bool(false)),
+            Expression::Float(v) => Some(FoldedValue::Float(*v)),
+            Expression::Int(v) => Some(FoldedValue::Int(*v)),
+            Expression::Nil => Some(FoldedValue::Nil),
+            Expression::String(v) => Some(FoldedValue::String(v.clone())),
+            Expression::Ident(_) => self.module_const_from_path(expr, None),
+            Expression::FieldAccess { object, field } => {
+                self.module_const_from_path(&object.node, Some(field))
+            }
+            Expression::StringInterp(parts) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        StringPart::Literal(v) => result.push_str(v),
+                        StringPart::Interp(expr) => {
+                            result.push_str(&self.try_fold_expr(&expr.node)?.to_runtime_string());
+                        }
+                    }
+                }
+                Some(FoldedValue::String(result))
+            }
+            Expression::UnaryOp { op, expr } => {
+                let value = self.try_fold_expr(&expr.node)?;
+                match (op, value) {
+                    (UnaryOp::Not, FoldedValue::Bool(v)) => Some(FoldedValue::Bool(!v)),
+                    (UnaryOp::Negate, FoldedValue::Int(v)) => v.checked_neg().map(FoldedValue::Int),
+                    (UnaryOp::Negate, FoldedValue::Float(v)) => Some(FoldedValue::Float(-v)),
+                    _ => None,
+                }
+            }
+            Expression::BinaryOp { op, left, right } => {
+                let left = self.try_fold_expr(&left.node)?;
+                match op {
+                    BinOp::And => match left {
+                        FoldedValue::Bool(false) => Some(FoldedValue::Bool(false)),
+                        FoldedValue::Bool(true) => match self.try_fold_expr(&right.node)? {
+                            FoldedValue::Bool(v) => Some(FoldedValue::Bool(v)),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    BinOp::Or => match left {
+                        FoldedValue::Bool(true) => Some(FoldedValue::Bool(true)),
+                        FoldedValue::Bool(false) => match self.try_fold_expr(&right.node)? {
+                            FoldedValue::Bool(v) => Some(FoldedValue::Bool(v)),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    _ => {
+                        let right = self.try_fold_expr(&right.node)?;
+                        match (op, left, right) {
+                            (BinOp::Add, FoldedValue::Int(l), FoldedValue::Int(r)) => {
+                                l.checked_add(r).map(FoldedValue::Int)
+                            }
+                            (BinOp::Sub, FoldedValue::Int(l), FoldedValue::Int(r)) => {
+                                l.checked_sub(r).map(FoldedValue::Int)
+                            }
+                            (BinOp::Mul, FoldedValue::Int(l), FoldedValue::Int(r)) => {
+                                l.checked_mul(r).map(FoldedValue::Int)
+                            }
+                            (BinOp::Div, FoldedValue::Int(l), FoldedValue::Int(r)) if r != 0 => {
+                                l.checked_div(r).map(FoldedValue::Int)
+                            }
+                            (BinOp::Add, FoldedValue::Float(l), FoldedValue::Float(r)) => {
+                                Some(FoldedValue::Float(l + r))
+                                    .filter(|v| matches!(v, FoldedValue::Float(f) if f.is_finite()))
+                            }
+                            (BinOp::Sub, FoldedValue::Float(l), FoldedValue::Float(r)) => {
+                                Some(FoldedValue::Float(l - r))
+                                    .filter(|v| matches!(v, FoldedValue::Float(f) if f.is_finite()))
+                            }
+                            (BinOp::Mul, FoldedValue::Float(l), FoldedValue::Float(r)) => {
+                                Some(FoldedValue::Float(l * r))
+                                    .filter(|v| matches!(v, FoldedValue::Float(f) if f.is_finite()))
+                            }
+                            (BinOp::Div, FoldedValue::Float(l), FoldedValue::Float(r))
+                                if r != 0.0 =>
+                            {
+                                Some(FoldedValue::Float(l / r))
+                                    .filter(|v| matches!(v, FoldedValue::Float(f) if f.is_finite()))
+                            }
+                            (BinOp::Equals, FoldedValue::Int(l), FoldedValue::Int(r)) => {
+                                Some(FoldedValue::Bool(l == r))
+                            }
+                            (BinOp::Equals, FoldedValue::Float(l), FoldedValue::Float(r)) => {
+                                Some(FoldedValue::Bool(l == r))
+                            }
+                            (BinOp::Equals, FoldedValue::Bool(l), FoldedValue::Bool(r)) => {
+                                Some(FoldedValue::Bool(l == r))
+                            }
+                            (BinOp::Equals, FoldedValue::String(l), FoldedValue::String(r)) => {
+                                Some(FoldedValue::Bool(l == r))
+                            }
+                            (BinOp::Equals, FoldedValue::Nil, FoldedValue::Nil) => {
+                                Some(FoldedValue::Bool(true))
+                            }
+                            (BinOp::Equals, FoldedValue::Nil, _)
+                            | (BinOp::Equals, _, FoldedValue::Nil) => {
+                                Some(FoldedValue::Bool(false))
+                            }
+                            (BinOp::NotEquals, FoldedValue::Int(l), FoldedValue::Int(r)) => {
+                                Some(FoldedValue::Bool(l != r))
+                            }
+                            (BinOp::NotEquals, FoldedValue::Float(l), FoldedValue::Float(r)) => {
+                                Some(FoldedValue::Bool(l != r))
+                            }
+                            (BinOp::NotEquals, FoldedValue::Bool(l), FoldedValue::Bool(r)) => {
+                                Some(FoldedValue::Bool(l != r))
+                            }
+                            (BinOp::NotEquals, FoldedValue::String(l), FoldedValue::String(r)) => {
+                                Some(FoldedValue::Bool(l != r))
+                            }
+                            (BinOp::NotEquals, FoldedValue::Nil, FoldedValue::Nil) => {
+                                Some(FoldedValue::Bool(false))
+                            }
+                            (BinOp::NotEquals, FoldedValue::Nil, _)
+                            | (BinOp::NotEquals, _, FoldedValue::Nil) => {
+                                Some(FoldedValue::Bool(true))
+                            }
+                            (BinOp::LessThan, FoldedValue::Int(l), FoldedValue::Int(r)) => {
+                                Some(FoldedValue::Bool(l < r))
+                            }
+                            (BinOp::LessThan, FoldedValue::Float(l), FoldedValue::Float(r)) => {
+                                Some(FoldedValue::Bool(l < r))
+                            }
+                            (BinOp::LessThan, FoldedValue::String(l), FoldedValue::String(r)) => {
+                                Some(FoldedValue::Bool(l < r))
+                            }
+                            (BinOp::GreaterThan, FoldedValue::Int(l), FoldedValue::Int(r)) => {
+                                Some(FoldedValue::Bool(l > r))
+                            }
+                            (BinOp::GreaterThan, FoldedValue::Float(l), FoldedValue::Float(r)) => {
+                                Some(FoldedValue::Bool(l > r))
+                            }
+                            (
+                                BinOp::GreaterThan,
+                                FoldedValue::String(l),
+                                FoldedValue::String(r),
+                            ) => Some(FoldedValue::Bool(l > r)),
+                            (BinOp::LessThanEquals, FoldedValue::Int(l), FoldedValue::Int(r)) => {
+                                Some(FoldedValue::Bool(l <= r))
+                            }
+                            (
+                                BinOp::LessThanEquals,
+                                FoldedValue::Float(l),
+                                FoldedValue::Float(r),
+                            ) => Some(FoldedValue::Bool(l <= r)),
+                            (
+                                BinOp::LessThanEquals,
+                                FoldedValue::String(l),
+                                FoldedValue::String(r),
+                            ) => Some(FoldedValue::Bool(l <= r)),
+                            (
+                                BinOp::GreaterThanEquals,
+                                FoldedValue::Int(l),
+                                FoldedValue::Int(r),
+                            ) => Some(FoldedValue::Bool(l >= r)),
+                            (
+                                BinOp::GreaterThanEquals,
+                                FoldedValue::Float(l),
+                                FoldedValue::Float(r),
+                            ) => Some(FoldedValue::Bool(l >= r)),
+                            (
+                                BinOp::GreaterThanEquals,
+                                FoldedValue::String(l),
+                                FoldedValue::String(r),
+                            ) => Some(FoldedValue::Bool(l >= r)),
+                            _ => None,
+                        }
+                    }
+                }
+            }
+            Expression::Coalesce { left, right } => match self.try_fold_expr(&left.node)? {
+                FoldedValue::Nil => self.try_fold_expr(&right.node),
+                value => Some(value),
+            },
+            _ => None,
+        }
+    }
+
     /// Best-effort type inference for the receiver of a method call,
     /// used to enforce cross-module method privacy without actually
     /// compiling the receiver. Recognizes idents (resolved via locals)
@@ -58,6 +343,35 @@ impl Compiler {
                             .get(idx)
                             .cloned()
                             .unwrap_or(ResolvedType::Unknown);
+                    }
+                }
+                ResolvedType::Unknown
+            }
+            Expression::ObjLiteral { type_name, .. } => {
+                if type_name.is_empty() {
+                    return ResolvedType::Unknown;
+                }
+                if type_name.len() == 1 {
+                    let local_name = &type_name[0];
+                    if self.obj_table.resolve(local_name).is_some() {
+                        return ResolvedType::Object {
+                            name: local_name.clone(),
+                            module: self.current_module_path.clone(),
+                        };
+                    }
+                } else if let Some((name, module)) = type_name.split_last() {
+                    let key = module.join(".");
+                    if self
+                        .modules
+                        .modules
+                        .get(&key)
+                        .and_then(|exports| exports.obj_defs.get(name))
+                        .is_some()
+                    {
+                        return ResolvedType::Object {
+                            name: name.clone(),
+                            module: module.to_vec(),
+                        };
                     }
                 }
                 ResolvedType::Unknown
@@ -234,6 +548,11 @@ impl Compiler {
     pub(super) fn compile_expr(&mut self, expr: Spanned<Expression>) -> ResolvedType {
         let span = expr.span.clone();
 
+        if let Some(folded) = self.try_fold_expr(&expr.node) {
+            self.emit(folded.to_instruction(), &span);
+            return folded.resolved_type();
+        }
+
         match expr.node {
             // -- Literals --
             Expression::True => {
@@ -265,13 +584,9 @@ impl Compiler {
                 let num_parts = parts.len();
                 for part in parts {
                     match part {
-                        StringPart::Literal(s) => {
-                            self.emit(Instruction::PushString(s), &span);
-                        }
+                        StringPart::Literal(s) => self.emit(Instruction::PushString(s), &span),
                         StringPart::Interp(expr) => {
                             let returned_type = self.compile_expr(expr);
-
-                            // We don't need to convert to string if the result is already a string.
                             if returned_type != ResolvedType::Str {
                                 self.emit(Instruction::ToString, &span);
                             }
@@ -320,49 +635,54 @@ impl Compiler {
                 self.compile_obj_literal(type_name, fields, &span)
             }
             Expression::FieldAccess { object, field } => {
-                // Module constant access: `math.PI` or `std.math.constants.TAU`.
-                // Walk the object as a dotted path; if it matches an imported
-                // module and `field` is a pub constant, inline the literal.
-                if let Some(path) = extract_dotted_path(&object.node) {
-                    let root = &path[0];
-                    if self.locals.resolve(root).is_none() {
-                        let key = path.join(".");
-                        if let Some(exports) = self.modules.modules.get(&key) {
-                            if let Some(const_value) = exports.constants.get(&field) {
-                                let instr = const_value.to_instruction();
-                                let result_type = const_value.resolved_type();
-                                self.emit(instr, &span);
-                                return result_type;
-                            } else if !exports.functions.contains_key(&field) {
-                                self.output.errors.push(OrynError::compiler(
-                                    span.clone(),
-                                    format!("undefined constant `{key}.{field}`"),
-                                ));
-                                self.emit(Instruction::PushInt(0), &span);
-                                return ResolvedType::Unknown;
-                            }
-                        }
+                if let Some(path) = extract_dotted_path(&object.node)
+                    && self.locals.resolve(&path[0]).is_none()
+                {
+                    let key = path.join(".");
+                    if let Some(exports) = self.modules.modules.get(&key)
+                        && !exports.functions.contains_key(&field)
+                        && !exports.constants.contains_key(&field)
+                    {
+                        self.output.errors.push(OrynError::compiler(
+                            span.clone(),
+                            format!("undefined constant `{key}.{field}`"),
+                        ));
+                        self.emit(Instruction::PushInt(0), &span);
+                        return ResolvedType::Unknown;
                     }
                 }
 
-                let obj_type = match &object.node {
-                    Expression::Ident(name) => self
-                        .locals
-                        .resolve(name)
-                        .map(|(_, _, t)| t)
-                        .unwrap_or(ResolvedType::Unknown),
-                    _ => ResolvedType::Unknown,
-                };
+                let obj_type = self.infer_object_type(&object.node);
 
                 self.compile_expr(*object);
 
                 if let Some(field_idx) = self.resolve_field(&obj_type, &field, &span) {
                     self.emit(Instruction::GetField(field_idx), &span);
+                    match obj_type {
+                        ResolvedType::Object {
+                            ref name,
+                            ref module,
+                        } if module.is_empty() || *module == self.current_module_path => self
+                            .obj_table
+                            .resolve(name)
+                            .and_then(|(_, def)| def.field_types.get(field_idx).cloned())
+                            .unwrap_or(ResolvedType::Unknown),
+                        ResolvedType::Object {
+                            ref name,
+                            ref module,
+                        } => self
+                            .modules
+                            .modules
+                            .get(&module.join("."))
+                            .and_then(|exports| exports.obj_defs.get(name))
+                            .and_then(|def| def.field_types.get(field_idx).cloned())
+                            .unwrap_or(ResolvedType::Unknown),
+                        _ => ResolvedType::Unknown,
+                    }
                 } else {
                     self.emit(Instruction::PushInt(0), &span);
+                    ResolvedType::Unknown
                 }
-
-                ResolvedType::Unknown
             }
             Expression::MethodCall {
                 object,
@@ -444,6 +764,16 @@ impl Compiler {
                         }
 
                         if let Some(ref sig) = signature {
+                            if arity != sig.param_types.len() {
+                                self.output.errors.push(OrynError::compiler(
+                                    span.clone(),
+                                    format!(
+                                        "arity mismatch: expected {} arguments, got {}",
+                                        sig.param_types.len(),
+                                        arity
+                                    ),
+                                ));
+                            }
                             for (i, (arg_type, param_type)) in
                                 arg_types.iter().zip(&sig.param_types).enumerate()
                             {
@@ -481,6 +811,16 @@ impl Compiler {
                         }
 
                         if let Some(ref sig) = signature {
+                            if arity != sig.param_types.len() {
+                                self.output.errors.push(OrynError::compiler(
+                                    span.clone(),
+                                    format!(
+                                        "arity mismatch: expected {} arguments, got {}",
+                                        sig.param_types.len(),
+                                        arity
+                                    ),
+                                ));
+                            }
                             for (i, (arg_type, param_type)) in
                                 arg_types.iter().zip(&sig.param_types).enumerate()
                             {
@@ -539,6 +879,16 @@ impl Compiler {
                             arg_types.push(self.compile_expr(arg));
                         }
 
+                        if arity != param_types.len() {
+                            self.output.errors.push(OrynError::compiler(
+                                span.clone(),
+                                format!(
+                                    "arity mismatch: expected {} arguments, got {}",
+                                    param_types.len(),
+                                    arity
+                                ),
+                            ));
+                        }
                         for (i, (arg_type, param_type)) in
                             arg_types.iter().zip(&param_types).enumerate()
                         {
@@ -564,43 +914,100 @@ impl Compiler {
                         ResolvedType::Unknown
                     }
                 } else {
-                    // Runtime method dispatch. Before compiling, peek at
-                    // the receiver's type so we can enforce cross-module
-                    // method privacy.
                     let receiver_type = self.infer_object_type(&object.node);
 
-                    if let ResolvedType::Object {
-                        name: type_name,
-                        module,
-                    } = &receiver_type
-                        && !module.is_empty()
-                        && *module != self.current_module_path
-                    {
-                        let module_key = module.join(".");
-                        if let Some(def) = self
-                            .modules
-                            .modules
-                            .get(&module_key)
-                            .and_then(|e| e.obj_defs.get(type_name))
+                    let direct_method = match &receiver_type {
+                        ResolvedType::Object { name, module }
+                            if module.is_empty() || *module == self.current_module_path =>
                         {
-                            if def.methods.contains_key(&method) {
-                                let is_pub =
-                                    def.method_is_pub.get(&method).copied().unwrap_or(false);
-                                if !is_pub {
+                            self.obj_table.resolve(name).map(|(_, def)| {
+                                (
+                                    name.clone(),
+                                    module.clone(),
+                                    def.methods.get(&method).copied(),
+                                    def.method_is_pub.get(&method).copied().unwrap_or(true),
+                                    def.method_signatures.get(&method).cloned(),
+                                )
+                            })
+                        }
+                        ResolvedType::Object { name, module } => {
+                            let module_key = module.join(".");
+                            self.modules
+                                .modules
+                                .get(&module_key)
+                                .and_then(|exports| exports.obj_defs.get(name))
+                                .map(|def| {
+                                    (
+                                        name.clone(),
+                                        module.clone(),
+                                        def.methods.get(&method).copied(),
+                                        def.method_is_pub.get(&method).copied().unwrap_or(false),
+                                        def.method_signatures.get(&method).cloned(),
+                                    )
+                                })
+                        }
+                        _ => None,
+                    };
+
+                    if let Some((type_name, module, func_idx, is_pub, signature)) = direct_method {
+                        if !module.is_empty() && module != self.current_module_path && !is_pub {
+                            self.output.errors.push(OrynError::compiler(
+                                span.clone(),
+                                format!(
+                                    "method `{method}` is private to module `{}`",
+                                    module.join(".")
+                                ),
+                            ));
+                        }
+
+                        if let Some(func_idx) = func_idx {
+                            self.compile_expr(*object);
+
+                            let mut arg_types = Vec::new();
+                            for arg in args {
+                                arg_types.push(self.compile_expr(arg));
+                            }
+
+                            if let Some(ref sig) = signature {
+                                if arity != sig.param_types.len() {
                                     self.output.errors.push(OrynError::compiler(
                                         span.clone(),
                                         format!(
-                                            "method `{method}` is private to module `{module_key}`"
+                                            "arity mismatch: expected {} arguments, got {}",
+                                            sig.param_types.len(),
+                                            arity
                                         ),
                                     ));
                                 }
-                            } else {
-                                self.output.errors.push(OrynError::compiler(
-                                    span.clone(),
-                                    format!("undefined method `{module_key}.{type_name}.{method}`"),
-                                ));
+                                for (i, (arg_type, param_type)) in
+                                    arg_types.iter().zip(&sig.param_types).enumerate()
+                                {
+                                    self.check_types(
+                                        param_type,
+                                        arg_type,
+                                        &span,
+                                        &format!("argument {} type mismatch", i + 1),
+                                    );
+                                }
                             }
+
+                            self.emit(Instruction::Call(func_idx, arity + 1), &span);
+                            return signature
+                                .map(|s| s.return_type)
+                                .unwrap_or(ResolvedType::Unknown);
                         }
+
+                        let qualified = if module.is_empty() {
+                            format!("{type_name}.{method}")
+                        } else {
+                            format!("{}.{}.{}", module.join("."), type_name, method)
+                        };
+                        self.output.errors.push(OrynError::compiler(
+                            span.clone(),
+                            format!("undefined method `{qualified}`"),
+                        ));
+                        self.emit(Instruction::PushInt(0), &span);
+                        return ResolvedType::Unknown;
                     }
 
                     self.compile_expr(*object);
@@ -679,38 +1086,6 @@ impl Compiler {
                     }
 
                     return ResolvedType::Bool;
-                }
-
-                match (&left.node, &right.node) {
-                    (Expression::Int(l), Expression::Int(r)) => {
-                        let folded = match &op {
-                            BinOp::Add => l.checked_add(*r),
-                            BinOp::Sub => l.checked_sub(*r),
-                            BinOp::Mul => l.checked_mul(*r),
-                            BinOp::Div if *r != 0 => l.checked_div(*r),
-                            _ => None,
-                        };
-
-                        if let Some(result) = folded {
-                            self.emit(Instruction::PushInt(result), &span);
-                            return ResolvedType::Int;
-                        }
-                    }
-                    (Expression::Float(l), Expression::Float(r)) => {
-                        let folded = match &op {
-                            BinOp::Add => Some(*l + *r),
-                            BinOp::Sub => Some(*l - *r),
-                            BinOp::Mul => Some(*l * *r),
-                            BinOp::Div => Some(*l / *r),
-                            _ => None,
-                        };
-
-                        if let Some(result) = folded.filter(|v| v.is_finite()) {
-                            self.emit(Instruction::PushFloat(result), &span);
-                            return ResolvedType::Float;
-                        }
-                    }
-                    _ => {}
                 }
 
                 let left_type = self.compile_expr(*left);
@@ -822,6 +1197,16 @@ impl Compiler {
                 }
 
                 if let Some(sig) = self.fn_table.signatures.get(&name) {
+                    if arity != sig.param_types.len() {
+                        self.output.errors.push(OrynError::compiler(
+                            span.clone(),
+                            format!(
+                                "arity mismatch: expected {} arguments, got {}",
+                                sig.param_types.len(),
+                                arity
+                            ),
+                        ));
+                    }
                     let sig_params = sig.param_types.clone();
                     for (i, (arg_type, param_type)) in arg_types.iter().zip(&sig_params).enumerate()
                     {
@@ -836,8 +1221,14 @@ impl Compiler {
 
                 if let Some(idx) = self.fn_table.resolve(&name) {
                     self.emit(Instruction::Call(idx, arity), &span);
+                } else if let Some(builtin) = Self::builtin_from_name(&name) {
+                    self.emit(Instruction::CallBuiltin(builtin, arity), &span);
                 } else {
-                    self.emit(Instruction::CallBuiltin(name.clone(), arity), &span);
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        format!("undefined function `{name}`"),
+                    ));
+                    self.emit(Instruction::PushInt(0), &span);
                 }
 
                 self.fn_table

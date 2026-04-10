@@ -1,4 +1,4 @@
-use super::types::ModuleTable;
+use super::types::{BuiltinFunction, ModuleTable};
 use super::*;
 
 use crate::parser::{BinOp, Expression, Spanned, Statement};
@@ -32,4 +32,23 @@ fn expression_statements_are_popped() {
     let output = compile(stmts, ModuleTable::default(), 0, 0, vec![]);
 
     assert_eq!(output.instructions.last(), Some(&Instruction::Pop));
+}
+
+#[test]
+fn builtin_calls_are_lowered_to_typed_builtins() {
+    let stmts = vec![spanned(Statement::Expression(spanned(Expression::Call {
+        name: "print".to_string(),
+        args: vec![spanned(Expression::Int(1))],
+    })))];
+
+    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![]);
+
+    assert_eq!(
+        output.instructions,
+        vec![
+            Instruction::PushInt(1),
+            Instruction::CallBuiltin(BuiltinFunction::Print, 1),
+            Instruction::Pop,
+        ]
+    );
 }

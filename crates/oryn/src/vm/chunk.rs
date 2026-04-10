@@ -336,7 +336,7 @@ impl Chunk {
     /// let output = chunk.disassemble();
     ///
     /// assert!(output.contains("SetLocal"));
-    /// assert!(output.contains("CallBuiltin"));
+    /// assert!(output.contains("CallBuiltin print"));
     /// ```
     pub fn disassemble(&self) -> String {
         use std::fmt::Write;
@@ -577,9 +577,9 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
                 let s = if *arity == 1 { "arg" } else { "args" };
                 format!("CallMethod \"{name}\" ({arity} {s} + self)")
             }
-            Instruction::CallBuiltin(name, arity) => {
+            Instruction::CallBuiltin(builtin, arity) => {
                 let s = if *arity == 1 { "arg" } else { "args" };
-                format!("CallBuiltin \"{name}\" ({arity} {s})")
+                format!("CallBuiltin {} ({arity} {s})", builtin.name())
             }
             Instruction::Pop => "Pop".to_string(),
             Instruction::JumpIfFalse(target) => format!("JumpIfFalse -> {target:04}"),

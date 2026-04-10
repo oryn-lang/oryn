@@ -198,14 +198,14 @@ fn multiple_methods() {
 }
 
 #[test]
-fn undefined_method_is_runtime_error() {
-    let chunk = oryn::Chunk::compile("obj Foo {\nx: int\n}\nlet f = Foo { x: 1 }\nf.nope()")
-        .expect("compile error");
-    let mut vm = oryn::VM::new();
-    let mut output = Vec::new();
+fn undefined_method_is_compile_error_for_known_receiver_type() {
+    let result = oryn::Chunk::compile("obj Foo {\nx: int\n}\nlet f = Foo { x: 1 }\nf.nope()");
 
-    let err = vm.run_with_writer(&chunk, &mut output).unwrap_err();
-    assert!(matches!(err, oryn::RuntimeError::UndefinedFunction { .. }));
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| {
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("undefined method"))
+    }));
 }
 
 #[test]
@@ -215,6 +215,38 @@ fn static_method_no_params() {
             "obj Vec2 {\nx: int\ny: int\nfn zero() -> Vec2 {\nrn Vec2 { x: 0, y: 0 }\n}\n}\nlet v = Vec2.zero()\nprint(v.x)\nprint(v.y)"
         ),
         "0\n0\n",
+    );
+}
+
+#[test]
+fn known_instance_method_is_lowered_to_direct_call() {
+    let chunk = oryn::Chunk::compile(
+        "obj Vec2 {\nx: int\ny: int\nfn sum(self) {\nrn self.x + self.y\n}\n}\nlet v = Vec2 { x: 3, y: 4 }\nprint(v.sum())",
+    )
+    .expect("compile error");
+
+    let disassembly = chunk.disassemble();
+    assert!(disassembly.contains("Call fn#"));
+    assert!(!disassembly.contains("CallMethod \"sum\""));
+}
+
+#[test]
+fn nested_field_access_keeps_compile_time_field_resolution() {
+    assert_eq!(
+        run(
+            "obj Inner {\nvalue: int\n}\nobj Outer {\ninner: Inner\n}\nlet outer = Outer { inner: Inner { value: 7 } }\nprint(outer.inner.value)"
+        ),
+        "7\n",
+    );
+}
+
+#[test]
+fn composed_methods_are_visible_inside_composing_type_methods() {
+    assert_eq!(
+        run(
+            "obj Health {\nhp: int\nfn damage(self, amount: int) {\nself.hp = self.hp - amount\n}\nfn is_alive(self) -> bool {\nrn self.hp > 0\n}\n}\nobj Guard {\nuse Health\nfn take_hit(self, amount: int) {\nself.damage(amount)\nprint(self.is_alive())\n}\n}\nlet g = Guard { hp: 5 }\ng.take_hit(3)"
+        ),
+        "true\n",
     );
 }
 

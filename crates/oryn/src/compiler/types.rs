@@ -11,6 +11,19 @@ use crate::compiler::tables::FunctionSignature;
 /// Flat bytecode that the VM executes. The compiler's job is to walk the
 /// tree-shaped AST and flatten it into this linear sequence. The VM uses
 /// a stack, so operand order matters - left before right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinFunction {
+    Print,
+}
+
+impl BuiltinFunction {
+    pub fn name(self) -> &'static str {
+        match self {
+            BuiltinFunction::Print => "print",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     PushBool(bool),
@@ -42,8 +55,8 @@ pub enum Instruction {
     Call(usize, usize),
     /// Call a method by name on an object.
     CallMethod(String, usize),
-    /// Call a builtin function by name.
-    CallBuiltin(String, usize),
+    /// Call a builtin function identified at compile time.
+    CallBuiltin(BuiltinFunction, usize),
     Pop,
     JumpIfFalse(usize),
     Jump(usize),
@@ -254,7 +267,6 @@ pub(crate) enum ResolvedType {
     Bool,
     Str,
     Range,
-    Void,
     /// An object/struct type. `name` is the type's local name; `module`
     /// is the dotted path of the module that defined it (empty when the
     /// type was defined in the current compilation unit). The pair lets
@@ -330,7 +342,6 @@ impl ResolvedType {
             ResolvedType::Bool => "bool".into(),
             ResolvedType::Str => "String".into(),
             ResolvedType::Range => "Range".into(),
-            ResolvedType::Void => "void".into(),
             ResolvedType::Object { name, module } => {
                 if module.is_empty() {
                     name.as_str().into()
