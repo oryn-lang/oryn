@@ -1,0 +1,8 @@
+import guard
+
+let g = guard.Guard.spawn("Halden")
+g.spot_player()
+g.take_hit(40)
+g.take_hit(70)
+
+print("hp left: {g.hp}")

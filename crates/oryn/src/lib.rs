@@ -59,6 +59,7 @@ mod vm;
 
 pub use errors::{OrynError, RuntimeError};
 pub use lexer::{Token, lex};
+pub use modules::{find_project_root, resolve_import};
 pub use parser::{
     BinOp, Expression, ObjField, ObjMethod, Spanned, Statement, StringPart, TypeAnnotation,
     UnaryOp, parse,

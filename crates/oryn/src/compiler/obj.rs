@@ -19,7 +19,7 @@ impl Compiler {
         name: String,
         fields: Vec<ObjField>,
         methods: Vec<ObjMethod>,
-        uses: Vec<String>,
+        uses: Vec<Vec<String>>,
         stmt_span: &Span,
         is_pub: bool,
     ) {
@@ -34,8 +34,29 @@ impl Compiler {
         let mut static_method_signatures: HashMap<String, FunctionSignature> = HashMap::new();
         let mut all_required: Vec<MethodSignature> = Vec::new();
 
-        for used_type in &uses {
-            if let Some((_, def)) = self.obj_table.resolve(used_type) {
+        for used_path in &uses {
+            let display_name = used_path.join(".");
+
+            // Resolve either locally (single segment) or via imported
+            // module exports (multi-segment). In either case we get a
+            // cloned ObjDefInfo that the inheritance logic can consume
+            // uniformly — imported defs carry absolute function indices
+            // already, so no remapping is needed.
+            let def: Option<ObjDefInfo> = if used_path.len() == 1 {
+                self.obj_table
+                    .resolve(&used_path[0])
+                    .map(|(_, d)| d.clone())
+            } else {
+                let (type_name, module_path) = used_path.split_last().unwrap();
+                let module_key = module_path.join(".");
+                self.modules
+                    .modules
+                    .get(&module_key)
+                    .and_then(|exports| exports.obj_defs.get(type_name))
+                    .cloned()
+            };
+
+            if let Some(def) = def {
                 for req in &def.signatures {
                     if !all_required.iter().any(|r| r.name == req.name) {
                         all_required.push(req.clone());
@@ -46,7 +67,7 @@ impl Compiler {
                     if field_names.contains(field) {
                         self.output.errors.push(OrynError::compiler(
                             stmt_span.clone(),
-                            format!("field `{field}` conflicts in `use {used_type}`"),
+                            format!("field `{field}` conflicts in `use {display_name}`"),
                         ));
                     } else {
                         field_names.push(field.clone());
@@ -58,7 +79,7 @@ impl Compiler {
                     if method_indices.contains_key(method_name) {
                         self.output.errors.push(OrynError::compiler(
                             stmt_span.clone(),
-                            format!("method `{method_name}` conflicts in `use {used_type}`"),
+                            format!("method `{method_name}` conflicts in `use {display_name}`"),
                         ));
                     } else {
                         method_indices.insert(method_name.clone(), func_idx);
@@ -76,7 +97,9 @@ impl Compiler {
                     if static_method_indices.contains_key(method_name) {
                         self.output.errors.push(OrynError::compiler(
                             stmt_span.clone(),
-                            format!("static method `{method_name}` conflicts in `use {used_type}`"),
+                            format!(
+                                "static method `{method_name}` conflicts in `use {display_name}`"
+                            ),
                         ));
                     } else {
                         static_method_indices.insert(method_name.clone(), func_idx);
@@ -95,7 +118,7 @@ impl Compiler {
             } else {
                 self.output.errors.push(OrynError::compiler(
                     stmt_span.clone(),
-                    format!("undefined type `{used_type}` in use declaration"),
+                    format!("undefined type `{display_name}` in use declaration"),
                 ));
             }
         }

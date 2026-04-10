@@ -94,7 +94,9 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
             visitor.on_define(name, &stmt.span, &stmt.span);
 
             for used_type in uses {
-                visitor.on_reference(used_type, &stmt.span);
+                for segment in used_type {
+                    visitor.on_reference(segment, &stmt.span);
+                }
             }
 
             for method in methods {

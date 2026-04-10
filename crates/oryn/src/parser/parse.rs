@@ -107,6 +107,9 @@ fn atom<'src>(
         .then_ignore(just(Token::Colon))
         .then(expr.clone());
 
+    // Newlines inside object literal braces (zero or more).
+    let nl = just(Token::Newline).repeated();
+
     // An identifier optionally followed by (args) or { fields }.
     // Ident + (args) = function call, Ident + { fields } = object literal,
     // bare Ident = variable reference.
@@ -120,10 +123,13 @@ fn atom<'src>(
         )
         .then(
             obj_field_value
-                .separated_by(just(Token::Comma))
+                .separated_by(just(Token::Comma).then(nl.clone()))
                 .allow_trailing()
                 .collect::<Vec<_>>()
-                .delimited_by(just(Token::LeftCurly), just(Token::RightCurly))
+                .delimited_by(
+                    just(Token::LeftCurly).then(nl.clone()),
+                    nl.clone().then(just(Token::RightCurly)),
+                )
                 .or_not(),
         )
         .map(
@@ -175,12 +181,18 @@ fn program<'src>() -> impl Parser<
         // Postfix step: `.field`, `.method(args)`, or `.Type { fields }`
         // (the last one promotes the whole accumulated chain to an
         // ObjLiteral with a qualified type path).
+        // Newlines inside postfix object literal braces (zero or more).
+        let pnl = just(Token::Newline).repeated();
+
         let postfix_obj_fields = obj_field_value
             .clone()
-            .separated_by(just(Token::Comma))
+            .separated_by(just(Token::Comma).then(pnl.clone()))
             .allow_trailing()
             .collect::<Vec<_>>()
-            .delimited_by(just(Token::LeftCurly), just(Token::RightCurly));
+            .delimited_by(
+                just(Token::LeftCurly).then(pnl.clone()),
+                pnl.clone().then(just(Token::RightCurly)),
+            );
 
         let postfix_call_args = expr
             .clone()
@@ -525,10 +537,17 @@ fn program<'src>() -> impl Parser<
         enum ObjItem {
             Field(ObjField),
             Method(ObjMethod),
-            Use(String),
+            Use(Vec<String>),
         }
 
-        let use_item = just(Token::Use).ignore_then(select! { Token::Ident(name) => name });
+        // `use Foo` or `use math.shapes.Foo` — the dotted path lets
+        // obj declarations compose types from other modules.
+        let use_item = just(Token::Use).ignore_then(
+            select! { Token::Ident(name) => name }
+                .separated_by(just(Token::Dot))
+                .at_least(1)
+                .collect::<Vec<String>>(),
+        );
 
         let obj_item = obj_method
             .map(ObjItem::Method)

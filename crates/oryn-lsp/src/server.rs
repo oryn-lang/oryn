@@ -172,8 +172,15 @@ fn main_loop(connection: &Connection) {
                     let uri = params.text_document_position_params.text_document.uri;
                     let pos = params.text_document_position_params.position;
 
+                    let file_path = crate::diagnostics::uri_to_path(&uri);
                     let result = documents.get(&uri_str).and_then(|doc| {
-                        definition::goto_definition(&doc.source, pos, &uri, &doc.symbols)
+                        definition::goto_definition(
+                            &doc.source,
+                            pos,
+                            &uri,
+                            &doc.symbols,
+                            file_path.as_deref(),
+                        )
                     });
 
                     let resp = Response::new_ok(req.id, &result);

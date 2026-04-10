@@ -241,7 +241,7 @@ impl Formatter {
                         }
                         self.write_indent();
                         self.out.push_str("use ");
-                        self.out.push_str(used);
+                        self.out.push_str(&used.join("."));
                     }
                     wrote_group = true;
                 }

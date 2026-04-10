@@ -14,7 +14,7 @@ use crate::OrynError;
 /// Returns the project root when found, or `None` if no marker exists in
 /// any ancestor. Used to anchor every `import` to a single project root
 /// regardless of where the entry file lives within the tree.
-pub(crate) fn find_project_root(start: &Path) -> Option<PathBuf> {
+pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     let mut current = start.to_path_buf();
 
     loop {
@@ -34,7 +34,7 @@ pub(crate) fn find_project_root(start: &Path) -> Option<PathBuf> {
 /// `["math", "nested", "lib"]` becomes `<root>/math/nested/lib.on`.
 /// Uses `PathBuf::push` so it works across platforms with native
 /// directory separators.
-pub(crate) fn resolve_import(root: &Path, path: &[String]) -> PathBuf {
+pub fn resolve_import(root: &Path, path: &[String]) -> PathBuf {
     let mut result = root.to_path_buf();
 
     for segment in path {

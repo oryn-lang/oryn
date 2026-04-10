@@ -48,7 +48,12 @@ pub enum Statement {
         name: String,
         fields: Vec<ObjField>,
         methods: Vec<ObjMethod>,
-        uses: Vec<String>,
+        /// Each `use` clause is a dotted path. A bare `use Health` is
+        /// `vec!["Health"]`; a qualified `use combat.Health` is
+        /// `vec!["combat", "Health"]`. The compiler resolves single-segment
+        /// paths against the local obj table and multi-segment paths
+        /// against imported module exports.
+        uses: Vec<Vec<String>>,
         is_pub: bool,
     },
     FieldAssignment {

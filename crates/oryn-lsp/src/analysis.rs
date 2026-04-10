@@ -251,7 +251,9 @@ impl AstVisitor for LspVisitor<'_> {
                 self.register_definition(name, &stmt.span, SymbolKind::Object, None, None, None);
 
                 for used_type in uses {
-                    self.register_reference(used_type, &stmt.span);
+                    for segment in used_type {
+                        self.register_reference(segment, &stmt.span);
+                    }
                 }
 
                 for method in methods {
