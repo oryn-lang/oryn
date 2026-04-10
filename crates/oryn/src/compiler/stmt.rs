@@ -46,14 +46,18 @@ impl Compiler {
         self.emit(Instruction::SetLocal(slot), span);
     }
 
-    /// Extract a module-level `pub let` / `pub val` binding as a literal
-    /// constant, storing it in `output.module_constants`. Non-literal values
-    /// produce a compile error — modules are definitions-only and cannot
-    /// execute expressions at import time.
+    /// Extract a module-level `let` / `val` binding as a literal constant.
+    /// `pub` bindings are stored in `output.module_constants` (and exported
+    /// via [`ModuleExports`]); non-`pub` bindings are stored in
+    /// `output.private_module_constants` and remain visible only to code in
+    /// the same module. Non-literal values produce a compile error —
+    /// modules are definitions-only and cannot execute expressions at
+    /// import time.
     pub(super) fn extract_module_constant(
         &mut self,
         name: String,
         value: Spanned<Expression>,
+        is_pub: bool,
         span: &Span,
     ) {
         let const_value = match &value.node {
@@ -75,13 +79,17 @@ impl Compiler {
 
         match const_value {
             Some(v) => {
-                self.output.module_constants.insert(name, v);
+                if is_pub {
+                    self.output.module_constants.insert(name, v);
+                } else {
+                    self.output.private_module_constants.insert(name, v);
+                }
             }
             None => {
                 self.output.errors.push(OrynError::compiler(
                     span.clone(),
                     format!(
-                        "module-level `pub` binding `{name}` must be a literal value (int, float, bool, or string)"
+                        "module-level binding `{name}` must be a literal value (int, float, bool, or string)"
                     ),
                 ));
             }
@@ -105,11 +113,13 @@ impl Compiler {
                 type_ann,
                 is_pub,
             } => {
-                // In modules, pub let/val bindings must be literal values
-                // and are extracted as module constants. They are NOT also
-                // bound as runtime locals since modules are definitions-only.
-                if is_pub && self.is_module() {
-                    self.extract_module_constant(name, value, &stmt_span);
+                // In modules, let/val bindings must be literal values and
+                // are extracted as module constants. They are NOT also bound
+                // as runtime locals since modules are definitions-only.
+                // `pub` bindings are exported; non-`pub` bindings are still
+                // visible to code inside the same module but are not exported.
+                if self.is_module() {
+                    self.extract_module_constant(name, value, is_pub, &stmt_span);
                 } else {
                     self.compile_binding(name, value, type_ann, true, &stmt_span);
                 }
@@ -120,8 +130,8 @@ impl Compiler {
                 type_ann,
                 is_pub,
             } => {
-                if is_pub && self.is_module() {
-                    self.extract_module_constant(name, value, &stmt_span);
+                if self.is_module() {
+                    self.extract_module_constant(name, value, is_pub, &stmt_span);
                 } else {
                     self.compile_binding(name, value, type_ann, false, &stmt_span);
                 }

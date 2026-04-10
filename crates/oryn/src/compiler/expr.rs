@@ -288,11 +288,17 @@ impl Compiler {
                     self.emit(Instruction::GetLocal(slot), &span);
 
                     resolved_type
-                } else if let Some(const_value) = self.output.module_constants.get(&name).cloned() {
-                    // In-module reference to a `pub let` / `pub val`
-                    // constant declared earlier at top level. Inline the
-                    // literal directly so module bodies can use their own
-                    // constants by bare name.
+                } else if let Some(const_value) = self
+                    .output
+                    .module_constants
+                    .get(&name)
+                    .or_else(|| self.output.private_module_constants.get(&name))
+                    .cloned()
+                {
+                    // In-module reference to a `let` / `val` constant
+                    // declared earlier at top level. Inline the literal
+                    // directly so module bodies can use their own
+                    // constants — both exported and private — by bare name.
                     let instr = const_value.to_instruction();
                     let result_type = const_value.resolved_type();
                     self.emit(instr, &span);

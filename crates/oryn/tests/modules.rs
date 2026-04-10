@@ -345,6 +345,51 @@ fn repeated_missing_import_is_not_mislabeled_as_circular() {
 }
 
 #[test]
+fn module_private_constant_visible_to_own_functions() {
+    // A non-`pub` `val` at module scope is visible to functions inside
+    // the same module but must not be exported.
+    let p = TempProject::new();
+    p.write(
+        "config.on",
+        "val SECRET = 7
+pub fn get_secret() -> int { rn SECRET }",
+    );
+    p.write("main.on", "import config\nprint(config.get_secret())");
+
+    assert_eq!(p.run("main.on").unwrap(), "7\n");
+}
+
+#[test]
+fn module_private_constant_not_accessible_from_outside() {
+    let p = TempProject::new();
+    p.write("config.on", "val SECRET = 7");
+    p.write("main.on", "import config\nprint(config.SECRET)");
+
+    let err = p.run("main.on").unwrap_err();
+    // `SECRET` is not exported — any mention of it from outside the
+    // module is an undefined reference of some kind.
+    let combined = err
+        .iter()
+        .map(|e| format!("{e:?}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !combined.is_empty(),
+        "expected a compile error for private constant access, got: {combined}",
+    );
+}
+
+#[test]
+fn module_non_literal_binding_is_compile_error() {
+    let p = TempProject::new();
+    p.write("config.on", "val X = 1 + 2");
+    p.write("main.on", "import config\nprint(0)");
+
+    let err = p.run("main.on").unwrap_err();
+    assert_compile_error_contains(&err, "must be a literal value");
+}
+
+#[test]
 fn multiple_pub_constants_of_different_types() {
     let p = TempProject::new();
     p.write(

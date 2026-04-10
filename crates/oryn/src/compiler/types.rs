@@ -78,6 +78,10 @@ pub struct CompilerOutput {
     /// a module. Only non-empty for module compilation units; consumers
     /// access these via the owning module's [`ModuleExports`].
     pub(crate) module_constants: HashMap<String, ConstValue>,
+    /// Module-level non-pub `let` / `val` constants. Visible to code inside
+    /// the same module (functions and methods) but not exported via
+    /// [`ModuleExports`] — callers importing the module cannot see them.
+    pub(crate) private_module_constants: HashMap<String, ConstValue>,
     /// Span → type lookup populated during compilation and consumed by
     /// tools (LSP hover / inlay hints). See [`TypeMap`].
     pub type_map: TypeMap,
