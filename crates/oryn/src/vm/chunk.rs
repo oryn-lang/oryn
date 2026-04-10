@@ -360,7 +360,13 @@ fn compile_module(
     compiling.insert(canonical.clone());
 
     // ---- Load source ----
-    let source = load_module(project_root, import_path).map_err(|e| vec![e])?;
+    let source = match load_module(project_root, import_path) {
+        Ok(s) => s,
+        Err(e) => {
+            compiling.remove(&canonical);
+            return Err(vec![e]);
+        }
+    };
 
     // ---- Lex & parse ----
     let (tokens, lex_errors) = lexer::lex(&source);

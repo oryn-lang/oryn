@@ -322,6 +322,29 @@ fn missing_module_is_compile_error() {
 }
 
 #[test]
+fn repeated_missing_import_is_not_mislabeled_as_circular() {
+    // Two sibling modules both try to import the same missing file.
+    // The first attempt fails; the second must also report a load
+    // failure, not "circular import detected" from a poisoned
+    // `compiling` set.
+    let p = TempProject::new();
+    p.write("a.on", "import missing\npub fn a() -> int { rn 1 }");
+    p.write("b.on", "import missing\npub fn b() -> int { rn 2 }");
+    p.write("main.on", "import a\nimport b\nprint(a.a())");
+
+    let err = p.run("main.on").unwrap_err();
+    let combined = err
+        .iter()
+        .map(|e| format!("{e:?}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !combined.contains("circular import detected"),
+        "missing-module error was mislabeled as circular: {combined}",
+    );
+}
+
+#[test]
 fn multiple_pub_constants_of_different_types() {
     let p = TempProject::new();
     p.write(
