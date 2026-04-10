@@ -532,13 +532,13 @@ fn bool_ordering_is_runtime_error() {
 }
 
 #[test]
-fn for_requires_range_iterable() {
+fn for_requires_range_or_list_iterable() {
     let result = oryn::Chunk::compile("for i in 123 {\nprint(i)\n}");
     assert!(result.is_err());
 
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| {
-        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("iterable type mismatch"))
+        matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("must be a range or list"))
     }));
 }
 

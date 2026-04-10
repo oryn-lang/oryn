@@ -24,6 +24,80 @@ impl BuiltinFunction {
     }
 }
 
+/// Table of builtin methods that dispatch on a list receiver.
+///
+/// Adding a new list method is a one-place change: add a variant here,
+/// add matching arms to [`ListMethod::name`], [`ListMethod::from_name`],
+/// [`ListMethod::from_id`], [`ListMethod::param_types`], and
+/// [`ListMethod::return_type`], plus a handler in the VM's
+/// `CallListMethod` dispatch. No new bytecode instructions are needed.
+///
+/// The discriminant is stable — it's used as the wire-format `id` byte
+/// inside [`Instruction::CallListMethod`], so new variants must be
+/// appended rather than inserted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListMethod {
+    Len = 0,
+    Push = 1,
+    Pop = 2,
+}
+
+impl ListMethod {
+    /// The source-level method name used by users (`xs.len()`, etc.).
+    pub fn name(self) -> &'static str {
+        match self {
+            ListMethod::Len => "len",
+            ListMethod::Push => "push",
+            ListMethod::Pop => "pop",
+        }
+    }
+
+    /// Look up a list method by its source-level name. Returns `None`
+    /// for unknown methods so the compiler can report a precise error.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "len" => Some(ListMethod::Len),
+            "push" => Some(ListMethod::Push),
+            "pop" => Some(ListMethod::Pop),
+            _ => None,
+        }
+    }
+
+    /// Look up a list method by its stable numeric id. Used by the VM
+    /// to decode [`Instruction::CallListMethod`] at runtime.
+    pub fn from_id(id: u8) -> Option<Self> {
+        match id {
+            0 => Some(ListMethod::Len),
+            1 => Some(ListMethod::Push),
+            2 => Some(ListMethod::Pop),
+            _ => None,
+        }
+    }
+
+    /// Parameter types for this method, concretized against the list's
+    /// element type. The compiler uses this to type-check each argument.
+    pub(crate) fn param_types(self, elem_ty: &ResolvedType) -> Vec<ResolvedType> {
+        match self {
+            ListMethod::Len => vec![],
+            ListMethod::Push => vec![elem_ty.clone()],
+            ListMethod::Pop => vec![],
+        }
+    }
+
+    /// Return type for this method, concretized against the list's
+    /// element type. Every method leaves exactly one value on the
+    /// stack — methods that don't logically return anything push an
+    /// `Int` sentinel that the surrounding expression-statement pop
+    /// discards.
+    pub(crate) fn return_type(self, elem_ty: &ResolvedType) -> ResolvedType {
+        match self {
+            ListMethod::Len => ResolvedType::Int,
+            ListMethod::Push => ResolvedType::Int,
+            ListMethod::Pop => ResolvedType::Nillable(Box::new(elem_ty.clone())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     PushBool(bool),
@@ -90,12 +164,13 @@ pub enum Instruction {
     /// Raises [`crate::errors::RuntimeError::IndexOutOfBounds`] when
     /// the index is out of range.
     ListSet,
-    /// Pop a list and push its length as an int.
-    ListLen,
-    /// Pop value and list; append value to list's elements.
-    ListPush,
-    /// Pop list; push the final element (or nil if empty).
-    ListPop,
+    /// Call a builtin list method identified by its [`ListMethod`] id.
+    /// The receiver (`self`) is on the stack below `arity` arguments,
+    /// matching the standard method-call stack layout. Every method
+    /// leaves exactly one value on the stack (an `Int(0)` sentinel for
+    /// methods that don't logically return anything) so expression
+    /// statement discipline stays uniform.
+    CallListMethod(u8, u8),
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +547,19 @@ impl ResolvedType {
             && inner.as_ref() == actual
         {
             return true;
+        }
+
+        // Lists are invariant in their element type, except that an
+        // `Unknown` element acts as a wildcard in either direction.
+        // This lets an empty literal `[]` (which compiles to
+        // `List(Unknown)`) flow into any declared list type without
+        // breaking the invariance of concrete element types.
+        if let (ResolvedType::List(expected_inner), ResolvedType::List(actual_inner)) =
+            (self, actual)
+        {
+            return expected_inner.as_ref() == actual_inner.as_ref()
+                || matches!(expected_inner.as_ref(), ResolvedType::Unknown)
+                || matches!(actual_inner.as_ref(), ResolvedType::Unknown);
         }
 
         false

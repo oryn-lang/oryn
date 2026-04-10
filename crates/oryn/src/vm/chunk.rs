@@ -623,9 +623,13 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::MakeList(n) => format!("MakeList {n}"),
             Instruction::ListGet => "ListGet".to_string(),
             Instruction::ListSet => "ListSet".to_string(),
-            Instruction::ListLen => "ListLen".to_string(),
-            Instruction::ListPush => "ListPush".to_string(),
-            Instruction::ListPop => "ListPop".to_string(),
+            Instruction::CallListMethod(id, arity) => {
+                let name = crate::compiler::ListMethod::from_id(*id)
+                    .map(|m| m.name())
+                    .unwrap_or("?");
+                let s = if *arity == 1 { "arg" } else { "args" };
+                format!("CallListMethod {name} ({arity} {s} + self)")
+            }
         };
 
         writeln!(out, "{i:04}  {formatted}").unwrap();

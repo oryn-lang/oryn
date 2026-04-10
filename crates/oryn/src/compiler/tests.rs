@@ -1,4 +1,4 @@
-use super::types::{BuiltinFunction, ModuleTable};
+use super::types::{BuiltinFunction, ListMethod, ModuleTable};
 use super::*;
 
 use crate::parser::{BinOp, Expression, Spanned, Statement};
@@ -148,35 +148,60 @@ fn list_index_assignment_emits_list_set() {
 }
 
 #[test]
-fn list_len_method_emits_list_len() {
+fn list_len_method_emits_call_list_method() {
     let chunk = crate::Chunk::compile("let xs: [int] = [1, 2, 3]\nlet n = xs.len()").unwrap();
+    let expected = ListMethod::Len as u8;
     assert!(
         chunk
             .instructions
             .iter()
-            .any(|i| matches!(i, Instruction::ListLen))
+            .any(|i| matches!(i, Instruction::CallListMethod(id, 0) if *id == expected))
     );
 }
 
 #[test]
-fn list_push_method_emits_list_push() {
+fn list_push_method_emits_call_list_method() {
     let chunk = crate::Chunk::compile("let xs: [int] = [1]\nxs.push(2)").unwrap();
+    let expected = ListMethod::Push as u8;
     assert!(
         chunk
             .instructions
             .iter()
-            .any(|i| matches!(i, Instruction::ListPush))
+            .any(|i| matches!(i, Instruction::CallListMethod(id, 1) if *id == expected))
     );
 }
 
 #[test]
-fn list_pop_method_emits_list_pop() {
+fn list_pop_method_emits_call_list_method() {
     let chunk = crate::Chunk::compile("let xs: [int] = [1, 2]\nlet last = xs.pop()").unwrap();
+    let expected = ListMethod::Pop as u8;
     assert!(
         chunk
             .instructions
             .iter()
-            .any(|i| matches!(i, Instruction::ListPop))
+            .any(|i| matches!(i, Instruction::CallListMethod(id, 0) if *id == expected))
+    );
+}
+
+#[test]
+fn unknown_list_method_is_compile_error() {
+    let errors = crate::Chunk::compile("let xs: [int] = [1]\nxs.frobnicate()").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("unknown list method `frobnicate`")),
+        "expected unknown-method error, got {errors:?}"
+    );
+}
+
+#[test]
+fn list_method_wrong_arity_is_error() {
+    let errors = crate::Chunk::compile("let xs: [int] = [1]\nxs.len(99)").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("list `len` takes 0 argument(s)")),
+        "expected arity error, got {errors:?}"
     );
 }
 
@@ -242,7 +267,7 @@ fn push_argument_type_checked_against_element_type() {
     assert!(
         errors
             .iter()
-            .any(|e| format!("{e}").contains("list `push` argument type mismatch")),
+            .any(|e| format!("{e}").contains("list `push` argument 1 type mismatch")),
         "expected push type mismatch, got {errors:?}"
     );
 }

@@ -6,7 +6,7 @@ use crate::parser::{Expression, Span, Spanned, Statement, TypeAnnotation};
 
 use super::compile::{Compiler, LoopContext};
 use super::func::FunctionBodyConfig;
-use super::types::Instruction;
+use super::types::{Instruction, ListMethod};
 
 // ---------------------------------------------------------------------------
 // Binding compilation
@@ -35,6 +35,20 @@ impl Compiler {
             });
 
         let inferred_type = self.compile_expr(value);
+
+        // An empty list literal produces `List(Unknown)`; without a
+        // declared type there's nothing to reconcile against, which
+        // would leave the user with a silently-Unknown element type.
+        // Require an annotation in that case.
+        if declared_type.is_none()
+            && let ResolvedType::List(inner) = &inferred_type
+            && matches!(**inner, ResolvedType::Unknown)
+        {
+            self.output.errors.push(OrynError::compiler(
+                span.clone(),
+                "cannot infer element type of empty list literal; add a type annotation like `let xs: [int] = []`",
+            ));
+        }
 
         if let Some(ref decl) = declared_type {
             self.check_types(decl, &inferred_type, span, "type mismatch");
@@ -424,47 +438,28 @@ impl Compiler {
                 body,
             } => {
                 self.with_scope(|this| {
+                    let iterable_span = iterable.span.clone();
                     let iterable_type = this.compile_expr(iterable);
 
-                    this.check_types(
-                        &ResolvedType::Range,
-                        &iterable_type,
-                        &stmt_span,
-                        "for loop iterable type mismatch",
-                    );
-
-                    let range_slot =
-                        this.locals
-                            .define("@for_range".to_string(), false, ResolvedType::Range);
-                    this.emit(Instruction::SetLocal(range_slot), &stmt_span);
-
-                    let item_slot = this.locals.define(name, false, ResolvedType::Int);
-
-                    let loop_start = this.output.instructions.len();
-                    this.emit(Instruction::GetLocal(range_slot), &stmt_span);
-                    this.emit(Instruction::RangeHasNext, &stmt_span);
-
-                    let exit_jump_idx = this.output.instructions.len();
-                    this.emit(Instruction::JumpIfFalse(0), &stmt_span);
-
-                    this.emit(Instruction::GetLocal(range_slot), &stmt_span);
-                    this.emit(Instruction::RangeNext, &stmt_span);
-                    this.emit(Instruction::SetLocal(item_slot), &stmt_span);
-
-                    this.loops.push(LoopContext {
-                        continue_target: loop_start,
-                        break_patches: Vec::new(),
-                    });
-
-                    this.compile_body_expr(body);
-                    this.emit(Instruction::Jump(loop_start), &stmt_span);
-
-                    let end = this.output.instructions.len();
-                    this.output.instructions[exit_jump_idx] = Instruction::JumpIfFalse(end);
-
-                    let loop_ctx = this.loops.pop().expect("loop context missing");
-                    for patch_idx in loop_ctx.break_patches {
-                        this.output.instructions[patch_idx] = Instruction::Jump(end);
+                    match iterable_type.clone() {
+                        ResolvedType::Range => {
+                            this.compile_for_range(name, body, &stmt_span);
+                        }
+                        ResolvedType::List(elem_ty) => {
+                            this.compile_for_list(name, *elem_ty, body, &stmt_span);
+                        }
+                        ResolvedType::Unknown => {
+                            // Upstream error already reported; skip codegen.
+                        }
+                        other => {
+                            this.output.errors.push(OrynError::compiler(
+                                iterable_span,
+                                format!(
+                                    "for loop iterable must be a range or list, got `{}`",
+                                    other.display_name()
+                                ),
+                            ));
+                        }
                     }
                 });
             }
@@ -596,6 +591,144 @@ impl Compiler {
                     self.output.instructions[jump_if_nil_idx] = Instruction::JumpIfNil(end);
                 }
             }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // For-loop codegen helpers
+    // -----------------------------------------------------------------
+    //
+    // Both helpers assume the iterable's value has already been pushed
+    // on the stack by the caller. They manage the full loop skeleton,
+    // including `break` / `continue` patching, and leave nothing on the
+    // stack after the loop exits.
+
+    /// Emit bytecode for `for name in <range> { body }`. The range
+    /// value is on the stack when this is called.
+    fn compile_for_range(&mut self, name: String, body: Spanned<Expression>, stmt_span: &Span) {
+        let range_slot = self
+            .locals
+            .define("@for_range".to_string(), false, ResolvedType::Range);
+        self.emit(Instruction::SetLocal(range_slot), stmt_span);
+
+        let item_slot = self.locals.define(name, false, ResolvedType::Int);
+
+        let loop_start = self.output.instructions.len();
+        self.emit(Instruction::GetLocal(range_slot), stmt_span);
+        self.emit(Instruction::RangeHasNext, stmt_span);
+
+        let exit_jump_idx = self.output.instructions.len();
+        self.emit(Instruction::JumpIfFalse(0), stmt_span);
+
+        self.emit(Instruction::GetLocal(range_slot), stmt_span);
+        self.emit(Instruction::RangeNext, stmt_span);
+        self.emit(Instruction::SetLocal(item_slot), stmt_span);
+
+        self.loops.push(LoopContext {
+            continue_target: loop_start,
+            break_patches: Vec::new(),
+        });
+
+        self.compile_body_expr(body);
+        self.emit(Instruction::Jump(loop_start), stmt_span);
+
+        let end = self.output.instructions.len();
+        self.output.instructions[exit_jump_idx] = Instruction::JumpIfFalse(end);
+
+        let loop_ctx = self.loops.pop().expect("loop context missing");
+        for patch_idx in loop_ctx.break_patches {
+            self.output.instructions[patch_idx] = Instruction::Jump(end);
+        }
+    }
+
+    /// Emit bytecode for `for name in <list> { body }`. The list value
+    /// is on the stack when this is called. The loop variable binds
+    /// with the list's element type so the body can index into nested
+    /// lists or access fields on obj instances without annotation.
+    ///
+    /// Layout (all using existing opcodes — no new VM work):
+    /// ```text
+    ///   @for_list = <popped from stack>
+    ///   @for_idx  = -1     ; pre-decrement so the first step lands at 0
+    ///   @for_len  = @for_list.len()
+    /// loop_start:
+    ///   @for_idx  = @for_idx + 1
+    ///   if @for_idx < @for_len: fall through; else break
+    ///   item      = @for_list[@for_idx]
+    ///   ...body...
+    ///   jump loop_start
+    /// end:
+    /// ```
+    ///
+    /// `continue_target = loop_start` so `continue` re-runs the
+    /// increment and the bounds check — standard for-each semantics.
+    fn compile_for_list(
+        &mut self,
+        name: String,
+        elem_ty: ResolvedType,
+        body: Spanned<Expression>,
+        stmt_span: &Span,
+    ) {
+        let list_ty = ResolvedType::List(Box::new(elem_ty.clone()));
+        let list_slot = self.locals.define("@for_list".to_string(), false, list_ty);
+        self.emit(Instruction::SetLocal(list_slot), stmt_span);
+
+        // @for_idx = -1 so the first iteration increments to 0 cleanly.
+        let idx_slot = self
+            .locals
+            .define("@for_idx".to_string(), false, ResolvedType::Int);
+        self.emit(Instruction::PushInt(-1), stmt_span);
+        self.emit(Instruction::SetLocal(idx_slot), stmt_span);
+
+        // @for_len = @for_list.len() — cached once, not per iteration.
+        let len_slot = self
+            .locals
+            .define("@for_len".to_string(), false, ResolvedType::Int);
+        self.emit(Instruction::GetLocal(list_slot), stmt_span);
+        self.emit(
+            Instruction::CallListMethod(ListMethod::Len as u8, 0),
+            stmt_span,
+        );
+        self.emit(Instruction::SetLocal(len_slot), stmt_span);
+
+        let item_slot = self.locals.define(name, false, elem_ty);
+
+        let loop_start = self.output.instructions.len();
+
+        // @for_idx = @for_idx + 1
+        self.emit(Instruction::GetLocal(idx_slot), stmt_span);
+        self.emit(Instruction::PushInt(1), stmt_span);
+        self.emit(Instruction::Add, stmt_span);
+        self.emit(Instruction::SetLocal(idx_slot), stmt_span);
+
+        // if @for_idx < @for_len { fall through } else { break }
+        self.emit(Instruction::GetLocal(idx_slot), stmt_span);
+        self.emit(Instruction::GetLocal(len_slot), stmt_span);
+        self.emit(Instruction::LessThan, stmt_span);
+
+        let exit_jump_idx = self.output.instructions.len();
+        self.emit(Instruction::JumpIfFalse(0), stmt_span);
+
+        // item = @for_list[@for_idx]
+        self.emit(Instruction::GetLocal(list_slot), stmt_span);
+        self.emit(Instruction::GetLocal(idx_slot), stmt_span);
+        self.emit(Instruction::ListGet, stmt_span);
+        self.emit(Instruction::SetLocal(item_slot), stmt_span);
+
+        self.loops.push(LoopContext {
+            continue_target: loop_start,
+            break_patches: Vec::new(),
+        });
+
+        self.compile_body_expr(body);
+        self.emit(Instruction::Jump(loop_start), stmt_span);
+
+        let end = self.output.instructions.len();
+        self.output.instructions[exit_jump_idx] = Instruction::JumpIfFalse(end);
+
+        let loop_ctx = self.loops.pop().expect("loop context missing");
+        for patch_idx in loop_ctx.break_patches {
+            self.output.instructions[patch_idx] = Instruction::Jump(end);
         }
     }
 }

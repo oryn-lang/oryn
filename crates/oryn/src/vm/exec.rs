@@ -4,7 +4,7 @@ use std::ops::Range;
 use gc_arena::lock::RefLock;
 use gc_arena::{Arena, Gc, Rootable};
 
-use crate::compiler::{BuiltinFunction, Instruction};
+use crate::compiler::{BuiltinFunction, Instruction, ListMethod};
 use crate::errors::{RuntimeError, ValueType};
 use crate::vm::value::{ListData, ObjData, RangeValue};
 
@@ -940,55 +940,77 @@ impl VM {
                         }
                         list_ref.borrow_mut(mc).elements[index as usize] = value;
                     }
-                    Instruction::ListLen => {
-                        let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        match list {
-                            Value::List(list_ref) => {
-                                let len = list_ref.borrow().elements.len();
-                                state.stack.push(Value::Int(len as i32));
+                    Instruction::CallListMethod(id, _arity) => {
+                        // Decode the method id. An unknown id is a
+                        // compiler bug — the compiler only ever emits
+                        // ids that round-trip through `ListMethod::from_id`.
+                        let method = ListMethod::from_id(*id).ok_or_else(|| {
+                            RuntimeError::UndefinedFunction {
+                                name: format!("<list method #{id}>"),
+                                span: Self::current_span_from_state(&state.frames, chunk),
                             }
-                            _ => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::List,
-                                    actual: ValueType::from(&list),
-                                    span,
-                                });
+                        })?;
+
+                        match method {
+                            ListMethod::Len => {
+                                let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                                match list {
+                                    Value::List(list_ref) => {
+                                        let len = list_ref.borrow().elements.len();
+                                        state.stack.push(Value::Int(len as i32));
+                                    }
+                                    _ => {
+                                        let span =
+                                            Self::current_span_from_state(&state.frames, chunk);
+                                        return Err(RuntimeError::TypeError {
+                                            expected: ValueType::List,
+                                            actual: ValueType::from(&list),
+                                            span,
+                                        });
+                                    }
+                                }
                             }
-                        }
-                    }
-                    Instruction::ListPush => {
-                        // Stack order: list, value. Pop value, then list.
-                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        match list {
-                            Value::List(list_ref) => {
-                                list_ref.borrow_mut(mc).elements.push(value);
+                            ListMethod::Push => {
+                                // Stack order: list, value. Pop value first.
+                                let value =
+                                    state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                                let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                                match list {
+                                    Value::List(list_ref) => {
+                                        list_ref.borrow_mut(mc).elements.push(value);
+                                        // Sentinel return — keeps stack
+                                        // discipline uniform across all
+                                        // method calls.
+                                        state.stack.push(Value::Int(0));
+                                    }
+                                    _ => {
+                                        let span =
+                                            Self::current_span_from_state(&state.frames, chunk);
+                                        return Err(RuntimeError::TypeError {
+                                            expected: ValueType::List,
+                                            actual: ValueType::from(&list),
+                                            span,
+                                        });
+                                    }
+                                }
                             }
-                            _ => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::List,
-                                    actual: ValueType::from(&list),
-                                    span,
-                                });
-                            }
-                        }
-                    }
-                    Instruction::ListPop => {
-                        let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        match list {
-                            Value::List(list_ref) => {
-                                let popped = list_ref.borrow_mut(mc).elements.pop();
-                                state.stack.push(popped.unwrap_or(Value::Nil));
-                            }
-                            _ => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::List,
-                                    actual: ValueType::from(&list),
-                                    span,
-                                });
+                            ListMethod::Pop => {
+                                let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                                match list {
+                                    Value::List(list_ref) => {
+                                        let popped = list_ref.borrow_mut(mc).elements.pop();
+                                        state.stack.push(popped.unwrap_or(Value::Nil));
+                                    }
+                                    _ => {
+                                        let span =
+                                            Self::current_span_from_state(&state.frames, chunk);
+                                        return Err(RuntimeError::TypeError {
+                                            expected: ValueType::List,
+                                            actual: ValueType::from(&list),
+                                            span,
+                                        });
+                                    }
+                                }
                             }
                         }
                     }
@@ -1264,5 +1286,68 @@ print(names[0])
 print(names[1])"#,
         );
         assert_eq!(String::from_utf8(out).unwrap(), "alice\nbob\n");
+    }
+
+    // -------------------------------------------------------------------
+    // For loops on lists
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn for_loop_over_int_list() {
+        let out = run_source("let xs: [int] = [10, 20, 30]\nfor x in xs {\nprint(x)\n}");
+        assert_eq!(String::from_utf8(out).unwrap(), "10\n20\n30\n");
+    }
+
+    #[test]
+    fn for_loop_over_string_list() {
+        let out =
+            run_source("let names: [String] = [\"alice\", \"bob\"]\nfor n in names {\nprint(n)\n}");
+        assert_eq!(String::from_utf8(out).unwrap(), "alice\nbob\n");
+    }
+
+    #[test]
+    fn for_loop_over_empty_list_runs_zero_times() {
+        let out = run_source("let xs: [int] = []\nprint(0)\nfor x in xs {\nprint(x)\n}\nprint(1)");
+        assert_eq!(String::from_utf8(out).unwrap(), "0\n1\n");
+    }
+
+    #[test]
+    fn for_loop_over_list_of_obj_instances_accesses_fields() {
+        let out = run_source(
+            "obj Pt { x: int, y: int }\nlet ps: [Pt] = [Pt { x: 1, y: 2 }, Pt { x: 3, y: 4 }]\nfor p in ps {\nprint(p.x)\nprint(p.y)\n}",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "1\n2\n3\n4\n");
+    }
+
+    #[test]
+    fn for_loop_over_list_supports_break() {
+        let out = run_source(
+            "let xs: [int] = [1, 2, 3, 4, 5]\nfor x in xs {\nif x == 3 { break }\nprint(x)\n}",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "1\n2\n");
+    }
+
+    #[test]
+    fn for_loop_over_list_supports_continue() {
+        let out = run_source(
+            "let xs: [int] = [1, 2, 3, 4]\nfor x in xs {\nif x == 2 { continue }\nprint(x)\n}",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "1\n3\n4\n");
+    }
+
+    #[test]
+    fn for_loop_over_list_still_allows_range_loops() {
+        // Sanity: the type-dispatch in the For handler doesn't break
+        // the existing range path.
+        let out = run_source("for i in 0..3 {\nprint(i)\n}");
+        assert_eq!(String::from_utf8(out).unwrap(), "0\n1\n2\n");
+    }
+
+    #[test]
+    fn for_loop_over_nested_list_sums_elements() {
+        let out = run_source(
+            "let grid: [[int]] = [[1, 2], [3, 4]]\nfor row in grid {\nfor x in row {\nprint(x)\n}\n}",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "1\n2\n3\n4\n");
     }
 }
