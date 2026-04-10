@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------
 // Nil handling and error unions
 // ---------------------------------------------------------------------
-// Shows: nillable types (T?), nil literal, nil coalescing (??),
+// Shows: nillable types (T?), nil literal, nil coalescing (orelse),
 // if-let unwrapping, nil equality, and error unions (!T).
 //
 // Run with:
@@ -30,32 +30,32 @@ print("mood before = {mood}")  // → happy
 mood = nil
 print("mood after  = {mood}")  // → nil
 
-// ── 2. Nil coalescing (??) ──────────────────────────────────────────
-// `a ?? b` evaluates to `a` when it is non-nil, otherwise `b`.
+// ── 2. Nil coalescing (orelse) ──────────────────────────────────────────
+// `a orelse b` evaluates to `a` when it is non-nil, otherwise `b`.
 // The left side must be nillable (T?); the right side must be T.
 // The result is always the unwrapped type T.
 
-let greeting = name ?? "stranger"
+let greeting = name orelse "stranger"
 print("greeting = {greeting}")  // → Oryn  (name is non-nil)
 
-let fallback = missing ?? "default"
+let fallback = missing orelse "default"
 print("fallback = {fallback}")  // → default  (missing is nil)
 
-let points = no_score ?? 0
+let points = no_score orelse 0
 print("points   = {points}")  // → 0
 
-// Nested coalescing: since `a ?? b` returns T (non-nillable), you
-// cannot chain directly like `a ?? b ?? c`. Instead, nest with
+// Nested coalescing: since `a orelse b` returns T (non-nillable), you
+// cannot chain directly like `a orelse b orelse c`. Instead, nest with
 // parentheses so the inner coalesce still sees a nillable left side.
 let first: int? = nil
 let second: int? = nil
 let third: int? = 7
-let pick = first ?? (second ?? (third ?? 0))
+let pick = first orelse (second orelse (third orelse 0))
 print("pick = {pick}")  // → 7  (first two are nil)
 
 let all_nil: int? = nil
 let also_nil: int? = nil
-let last_resort = all_nil ?? (also_nil ?? 99)
+let last_resort = all_nil orelse (also_nil orelse 99)
 print("last_resort = {last_resort}")  // → 99  (everything was nil)
 
 // ── 3. if-let unwrapping ────────────────────────────────────────────
@@ -140,7 +140,7 @@ print("find_positive(-3) = {nope}")  // → nil
 
 // Combine a nillable return with coalescing at the call site.
 let neg1 = 0 - 1
-let safe = find_positive(neg1) ?? 0
+let safe = find_positive(neg1) orelse 0
 print("safe = {safe}")  // → 0
 
 // Or use if-let to branch on the result.
@@ -168,7 +168,7 @@ print("add_maybe(3, nil)   = {add_maybe(3, nil)}")  // → nil
 print("add_maybe(nil, nil) = {add_maybe(nil, nil)}")  // → nil
 
 // Use coalescing to turn a nil sum into zero.
-let total = add_maybe(nil, 5) ?? 0
+let total = add_maybe(nil, 5) orelse 0
 print("total = {total}")  // → 0
 
 // ── 6. Error unions (!T) ────────────────────────────────────────────

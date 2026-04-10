@@ -15,21 +15,24 @@ fn nillable_binding_with_value_prints_value() {
 
 #[test]
 fn coalesce_returns_value_when_not_nil() {
-    assert_eq!(run("let x: int? = 5\nlet y = x ?? 0\nprint(y)"), "5\n");
+    assert_eq!(run("let x: int? = 5\nlet y = x orelse 0\nprint(y)"), "5\n");
 }
 
 #[test]
 fn coalesce_returns_fallback_when_nil() {
-    assert_eq!(run("let x: int? = nil\nlet y = x ?? 42\nprint(y)"), "42\n");
+    assert_eq!(
+        run("let x: int? = nil\nlet y = x orelse 42\nprint(y)"),
+        "42\n"
+    );
 }
 
 #[test]
 fn coalesce_nested_fallback() {
-    // Chaining ?? is left-associative: (a ?? b) returns int, so a second
-    // ?? on the result would not type-check. Use if-let or nested
+    // Chaining orelse is left-associative: (a orelse b) returns int, so a second
+    // orelse on the result would not type-check. Use if-let or nested
     // coalesce with separate bindings instead.
     assert_eq!(
-        run("let a: int? = nil\nlet b: int? = 7\nlet y = a ?? (b ?? 0)\nprint(y)"),
+        run("let a: int? = nil\nlet b: int? = 7\nlet y = a orelse (b orelse 0)\nprint(y)"),
         "7\n"
     );
 }
@@ -37,7 +40,7 @@ fn coalesce_nested_fallback() {
 #[test]
 fn coalesce_nested_all_nil() {
     assert_eq!(
-        run("let a: int? = nil\nlet b: int? = nil\nlet y = a ?? (b ?? 99)\nprint(y)"),
+        run("let a: int? = nil\nlet b: int? = nil\nlet y = a orelse (b orelse 99)\nprint(y)"),
         "99\n"
     );
 }

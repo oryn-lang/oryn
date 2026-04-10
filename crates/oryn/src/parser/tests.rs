@@ -297,11 +297,11 @@ fn parses_unwrap_error_on_ident() {
     ));
 }
 
-// -- Coalesce expression (??) --
+// -- Coalesce expression (orelse) --
 
 #[test]
 fn parses_coalesce_expression() {
-    let stmts = parse_ok("a ?? b");
+    let stmts = parse_ok("a orelse b");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::Coalesce { left, right },
@@ -316,8 +316,8 @@ fn parses_coalesce_expression() {
 
 #[test]
 fn coalesce_is_left_associative() {
-    // a ?? b ?? c → Coalesce(Coalesce(a, b), c)
-    let stmts = parse_ok("a ?? b ?? c");
+    // a orelse b orelse c → Coalesce(Coalesce(a, b), c)
+    let stmts = parse_ok("a orelse b orelse c");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::Coalesce { left, right },
@@ -332,8 +332,8 @@ fn coalesce_is_left_associative() {
 
 #[test]
 fn coalesce_is_looser_than_or() {
-    // a or b ?? c → Coalesce(BinaryOp(a or b), c)
-    let stmts = parse_ok("a or b ?? c");
+    // a or b orelse c → Coalesce(BinaryOp(a or b), c)
+    let stmts = parse_ok("a or b orelse c");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::Coalesce { left, right },
@@ -351,8 +351,8 @@ fn coalesce_is_looser_than_or() {
 
 #[test]
 fn coalesce_is_looser_than_comparison() {
-    // a == b ?? c → Coalesce(Equals(a, b), c)
-    let stmts = parse_ok("a == b ?? c");
+    // a == b orelse c → Coalesce(Equals(a, b), c)
+    let stmts = parse_ok("a == b orelse c");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::Coalesce { left, .. },
@@ -372,8 +372,8 @@ fn coalesce_is_looser_than_comparison() {
 
 #[test]
 fn coalesce_with_arithmetic() {
-    // a + 1 ?? b * 2 → Coalesce(Add(a, 1), Mul(b, 2))
-    let stmts = parse_ok("a + 1 ?? b * 2");
+    // a + 1 orelse b * 2 → Coalesce(Add(a, 1), Mul(b, 2))
+    let stmts = parse_ok("a + 1 orelse b * 2");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::Coalesce { left, right },
@@ -447,8 +447,8 @@ fn if_let_does_not_break_elif() {
 
 #[test]
 fn try_binds_tighter_than_coalesce() {
-    // try a ?? b → Coalesce(Try(a), b)
-    let stmts = parse_ok("try a ?? b");
+    // try a orelse b → Coalesce(Try(a), b)
+    let stmts = parse_ok("try a orelse b");
     assert!(matches!(
         &stmts[0].node,
         Statement::Expression(Spanned {
@@ -460,8 +460,8 @@ fn try_binds_tighter_than_coalesce() {
 
 #[test]
 fn bang_binds_tighter_than_coalesce() {
-    // !a ?? b → Coalesce(UnwrapError(a), b)
-    let stmts = parse_ok("!a ?? b");
+    // !a orelse b → Coalesce(UnwrapError(a), b)
+    let stmts = parse_ok("!a orelse b");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::Coalesce { left, .. },
@@ -531,7 +531,7 @@ fn if_let_with_call_expression() {
 
 #[test]
 fn if_let_with_coalesce_in_value() {
-    let stmts = parse_ok("if let x = a ?? b { print(x) }");
+    let stmts = parse_ok("if let x = a orelse b { print(x) }");
     match &stmts[0].node {
         Statement::IfLet { value, .. } => {
             assert!(matches!(value.node, Expression::Coalesce { .. }));

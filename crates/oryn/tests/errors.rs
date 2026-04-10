@@ -92,11 +92,11 @@ fn nillable_param_type_accepts_value() {
     );
 }
 
-// -- Coalesce (??) --
+// -- Coalesce (orelse) --
 
 #[test]
 fn coalesce_on_nillable_is_ok() {
-    let errors = oryn::Chunk::check("let x: int? = nil\nlet y = x ?? 0");
+    let errors = oryn::Chunk::check("let x: int? = nil\nlet y = x orelse 0");
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -109,7 +109,7 @@ fn coalesce_on_nillable_is_ok() {
 
 #[test]
 fn coalesce_on_non_nillable_is_error() {
-    let errors = oryn::Chunk::check("let x: int = 5\nlet y = x ?? 0");
+    let errors = oryn::Chunk::check("let x: int = 5\nlet y = x orelse 0");
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("nillable"))
     }));
@@ -117,7 +117,7 @@ fn coalesce_on_non_nillable_is_error() {
 
 #[test]
 fn coalesce_fallback_type_mismatch_is_error() {
-    let errors = oryn::Chunk::check("let x: int? = nil\nlet y = x ?? true");
+    let errors = oryn::Chunk::check("let x: int? = nil\nlet y = x orelse true");
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("type mismatch"))
     }));

@@ -397,9 +397,9 @@ fn program<'src>() -> impl Parser<
             binop_fold,
         );
 
-        // ?? (nil coalescing — loosest binary operator)
+        // orelse (nil coalescing — loosest binary operator)
         let coalesce = or.clone().foldl(
-            just(Token::QuestionQuestion).then(or).repeated(),
+            just(Token::Orelse).then(or).repeated(),
             |left, (_tok, right)| {
                 let span = left.span.start..right.span.end;
                 Spanned {

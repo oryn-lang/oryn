@@ -1335,7 +1335,7 @@ impl Compiler {
                             self.output.errors.push(crate::OrynError::compiler(
                                 span.clone(),
                                 format!(
-                                    "`??` requires a nillable type on the left, got `{}`",
+                                    "`orelse` requires a nillable type on the left, got `{}`",
                                     left_type.display_name()
                                 ),
                             ));
@@ -1361,7 +1361,7 @@ impl Compiler {
                     &inner_type,
                     &right_type,
                     &span,
-                    "coalesce fallback type mismatch",
+                    "orelse fallback type mismatch",
                 );
 
                 let end_addr = self.output.instructions.len();

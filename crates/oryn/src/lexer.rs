@@ -71,8 +71,8 @@ pub enum Token {
     EqualsEquals,
     #[token("!=")]
     NotEquals,
-    #[token("??")]
-    QuestionQuestion,
+    #[token("orelse")]
+    Orelse,
     #[token("?")]
     Question,
     #[token("!")]
@@ -171,7 +171,7 @@ impl Display for Token {
             Token::Divide => write!(f, "/"),
             Token::EqualsEquals => write!(f, "=="),
             Token::NotEquals => write!(f, "!="),
-            Token::QuestionQuestion => write!(f, "??"),
+            Token::Orelse => write!(f, "orelse"),
             Token::Question => write!(f, "?"),
             Token::Bang => write!(f, "!"),
             Token::LessThan => write!(f, "<"),
@@ -377,14 +377,14 @@ mod tests {
         );
 
         // nil coalescing
-        let (tokens, errors) = lex("a ?? b");
+        let (tokens, errors) = lex("a orelse b");
         let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
         assert!(errors.is_empty());
         assert_eq!(
             kinds,
             vec![
                 Token::Ident("a".into()),
-                Token::QuestionQuestion,
+                Token::Orelse,
                 Token::Ident("b".into()),
             ]
         );
@@ -412,21 +412,28 @@ mod tests {
     }
 
     #[test]
-    fn question_question_vs_single_question() {
-        // ?? should be a single QuestionQuestion token, not two Questions
-        let (tokens, errors) = lex("x??y");
+    fn orelse_keyword_and_word_boundary() {
+        // `orelse` as a keyword with spaces
+        let (tokens, errors) = lex("x orelse y");
         let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
         assert!(errors.is_empty());
         assert_eq!(
             kinds,
             vec![
                 Token::Ident("x".into()),
-                Token::QuestionQuestion,
+                Token::Orelse,
                 Token::Ident("y".into()),
             ]
         );
 
-        // single ? at end
+        // Identifiers that start with `orelse` stay as identifiers —
+        // logos' longest-match rule keeps word boundaries intact.
+        let (tokens, errors) = lex("orelseb");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(errors.is_empty());
+        assert_eq!(kinds, vec![Token::Ident("orelseb".into())]);
+
+        // single ? still lexes as Question (used for nullable types)
         let (tokens, errors) = lex("x?");
         let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
         assert!(errors.is_empty());

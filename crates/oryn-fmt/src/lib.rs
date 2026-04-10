@@ -758,7 +758,7 @@ impl Formatter {
             }
             Expression::Coalesce { left, right } => {
                 self.write_expression(left, 1);
-                self.out.push_str(" ?? ");
+                self.out.push_str(" orelse ");
                 self.write_expression(right, 2);
             }
             Expression::StringInterp(parts) => {

@@ -146,7 +146,7 @@ pub enum Expression {
     Try(Box<Spanned<Expression>>),
     /// `!expr` — unwrap `!T`, trap on error.
     UnwrapError(Box<Spanned<Expression>>),
-    /// `a ?? b` — nil coalescing.
+    /// `a orelse b` — nil coalescing.
     Coalesce {
         left: Box<Spanned<Expression>>,
         right: Box<Spanned<Expression>>,
