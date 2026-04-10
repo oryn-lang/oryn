@@ -133,6 +133,10 @@ pub enum Token {
     LeftCurly,
     #[token("}")]
     RightCurly,
+    #[token("[")]
+    LeftBracket,
+    #[token("]")]
+    RightBracket,
     #[token("\n")]
     Newline,
 
@@ -206,6 +210,8 @@ impl Display for Token {
             Token::RightParen => write!(f, ")"),
             Token::LeftCurly => write!(f, "{{"),
             Token::RightCurly => write!(f, "}}"),
+            Token::LeftBracket => write!(f, "["),
+            Token::RightBracket => write!(f, "]"),
             Token::Newline => write!(f, "newline"),
             Token::Ident(name) => write!(f, "{name}"),
             Token::Comment(text) => write!(f, "{text}"),

@@ -67,6 +67,16 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
             visitor.visit_expr(value);
         }
 
+        Statement::IndexAssignment {
+            object,
+            index,
+            value,
+        } => {
+            visitor.visit_expr(object);
+            visitor.visit_expr(index);
+            visitor.visit_expr(value);
+        }
+
         Statement::Function {
             name, params, body, ..
         } => {
@@ -265,6 +275,17 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
             visitor.visit_expr(right);
         }
 
+        Expression::ListLiteral(elements) => {
+            for element in elements {
+                visitor.visit_expr(element);
+            }
+        }
+
+        Expression::Index { object, index } => {
+            visitor.visit_expr(object);
+            visitor.visit_expr(index);
+        }
+
         Expression::Block(stmts) => {
             visitor.enter_scope();
             walk_stmts(visitor, stmts);
@@ -306,6 +327,7 @@ mod tests {
                 Statement::Continue => "continue",
                 Statement::Expression(_) => "expr_stmt",
                 Statement::FieldAssignment { .. } => "field_assign",
+                Statement::IndexAssignment { .. } => "index_assign",
                 Statement::Import { .. } => "import",
                 Statement::IfLet { .. } => "if_let",
                 Statement::Test { .. } => "test",

@@ -13,6 +13,7 @@ fn format_type_annotation(ann: &TypeAnnotation) -> String {
         TypeAnnotation::Named(p) => p.join("."),
         TypeAnnotation::Nillable(inner) => format!("{}?", format_type_annotation(inner)),
         TypeAnnotation::ErrorUnion(inner) => format!("!{}", format_type_annotation(inner)),
+        TypeAnnotation::List(inner) => format!("[{}]", format_type_annotation(inner)),
     }
 }
 

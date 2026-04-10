@@ -1,0 +1,66 @@
+// ---------------------------------------------------------------------
+// Lists
+// ---------------------------------------------------------------------
+// Shows: `[T]` list type syntax, list literals, indexing, index
+// assignment, and the three builtin methods `len`, `push`, `pop`.
+//
+// Lists are Oryn's only parameterized type. The element type is
+// tracked statically at compile time — `[int]` and `[String]` are
+// distinct types, mixing them is a compile error — but at runtime
+// the element type is erased, so there's exactly one list
+// representation in the VM regardless of what's inside.
+//
+// Run with:
+//   cargo run --bin oryn -- examples/09_lists.on
+
+// A list of ints. The `[int]` type annotation is what distinguishes
+// this from a list of strings or a list of some obj type.
+let scores: [int] = [10, 20, 30]
+print("initial scores:")
+print(scores[0])
+print(scores[1])
+print(scores[2])
+
+// `len()` returns the current element count as an int.
+print("length:")
+print(scores.len())
+
+// `push(value)` appends in place. The argument type must match the
+// declared element type — `scores.push("oops")` is a compile error.
+scores.push(40)
+scores.push(50)
+print("after two pushes:")
+print(scores.len())
+print(scores[4])
+
+// Index assignment mutates the slot directly. Out-of-bounds writes
+// are a runtime error, not a silent grow.
+scores[0] = 99
+print("scores[0] after assignment:")
+print(scores[0])
+
+// `pop()` returns `T?` — a nillable of the element type — because
+// the list might be empty. Use `if let` to unwrap.
+if let last = scores.pop() {
+    print("popped:")
+    print(last)
+}
+
+// Lists of user-defined obj types work the same way. The VM stores
+// Gc pointers to the object instances, so indexing gives you back
+// a handle to the original — not a copy.
+obj Point {
+    x: int
+    y: int
+}
+
+let points: [Point] = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+print("points[0].x:")
+print(points[0].x)
+print("points[1].y:")
+print(points[1].y)
+
+// Nested lists work naturally — `[[int]]` is "list of lists of int".
+let grid: [[int]] = [[1, 2, 3], [4, 5, 6]]
+print("grid[1][2]:")
+print(grid[1][2])

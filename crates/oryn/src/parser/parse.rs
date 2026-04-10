@@ -13,13 +13,14 @@ type TokenSpanned = (Token, SimpleSpan);
 // The input type chumsky operates on. A slice of `TokenSpanned` tokens.
 type TokenInput<'src> = MappedInput<'src, Token, SimpleSpan, &'src [TokenSpanned]>;
 
-/// What kind of suffix follows a postfix `.field` access. Built once
-/// per `.ident` step in the postfix parser; the foldl callback decides
-/// whether to construct a FieldAccess, MethodCall, or ObjLiteral.
+/// What kind of suffix follows a postfix step. Built once per postfix
+/// match; the foldl callback decides whether to construct a FieldAccess,
+/// MethodCall, ObjLiteral, or Index expression.
 enum PostfixSuffix {
-    Field,
-    Call(Vec<Spanned<Expression>>),
-    ObjLit(Vec<(String, Spanned<Expression>)>),
+    Field(String),
+    Call(String, Vec<Spanned<Expression>>),
+    ObjLit(String, Vec<(String, Spanned<Expression>)>),
+    Index(Spanned<Expression>),
 }
 
 /// Walk a chain of `Expression::FieldAccess` rooted in `Expression::Ident`
@@ -145,8 +146,19 @@ fn atom<'src>(
         );
 
     let paren = expr
+        .clone()
         .delimited_by(just(Token::LeftParen), just(Token::RightParen))
         .map(|spanned| spanned.node);
+
+    // [a, b, c] — a list literal. Trailing commas are allowed for
+    // multi-line literals. The compiler rejects empty literals because
+    // an empty `[]` has no context-free element type.
+    let list_literal = expr
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<Spanned<Expression>>>()
+        .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
+        .map(Expression::ListLiteral);
 
     bool_lit
         .or(nil_lit)
@@ -155,6 +167,7 @@ fn atom<'src>(
         .or(string)
         .or(ident_or_call)
         .or(paren)
+        .or(list_literal)
         .map_with(|node, extra| Spanned::new(node, extra.span()))
         .labelled("expression")
 }
@@ -202,21 +215,42 @@ fn program<'src>() -> impl Parser<
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LeftParen), just(Token::RightParen));
 
-        // Each postfix step yields one of three suffix variants.
-        let postfix_step = just(Token::Dot)
+        // Each postfix step yields one of four suffix variants. A step
+        // is either a `.ident(...)`-style dotted access or a bracket
+        // `[expr]` index; the two grammars are kept in separate
+        // `choice` branches because only the first starts with `Dot`.
+        enum DottedTail {
+            Call(Vec<Spanned<Expression>>),
+            ObjLit(Vec<(String, Spanned<Expression>)>),
+            Field,
+        }
+
+        let dotted_suffix = just(Token::Dot)
             .ignore_then(select! { Token::Ident(name) => name })
             .then(choice((
-                postfix_call_args.map(PostfixSuffix::Call),
-                postfix_obj_fields.map(PostfixSuffix::ObjLit),
-                chumsky::primitive::empty().map(|_| PostfixSuffix::Field),
-            )));
+                postfix_call_args.map(DottedTail::Call),
+                postfix_obj_fields.map(DottedTail::ObjLit),
+                chumsky::primitive::empty().map(|_| DottedTail::Field),
+            )))
+            .map(|(name, tail)| match tail {
+                DottedTail::Call(args) => PostfixSuffix::Call(name, args),
+                DottedTail::ObjLit(fields) => PostfixSuffix::ObjLit(name, fields),
+                DottedTail::Field => PostfixSuffix::Field(name),
+            });
+
+        let index_suffix = expr
+            .clone()
+            .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
+            .map(PostfixSuffix::Index);
+
+        let postfix_step = choice((dotted_suffix, index_suffix));
 
         let postfix = atom
             .clone()
-            .foldl(postfix_step.repeated(), |object, (name, suffix)| {
+            .foldl(postfix_step.repeated(), |object, suffix| {
                 let span = object.span.clone();
                 match suffix {
-                    PostfixSuffix::Call(args) => Spanned {
+                    PostfixSuffix::Call(name, args) => Spanned {
                         node: Expression::MethodCall {
                             object: Box::new(object),
                             method: name,
@@ -224,14 +258,14 @@ fn program<'src>() -> impl Parser<
                         },
                         span,
                     },
-                    PostfixSuffix::Field => Spanned {
+                    PostfixSuffix::Field(name) => Spanned {
                         node: Expression::FieldAccess {
                             object: Box::new(object),
                             field: name,
                         },
                         span,
                     },
-                    PostfixSuffix::ObjLit(fields) => {
+                    PostfixSuffix::ObjLit(name, fields) => {
                         // Walk the accumulated chain back to the root Ident
                         // to build the qualified type path. The current
                         // `name` (just consumed) is the type name; the chain
@@ -247,6 +281,13 @@ fn program<'src>() -> impl Parser<
                             span,
                         }
                     }
+                    PostfixSuffix::Index(index) => Spanned {
+                        node: Expression::Index {
+                            object: Box::new(object),
+                            index: Box::new(index),
+                        },
+                        span,
+                    },
                 }
             });
 
@@ -436,6 +477,7 @@ fn program<'src>() -> impl Parser<
         //   T, mod.T        → TypeAnnotation::Named
         //   T?              → TypeAnnotation::Nillable
         //   !T              → TypeAnnotation::ErrorUnion
+        //   [T]             → TypeAnnotation::List
         //   !(T?), (!T)?    → allowed with parentheses
         //   !T?             → rejected (ambiguous without parentheses)
         let type_ann_parser = recursive(|type_ann_rec| {
@@ -445,10 +487,15 @@ fn program<'src>() -> impl Parser<
                 .collect::<Vec<String>>()
                 .map(TypeAnnotation::Named);
 
-            let paren_type =
-                type_ann_rec.delimited_by(just(Token::LeftParen), just(Token::RightParen));
+            let paren_type = type_ann_rec
+                .clone()
+                .delimited_by(just(Token::LeftParen), just(Token::RightParen));
 
-            let base_type = paren_type.or(dotted_name);
+            let list_type = type_ann_rec
+                .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
+                .map(|inner| TypeAnnotation::List(Box::new(inner)));
+
+            let base_type = paren_type.or(list_type).or(dotted_name);
 
             // T? — nillable (base + postfix ?)
             let nillable = base_type
@@ -537,6 +584,30 @@ fn program<'src>() -> impl Parser<
                         value,
                     },
                     name_span,
+                )
+            })
+            .boxed();
+
+        // x[i] = expr (must be tried before plain assignment and after
+        // field assignment). Currently restricted to a bare ident on the
+        // LHS so the parser can commit quickly; chained cases like
+        // `foo.bar[i] = x` would need a more general l-value grammar.
+        let index_assign_stmt = select! { Token::Ident(name) => name }
+            .then(
+                expr.clone()
+                    .delimited_by(just(Token::LeftBracket), just(Token::RightBracket)),
+            )
+            .then_ignore(just(Token::Equals))
+            .then(expr.clone())
+            .map_with(|((name, index), value), extra| {
+                let s: SimpleSpan = extra.span();
+                Spanned::new(
+                    Statement::IndexAssignment {
+                        object: Spanned::new(Expression::Ident(name), s),
+                        index,
+                        value,
+                    },
+                    s,
                 )
             })
             .boxed();
@@ -837,6 +908,7 @@ fn program<'src>() -> impl Parser<
         import_stmt
             .or(let_stmt)
             .or(field_assign_stmt)
+            .or(index_assign_stmt)
             .or(assign_stmt)
             .or(val_stmt)
             .or(obj_stmt)

@@ -376,6 +376,13 @@ impl Compiler {
                 }
                 ResolvedType::Unknown
             }
+            // `xs[i]` has the list's element type. Used by the field-access
+            // and method-call inference paths so `ps[0].x` and
+            // `items[0].method()` resolve correctly.
+            Expression::Index { object, .. } => match self.infer_object_type(&object.node) {
+                ResolvedType::List(inner) => *inner,
+                _ => ResolvedType::Unknown,
+            },
             _ => ResolvedType::Unknown,
         }
     }
@@ -536,6 +543,88 @@ impl Compiler {
         ResolvedType::Object {
             name: last.clone(),
             module: prefix.to_vec(),
+        }
+    }
+
+    /// Compile a method call on a list receiver. Dispatches against a
+    /// fixed set of builtin methods (`len`, `push`, `pop`) and emits
+    /// the matching list opcode. Reports an error for unknown methods
+    /// or arity/type mismatches.
+    pub(super) fn compile_list_method(
+        &mut self,
+        object: Spanned<Expression>,
+        method: &str,
+        args: Vec<Spanned<Expression>>,
+        elem_ty: &ResolvedType,
+        span: &crate::parser::Span,
+    ) -> ResolvedType {
+        match method {
+            "len" => {
+                if !args.is_empty() {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        format!("list `len` takes no arguments, got {}", args.len()),
+                    ));
+                }
+                self.compile_expr(object);
+                self.emit(Instruction::ListLen, span);
+                ResolvedType::Int
+            }
+            "push" => {
+                if args.len() != 1 {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        format!("list `push` takes 1 argument, got {}", args.len()),
+                    ));
+                    self.compile_expr(object);
+                    for arg in args {
+                        self.compile_expr(arg);
+                    }
+                    self.emit(Instruction::PushInt(0), span);
+                    return ResolvedType::Unknown;
+                }
+                self.compile_expr(object);
+                let arg = args.into_iter().next().unwrap();
+                let arg_span = arg.span.clone();
+                let arg_ty = self.compile_expr(arg);
+                self.check_types(
+                    elem_ty,
+                    &arg_ty,
+                    &arg_span,
+                    "list `push` argument type mismatch",
+                );
+                self.emit(Instruction::ListPush, span);
+                // push is a statement-style method — stack is empty after.
+                // Callers always wrap method calls in an expression
+                // statement or let binding; push a sentinel int so the
+                // stack stays well-formed, to be popped by the
+                // surrounding expression-statement `Pop`.
+                self.emit(Instruction::PushInt(0), span);
+                ResolvedType::Int
+            }
+            "pop" => {
+                if !args.is_empty() {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        format!("list `pop` takes no arguments, got {}", args.len()),
+                    ));
+                }
+                self.compile_expr(object);
+                self.emit(Instruction::ListPop, span);
+                ResolvedType::Nillable(Box::new(elem_ty.clone()))
+            }
+            _ => {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!("unknown list method `{method}` (expected `len`, `push`, or `pop`)"),
+                ));
+                self.compile_expr(object);
+                for arg in args {
+                    self.compile_expr(arg);
+                }
+                self.emit(Instruction::PushInt(0), span);
+                ResolvedType::Unknown
+            }
         }
     }
 }
@@ -948,6 +1037,13 @@ impl Compiler {
                         }
                         _ => None,
                     };
+
+                    // List receiver: hard-coded builtin methods (`len`,
+                    // `push`, `pop`). Dispatched before the object-method
+                    // lookup so users can't accidentally shadow them.
+                    if let ResolvedType::List(elem_ty) = receiver_type.clone() {
+                        return self.compile_list_method(*object, &method, args, &elem_ty, &span);
+                    }
 
                     if let Some((type_name, module, func_idx, is_pub, signature)) = direct_method {
                         if !module.is_empty() && module != self.current_module_path && !is_pub {
@@ -1371,6 +1467,73 @@ impl Compiler {
             }
 
             Expression::Block(stmts) => self.compile_block(stmts, BlockMode::FreshLoops),
+
+            // -- Lists --
+            Expression::ListLiteral(elements) => {
+                if elements.is_empty() {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        "cannot infer element type of empty list literal; use an annotated let binding",
+                    ));
+                    self.emit(Instruction::MakeList(0), &span);
+                    return ResolvedType::List(Box::new(ResolvedType::Unknown));
+                }
+
+                let count = elements.len();
+                let mut elements = elements.into_iter();
+                let first = elements.next().unwrap();
+                let first_span = first.span.clone();
+                let elem_ty = self.compile_expr(first);
+
+                for element in elements {
+                    let element_span = element.span.clone();
+                    let actual_ty = self.compile_expr(element);
+                    self.check_types(
+                        &elem_ty,
+                        &actual_ty,
+                        &element_span,
+                        "list element type mismatch",
+                    );
+                }
+
+                // Propagate the span of the first element for the MakeList
+                // error span so runtime traps point at something meaningful.
+                let _ = first_span;
+                self.emit(Instruction::MakeList(count as u32), &span);
+                ResolvedType::List(Box::new(elem_ty))
+            }
+
+            Expression::Index { object, index } => {
+                let object_span = object.span.clone();
+                let object_ty = self.compile_expr(*object);
+
+                let element_ty = match &object_ty {
+                    ResolvedType::List(inner) => (**inner).clone(),
+                    ResolvedType::Unknown => ResolvedType::Unknown,
+                    _ => {
+                        self.output.errors.push(OrynError::compiler(
+                            object_span,
+                            format!(
+                                "cannot index into non-list type `{}`",
+                                object_ty.display_name()
+                            ),
+                        ));
+                        ResolvedType::Unknown
+                    }
+                };
+
+                let index_span = index.span.clone();
+                let index_ty = self.compile_expr(*index);
+                self.check_types(
+                    &ResolvedType::Int,
+                    &index_ty,
+                    &index_span,
+                    "list index must be `int`",
+                );
+
+                self.emit(Instruction::ListGet, &span);
+                element_ty
+            }
         }
     }
 }

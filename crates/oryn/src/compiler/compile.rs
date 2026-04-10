@@ -177,6 +177,10 @@ pub(super) fn resolve_type(
             let inner_resolved = resolve_type(inner, obj_table, modules)?;
             Ok(ResolvedType::ErrorUnion(Box::new(inner_resolved)))
         }
+        TypeAnnotation::List(inner) => {
+            let inner_resolved = resolve_type(inner, obj_table, modules)?;
+            Ok(ResolvedType::List(Box::new(inner_resolved)))
+        }
     }
 }
 

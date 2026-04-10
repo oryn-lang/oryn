@@ -6,7 +6,7 @@ use gc_arena::{Arena, Gc, Rootable};
 
 use crate::compiler::{BuiltinFunction, Instruction};
 use crate::errors::{RuntimeError, ValueType};
-use crate::vm::value::{ObjData, RangeValue};
+use crate::vm::value::{ListData, ObjData, RangeValue};
 
 use super::chunk::Chunk;
 use super::value::{CallFrame, Value, VmState};
@@ -340,6 +340,10 @@ impl VM {
                                 let op = if range.inclusive { "..=" } else { ".." };
                                 format!("{}{}{}", range.current, op, range.end)
                             }
+                            Value::List(list_ref) => {
+                                let data = list_ref.borrow();
+                                format!("<list of {}>", data.elements.len())
+                            }
                             Value::Nil => "nil".to_string(),
                             Value::Error(msg) => format!("error: {}", msg.as_str()),
                             Value::Uninitialized => {
@@ -647,6 +651,10 @@ impl VM {
 
                                             format!("{}{}{}", range.current, op, range.end)
                                         }
+                                        Value::List(list_ref) => {
+                                            let data = list_ref.borrow();
+                                            format!("<list of {}>", data.elements.len())
+                                        }
                                         Value::String(s) => s.as_str().to_string(),
                                         Value::Nil => "nil".to_string(),
                                         Value::Error(msg) => format!("error: {}", msg.as_str()),
@@ -845,6 +853,145 @@ impl VM {
                             }
                         }
                     }
+                    Instruction::MakeList(n) => {
+                        let n = *n as usize;
+                        // The compiler pushed element values in source
+                        // order (first element is deepest on the stack).
+                        // split_off preserves that order when we move
+                        // them into the backing Vec.
+                        let elements: Vec<Value> = state.stack.split_off(state.stack.len() - n);
+                        let list = ListData { elements };
+                        state
+                            .stack
+                            .push(Value::List(Gc::new(mc, RefLock::new(list))));
+                    }
+                    Instruction::ListGet => {
+                        let index = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        let index = match index {
+                            Value::Int(i) => i,
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Int,
+                                    actual: ValueType::from(&index),
+                                    span,
+                                });
+                            }
+                        };
+
+                        let list_ref = match list {
+                            Value::List(l) => l,
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::List,
+                                    actual: ValueType::from(&list),
+                                    span,
+                                });
+                            }
+                        };
+
+                        let data = list_ref.borrow();
+                        let len = data.elements.len();
+                        if index < 0 || (index as usize) >= len {
+                            let span = Self::current_span_from_state(&state.frames, chunk);
+                            return Err(RuntimeError::IndexOutOfBounds { index, len, span });
+                        }
+                        let value = data.elements[index as usize].clone();
+                        state.stack.push(value);
+                    }
+                    Instruction::ListSet => {
+                        // Stack order (compiled by stmt.rs): object, index, value.
+                        // Pop in reverse: value, index, object.
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let index = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+
+                        let index = match index {
+                            Value::Int(i) => i,
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Int,
+                                    actual: ValueType::from(&index),
+                                    span,
+                                });
+                            }
+                        };
+
+                        let list_ref = match list {
+                            Value::List(l) => l,
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::List,
+                                    actual: ValueType::from(&list),
+                                    span,
+                                });
+                            }
+                        };
+
+                        let len = list_ref.borrow().elements.len();
+                        if index < 0 || (index as usize) >= len {
+                            let span = Self::current_span_from_state(&state.frames, chunk);
+                            return Err(RuntimeError::IndexOutOfBounds { index, len, span });
+                        }
+                        list_ref.borrow_mut(mc).elements[index as usize] = value;
+                    }
+                    Instruction::ListLen => {
+                        let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        match list {
+                            Value::List(list_ref) => {
+                                let len = list_ref.borrow().elements.len();
+                                state.stack.push(Value::Int(len as i32));
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::List,
+                                    actual: ValueType::from(&list),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    Instruction::ListPush => {
+                        // Stack order: list, value. Pop value, then list.
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        match list {
+                            Value::List(list_ref) => {
+                                list_ref.borrow_mut(mc).elements.push(value);
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::List,
+                                    actual: ValueType::from(&list),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    Instruction::ListPop => {
+                        let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        match list {
+                            Value::List(list_ref) => {
+                                let popped = list_ref.borrow_mut(mc).elements.pop();
+                                state.stack.push(popped.unwrap_or(Value::Nil));
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::List,
+                                    actual: ValueType::from(&list),
+                                    span,
+                                });
+                            }
+                        }
+                    }
                     Instruction::Assert => {
                         let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
 
@@ -1008,5 +1155,114 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // -------------------------------------------------------------------
+    // List execution tests
+    // -------------------------------------------------------------------
+
+    fn run_source(source: &str) -> Vec<u8> {
+        let c = crate::Chunk::compile(source).unwrap_or_else(|errors| {
+            panic!("compile failed: {errors:?}");
+        });
+        let mut vm = VM::new();
+        let mut output = Vec::new();
+        vm.run_with_writer(&c, &mut output).unwrap();
+        output
+    }
+
+    #[test]
+    fn list_literal_and_index_round_trip() {
+        let out =
+            run_source("let xs: [int] = [10, 20, 30]\nprint(xs[0])\nprint(xs[1])\nprint(xs[2])");
+        assert_eq!(String::from_utf8(out).unwrap(), "10\n20\n30\n");
+    }
+
+    #[test]
+    fn list_len_returns_element_count() {
+        let out = run_source("let xs: [int] = [1, 2, 3, 4]\nprint(xs.len())");
+        assert_eq!(String::from_utf8(out).unwrap(), "4\n");
+    }
+
+    #[test]
+    fn list_push_mutates_in_place() {
+        let out = run_source(
+            "let xs: [int] = [1]\nxs.push(2)\nxs.push(3)\nprint(xs.len())\nprint(xs[2])",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "3\n3\n");
+    }
+
+    #[test]
+    fn list_pop_returns_nillable_element() {
+        let out = run_source(
+            "let xs: [int] = [1, 2, 3]\nif let last = xs.pop() { print(last) }\nprint(xs.len())",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "3\n2\n");
+    }
+
+    #[test]
+    fn list_pop_on_empty_returns_nil() {
+        // Pop on empty list yields nil — confirmed via an orelse fallback.
+        let out = run_source(
+            "let xs: [int] = [1]\nlet _ = xs.pop()\nlet fallback = xs.pop() orelse 99\nprint(fallback)",
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "99\n");
+    }
+
+    #[test]
+    fn list_index_assignment_mutates_in_place() {
+        let out = run_source("let xs: [int] = [1, 2, 3]\nxs[1] = 99\nprint(xs[1])");
+        assert_eq!(String::from_utf8(out).unwrap(), "99\n");
+    }
+
+    #[test]
+    fn list_get_out_of_bounds_raises_runtime_error() {
+        let c = crate::Chunk::compile("let xs: [int] = [1, 2]\nlet y = xs[5]").unwrap();
+        let mut vm = VM::new();
+        let err = vm.run(&c).expect_err("expected out-of-bounds trap");
+        assert!(matches!(
+            err,
+            RuntimeError::IndexOutOfBounds {
+                index: 5,
+                len: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn list_set_out_of_bounds_raises_runtime_error() {
+        let c = crate::Chunk::compile("let xs: [int] = [1, 2]\nxs[5] = 9").unwrap();
+        let mut vm = VM::new();
+        let err = vm.run(&c).expect_err("expected out-of-bounds trap");
+        assert!(matches!(err, RuntimeError::IndexOutOfBounds { .. }));
+    }
+
+    #[test]
+    fn nested_lists_round_trip() {
+        let out =
+            run_source("let xs: [[int]] = [[1, 2], [3, 4]]\nprint(xs[0][1])\nprint(xs[1][0])");
+        assert_eq!(String::from_utf8(out).unwrap(), "2\n3\n");
+    }
+
+    #[test]
+    fn list_of_obj_instances_stores_and_reads_fields() {
+        let out = run_source(
+            r#"obj Pt { x: int, y: int }
+let ps: [Pt] = [Pt { x: 1, y: 2 }, Pt { x: 3, y: 4 }]
+print(ps[0].x)
+print(ps[1].y)"#,
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "1\n4\n");
+    }
+
+    #[test]
+    fn list_of_strings_round_trip() {
+        let out = run_source(
+            r#"let names: [String] = ["alice", "bob"]
+print(names[0])
+print(names[1])"#,
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), "alice\nbob\n");
     }
 }

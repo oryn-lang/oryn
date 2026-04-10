@@ -200,6 +200,18 @@ impl<'a> Formatter<'a> {
                 self.out.push_str(" = ");
                 self.write_expression(value, 0);
             }
+            Statement::IndexAssignment {
+                object,
+                index,
+                value,
+            } => {
+                self.write_expression(object, PREC_POSTFIX);
+                self.out.push('[');
+                self.write_expression(index, 0);
+                self.out.push(']');
+                self.out.push_str(" = ");
+                self.write_expression(value, 0);
+            }
             Statement::Assignment { name, value } => {
                 self.out.push_str(name);
                 self.out.push_str(" = ");
@@ -510,6 +522,22 @@ impl<'a> Formatter<'a> {
                 }
                 self.out.push('"');
             }
+            Expression::ListLiteral(elements) => {
+                self.out.push('[');
+                for (i, element) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.out.push_str(", ");
+                    }
+                    self.write_expression(element, 0);
+                }
+                self.out.push(']');
+            }
+            Expression::Index { object, index } => {
+                self.write_expression(object, PREC_POSTFIX);
+                self.out.push('[');
+                self.write_expression(index, 0);
+                self.out.push(']');
+            }
         }
 
         if needs_parens {
@@ -543,6 +571,11 @@ impl<'a> Formatter<'a> {
             TypeAnnotation::ErrorUnion(inner) => {
                 self.out.push('!');
                 self.write_type_name(inner);
+            }
+            TypeAnnotation::List(inner) => {
+                self.out.push('[');
+                self.write_type_name(inner);
+                self.out.push(']');
             }
         }
     }

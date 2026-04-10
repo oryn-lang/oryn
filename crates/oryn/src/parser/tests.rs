@@ -617,3 +617,131 @@ fn if_let_with_coalesce_in_value() {
         other => panic!("expected IfLet with Coalesce value, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// List syntax: [T] types, [a, b, c] literals, xs[i] indexing, xs[i] = y
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parses_list_type_annotation() {
+    let stmts = parse_ok("let xs: [int] = [1, 2, 3]");
+    match &stmts[0].node {
+        Statement::Let {
+            type_ann: Some(TypeAnnotation::List(inner)),
+            ..
+        } => {
+            assert!(matches!(inner.as_ref(), TypeAnnotation::Named(s) if s == &["int"]));
+        }
+        other => panic!("expected Let with List type, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_nested_list_type_annotation() {
+    let stmts = parse_ok("let xs: [[int]] = [[1], [2, 3]]");
+    match &stmts[0].node {
+        Statement::Let {
+            type_ann: Some(TypeAnnotation::List(inner)),
+            ..
+        } => {
+            assert!(matches!(inner.as_ref(), TypeAnnotation::List(_)));
+        }
+        other => panic!("expected Let with nested List type, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_nillable_list_type() {
+    let stmts = parse_ok("let xs: [int]? = nil");
+    match &stmts[0].node {
+        Statement::Let {
+            type_ann: Some(TypeAnnotation::Nillable(inner)),
+            ..
+        } => {
+            assert!(matches!(inner.as_ref(), TypeAnnotation::List(_)));
+        }
+        other => panic!("expected Let with Nillable(List), got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_list_literal_expression() {
+    let stmts = parse_ok("[1, 2, 3]");
+    match &stmts[0].node {
+        Statement::Expression(Spanned {
+            node: Expression::ListLiteral(elements),
+            ..
+        }) => {
+            assert_eq!(elements.len(), 3);
+        }
+        other => panic!("expected ListLiteral expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_empty_list_literal() {
+    let stmts = parse_ok("let xs: [int] = []");
+    match &stmts[0].node {
+        Statement::Let { value, .. } => {
+            assert!(matches!(value.node, Expression::ListLiteral(ref v) if v.is_empty()));
+        }
+        other => panic!("expected Let with empty ListLiteral, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_list_literal_with_trailing_comma() {
+    let stmts = parse_ok("[1, 2, 3,]");
+    assert!(matches!(
+        &stmts[0].node,
+        Statement::Expression(Spanned {
+            node: Expression::ListLiteral(v),
+            ..
+        }) if v.len() == 3
+    ));
+}
+
+#[test]
+fn parses_index_expression() {
+    let stmts = parse_ok("let xs: [int] = [1, 2, 3]\nxs[0]");
+    assert_eq!(stmts.len(), 2);
+    match &stmts[1].node {
+        Statement::Expression(Spanned {
+            node: Expression::Index { .. },
+            ..
+        }) => {}
+        other => panic!("expected Index expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_chained_index_expression() {
+    let stmts = parse_ok("let xs: [[int]] = [[1], [2]]\nxs[0][0]");
+    // xs[0][0] should parse as Index(Index(Ident, 0), 0)
+    match &stmts[1].node {
+        Statement::Expression(Spanned {
+            node: Expression::Index { object, .. },
+            ..
+        }) => {
+            assert!(matches!(object.node, Expression::Index { .. }));
+        }
+        other => panic!("expected chained Index expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_index_assignment() {
+    let stmts = parse_ok("let xs: [int] = [1, 2, 3]\nxs[0] = 42");
+    match &stmts[1].node {
+        Statement::IndexAssignment { .. } => {}
+        other => panic!("expected IndexAssignment, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_list_method_calls() {
+    // len/push/pop all lower to method calls — the compiler decides
+    // later which receiver-specific opcode to emit.
+    let stmts = parse_ok("let xs: [int] = [1]\nxs.push(2)\nxs.len()\nxs.pop()");
+    assert_eq!(stmts.len(), 4);
+}

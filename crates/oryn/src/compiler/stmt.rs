@@ -211,6 +211,49 @@ impl Compiler {
                     ));
                 }
             }
+            Statement::IndexAssignment {
+                object,
+                index,
+                value,
+            } => {
+                let object_span = object.span.clone();
+                let object_ty = self.compile_expr(object);
+
+                let elem_ty = match &object_ty {
+                    ResolvedType::List(inner) => (**inner).clone(),
+                    ResolvedType::Unknown => ResolvedType::Unknown,
+                    _ => {
+                        self.output.errors.push(OrynError::compiler(
+                            object_span,
+                            format!(
+                                "cannot index into non-list type `{}`",
+                                object_ty.display_name()
+                            ),
+                        ));
+                        ResolvedType::Unknown
+                    }
+                };
+
+                let index_span = index.span.clone();
+                let index_ty = self.compile_expr(index);
+                self.check_types(
+                    &ResolvedType::Int,
+                    &index_ty,
+                    &index_span,
+                    "list index must be `int`",
+                );
+
+                let value_span = value.span.clone();
+                let value_ty = self.compile_expr(value);
+                self.check_types(
+                    &elem_ty,
+                    &value_ty,
+                    &value_span,
+                    "list element type mismatch",
+                );
+
+                self.emit(Instruction::ListSet, &stmt_span);
+            }
             Statement::FieldAssignment {
                 object,
                 field,

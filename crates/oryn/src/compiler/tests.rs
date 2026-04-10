@@ -103,3 +103,162 @@ fn test_body_compiles_as_function() {
         func.instructions
     );
 }
+
+// ---------------------------------------------------------------------------
+// List type checking and opcode emission
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_literal_emits_make_list() {
+    let chunk = crate::Chunk::compile("let xs: [int] = [1, 2, 3]").unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::MakeList(3))),
+        "expected MakeList(3), got {:?}",
+        chunk.instructions
+    );
+}
+
+#[test]
+fn list_index_emits_list_get() {
+    let chunk = crate::Chunk::compile("let xs: [int] = [1, 2, 3]\nlet y = xs[0]").unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::ListGet)),
+        "expected ListGet, got {:?}",
+        chunk.instructions
+    );
+}
+
+#[test]
+fn list_index_assignment_emits_list_set() {
+    let chunk = crate::Chunk::compile("let xs: [int] = [1, 2, 3]\nxs[0] = 42").unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::ListSet)),
+        "expected ListSet, got {:?}",
+        chunk.instructions
+    );
+}
+
+#[test]
+fn list_len_method_emits_list_len() {
+    let chunk = crate::Chunk::compile("let xs: [int] = [1, 2, 3]\nlet n = xs.len()").unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::ListLen))
+    );
+}
+
+#[test]
+fn list_push_method_emits_list_push() {
+    let chunk = crate::Chunk::compile("let xs: [int] = [1]\nxs.push(2)").unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::ListPush))
+    );
+}
+
+#[test]
+fn list_pop_method_emits_list_pop() {
+    let chunk = crate::Chunk::compile("let xs: [int] = [1, 2]\nlet last = xs.pop()").unwrap();
+    assert!(
+        chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::ListPop))
+    );
+}
+
+#[test]
+fn heterogeneous_list_literal_is_type_error() {
+    let errors = crate::Chunk::compile(r#"let xs = [1, "hello"]"#).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("list element type mismatch")),
+        "expected a list element type mismatch, got {errors:?}"
+    );
+}
+
+#[test]
+fn empty_list_without_annotation_is_error() {
+    let errors = crate::Chunk::compile("let xs = []").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("empty list literal")),
+        "expected empty-list error, got {errors:?}"
+    );
+}
+
+#[test]
+fn wrong_element_type_rejected_against_annotation() {
+    let errors = crate::Chunk::compile(r#"let xs: [int] = ["a"]"#).unwrap_err();
+    assert!(
+        errors.iter().any(|e| {
+            let s = format!("{e}");
+            s.contains("type mismatch") || s.contains("element type")
+        }),
+        "expected a type mismatch, got {errors:?}"
+    );
+}
+
+#[test]
+fn indexing_non_list_is_error() {
+    let errors = crate::Chunk::compile("let x = 5\nlet y = x[0]").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("cannot index into non-list type")),
+        "expected non-list index error, got {errors:?}"
+    );
+}
+
+#[test]
+fn string_index_is_error() {
+    let errors = crate::Chunk::compile("let xs: [int] = [1]\nlet y = xs[\"a\"]").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("list index must be `int`")),
+        "expected int-index error, got {errors:?}"
+    );
+}
+
+#[test]
+fn push_argument_type_checked_against_element_type() {
+    let errors = crate::Chunk::compile("let xs: [int] = [1]\nxs.push(\"a\")").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("list `push` argument type mismatch")),
+        "expected push type mismatch, got {errors:?}"
+    );
+}
+
+#[test]
+fn list_type_round_trips_through_display_name() {
+    // Compile a function taking [int] and returning [int] — verify
+    // the error rendering for a type mismatch shows `[int]` properly.
+    let errors = crate::Chunk::compile(
+        "fn head(xs: [int]) -> int { rn xs[0] }\nlet y: [String] = head([1, 2])",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("[int]") || format!("{e}").contains("[String]")),
+        "expected list type in error message, got {errors:?}"
+    );
+}

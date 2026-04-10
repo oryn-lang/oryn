@@ -24,6 +24,19 @@ pub(crate) enum Value<'gc> {
     /// A language-level error value carrying a message payload.
     /// Only produced by explicit error-union language behavior.
     Error(Gc<'gc, String>),
+    /// A homogeneous list. Element typing is enforced statically at
+    /// compile time and erased at runtime; storage is just a
+    /// `Vec<Value<'gc>>` wrapped in `RefLock` for in-place mutation.
+    List(Gc<'gc, RefLock<ListData<'gc>>>),
+}
+
+/// Runtime storage for a list value. Mirrors [`ObjData`] — the fields
+/// of an object and the elements of a list are both heterogeneous-at-
+/// the-VM-level vectors of [`Value`].
+#[derive(Debug, PartialEq, Collect)]
+#[collect(no_drop)]
+pub(crate) struct ListData<'gc> {
+    pub elements: Vec<Value<'gc>>,
 }
 
 #[derive(Debug, PartialEq, Collect)]

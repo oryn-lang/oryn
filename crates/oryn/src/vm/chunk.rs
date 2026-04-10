@@ -620,6 +620,12 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::UnwrapErrorOrTrap => "UnwrapErrorOrTrap".to_string(),
             Instruction::MakeError => "MakeError".to_string(),
             Instruction::Assert => "Assert".to_string(),
+            Instruction::MakeList(n) => format!("MakeList {n}"),
+            Instruction::ListGet => "ListGet".to_string(),
+            Instruction::ListSet => "ListSet".to_string(),
+            Instruction::ListLen => "ListLen".to_string(),
+            Instruction::ListPush => "ListPush".to_string(),
+            Instruction::ListPop => "ListPop".to_string(),
         };
 
         writeln!(out, "{i:04}  {formatted}").unwrap();

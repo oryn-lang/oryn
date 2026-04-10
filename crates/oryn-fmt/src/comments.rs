@@ -79,6 +79,15 @@ impl CommentAttachments {
                 self.walk_expression(object, parsed);
                 self.walk_expression(value, parsed);
             }
+            Statement::IndexAssignment {
+                object,
+                index,
+                value,
+            } => {
+                self.walk_expression(object, parsed);
+                self.walk_expression(index, parsed);
+                self.walk_expression(value, parsed);
+            }
             Statement::ObjDef {
                 fields, methods, ..
             } => {
@@ -137,6 +146,15 @@ impl CommentAttachments {
                         self.walk_expression(expr, parsed);
                     }
                 }
+            }
+            Expression::ListLiteral(elements) => {
+                for element in elements {
+                    self.walk_expression(element, parsed);
+                }
+            }
+            Expression::Index { object, index } => {
+                self.walk_expression(object, parsed);
+                self.walk_expression(index, parsed);
             }
             Expression::Nil
             | Expression::True

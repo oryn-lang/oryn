@@ -79,6 +79,23 @@ pub enum Instruction {
     /// this instruction points at the asserted expression so ariadne
     /// underlines it directly.
     Assert,
+    /// Pop `n` values off the stack and push a new list containing
+    /// them in original order (the first pushed value becomes index 0).
+    MakeList(u32),
+    /// Pop index:int and list; push the element at that index.
+    /// Raises [`crate::errors::RuntimeError::IndexOutOfBounds`] when
+    /// the index is out of range.
+    ListGet,
+    /// Pop value, index:int, and list; write value into list\[index\].
+    /// Raises [`crate::errors::RuntimeError::IndexOutOfBounds`] when
+    /// the index is out of range.
+    ListSet,
+    /// Pop a list and push its length as an int.
+    ListLen,
+    /// Pop value and list; append value to list's elements.
+    ListPush,
+    /// Pop list; push the final element (or nil if empty).
+    ListPop,
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +322,9 @@ pub(crate) enum ResolvedType {
     Nillable(Box<ResolvedType>),
     /// `!T` — an error union type wrapping an inner success type.
     ErrorUnion(Box<ResolvedType>),
+    /// `[T]` — a homogeneous list whose element type is tracked
+    /// statically but erased at runtime.
+    List(Box<ResolvedType>),
     /// Internal-only nil type. Used for contextual typing of the `nil`
     /// literal. Not user-declarable.
     Nil,
@@ -377,6 +397,7 @@ impl ResolvedType {
             }
             ResolvedType::Nillable(inner) => format!("{}?", inner.display_name()).into(),
             ResolvedType::ErrorUnion(inner) => format!("!{}", inner.display_name()).into(),
+            ResolvedType::List(inner) => format!("[{}]", inner.display_name()).into(),
             ResolvedType::Nil => "nil".into(),
             ResolvedType::Error => "error".into(),
             ResolvedType::Unknown => "unknown".into(),

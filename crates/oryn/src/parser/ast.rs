@@ -61,6 +61,12 @@ pub enum Statement {
         field: String,
         value: Spanned<Expression>,
     },
+    /// `object[index] = value` — list element assignment.
+    IndexAssignment {
+        object: Spanned<Expression>,
+        index: Spanned<Expression>,
+        value: Spanned<Expression>,
+    },
     Assignment {
         name: String,
         value: Spanned<Expression>,
@@ -168,6 +174,16 @@ pub enum Expression {
         left: Box<Spanned<Expression>>,
         right: Box<Spanned<Expression>>,
     },
+    /// `[a, b, c]` — a list literal. Must contain at least one element;
+    /// empty literals have no context-free element type and are rejected
+    /// at the compiler level with a clearer error than the parser could give.
+    ListLiteral(Vec<Spanned<Expression>>),
+    /// `object[index]` — list indexing. Also parses on non-list receivers
+    /// but the compiler rejects those with a type error.
+    Index {
+        object: Box<Spanned<Expression>>,
+        index: Box<Spanned<Expression>>,
+    },
     Block(Vec<Spanned<Statement>>),
 }
 
@@ -204,6 +220,9 @@ pub enum TypeAnnotation {
     Nillable(Box<TypeAnnotation>),
     /// `!T` — an error union type.
     ErrorUnion(Box<TypeAnnotation>),
+    /// `[T]` — a homogeneous list whose element type is tracked statically
+    /// but erased at runtime.
+    List(Box<TypeAnnotation>),
 }
 
 /// A field declared inside an `obj` body. The `is_pub` flag controls

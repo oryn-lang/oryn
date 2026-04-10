@@ -126,6 +126,14 @@ pub enum RuntimeError {
     AssertionFailed {
         span: Option<Range<usize>>,
     },
+    /// A list index was outside the list's bounds. `index` is the
+    /// requested position (may be negative), `len` is the list's
+    /// current length.
+    IndexOutOfBounds {
+        index: i32,
+        len: usize,
+        span: Option<Range<usize>>,
+    },
 }
 
 /// The type of a value.
@@ -139,6 +147,7 @@ pub enum ValueType {
     Object,
     Range,
     String,
+    List,
 }
 
 impl From<&Value<'_>> for ValueType {
@@ -155,6 +164,7 @@ impl From<&Value<'_>> for ValueType {
             Value::Object(_) => ValueType::Object,
             Value::Range(_) => ValueType::Range,
             Value::String(_) => ValueType::String,
+            Value::List(_) => ValueType::List,
         }
     }
 }
@@ -170,6 +180,7 @@ impl fmt::Display for ValueType {
             ValueType::Object => write!(f, "object"),
             ValueType::Range => write!(f, "range"),
             ValueType::String => write!(f, "string"),
+            ValueType::List => write!(f, "list"),
         }
     }
 }
@@ -223,6 +234,9 @@ impl fmt::Display for RuntimeError {
                 write!(f, "unwrap trap: {message}")
             }
             RuntimeError::AssertionFailed { .. } => write!(f, "assertion failed"),
+            RuntimeError::IndexOutOfBounds { index, len, .. } => {
+                write!(f, "list index {index} out of bounds (length {len})")
+            }
         }
     }
 }
@@ -242,6 +256,7 @@ impl RuntimeError {
             RuntimeError::IntegerOverflow { span } => span.as_ref(),
             RuntimeError::ErrorUnwrapTrap { span, .. } => span.as_ref(),
             RuntimeError::AssertionFailed { span } => span.as_ref(),
+            RuntimeError::IndexOutOfBounds { span, .. } => span.as_ref(),
         }
     }
 }
