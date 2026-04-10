@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------
-// Control flow
-// ---------------------------------------------------------------------
-// Shows: if / elif / else, while, for-in, ranges, break, continue.
-//
-// Run with:
-//   cargo run --bin oryn -- examples/03_control_flow.on
-
-// `if` / `elif` / `else` — braces are required, parentheses are not.
 fn classify(n: int) -> String {
     if n < 0 {
         rn "negative"
@@ -20,26 +11,18 @@ fn classify(n: int) -> String {
 print(classify(-3))
 print(classify(0))
 print(classify(42))
-
-// `for x in <range>` walks an exclusive or inclusive range.
-// `..` is exclusive, `..=` is inclusive.
 print("--- exclusive range 1..4 ---")
 for i in 1..4 {
     print("i = {i}")
 }
-
 print("--- inclusive range 1..=4 ---")
 for i in 1..=4 {
     print("i = {i}")
 }
-
-// `while` loops until the condition is false. `break` exits early;
-// `continue` skips to the next iteration.
 print("--- countdown, skipping 3 ---")
 let count = 5
 while count > 0 {
     if count == 3 {
-        // Skip this iteration without printing.
         count = count - 1
         continue
     }

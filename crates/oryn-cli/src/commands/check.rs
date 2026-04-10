@@ -1,5 +1,11 @@
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use console::style;
+
+use crate::ui;
 
 /// Compile-only command: runs the full lex/parse/compile pipeline on
 /// each path (walking directories for `.on` files) and reports any
@@ -17,16 +23,23 @@ use std::path::{Path, PathBuf};
 /// Exits with status 0 if every file compiles cleanly, 1 if any errors
 /// were reported.
 pub fn run(paths: &[PathBuf]) {
+    let start = Instant::now();
+
+    // ── collect files ───────────────────────────────────────────────
+    let spinner = ui::spinner("collecting files…");
+
     let mut files: Vec<PathBuf> = Vec::new();
     for path in paths {
         if let Err(e) = collect_on_files(path, &mut files) {
-            eprintln!("error: {}: {e}", path.display());
+            spinner.finish_and_clear();
+            ui::error(&format!("{}: {e}", path.display()));
             std::process::exit(1);
         }
     }
 
     if files.is_empty() {
-        eprintln!("error: no .on files found in the given paths");
+        spinner.finish_and_clear();
+        ui::error("no .on files found in the given paths");
         std::process::exit(1);
     }
 
@@ -35,25 +48,82 @@ pub fn run(paths: &[PathBuf]) {
     // the importer's `compile_file` will type-check them transitively.
     let imported = collect_imported_files(&files);
 
-    let mut any_errors = false;
-    for file in &files {
-        if is_package_marker(file) {
-            continue;
-        }
-        if let Ok(canonical) = file.canonicalize()
-            && imported.contains(&canonical)
-        {
-            continue;
-        }
-        if !check_file(file) {
-            any_errors = true;
+    // Filter down to entry-point files, sorted for stable output.
+    let mut check_files: Vec<&PathBuf> = files
+        .iter()
+        .filter(|f| !is_package_marker(f))
+        .filter(|f| {
+            f.canonicalize()
+                .map(|c| !imported.contains(&c))
+                .unwrap_or(true)
+        })
+        .collect();
+    check_files.sort();
+
+    let file_count = check_files.len();
+    spinner.finish_and_clear();
+
+    // ── header ──────────────────────────────────────────────────────
+    println!();
+    ui::header("checking", file_count, "file");
+    println!();
+
+    // ── per-file check ──────────────────────────────────────────────
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    let mut error_reports: Vec<(String, String, Vec<oryn::OrynError>)> = Vec::new();
+
+    for file in &check_files {
+        let sp = ui::file_spinner(&file.display().to_string());
+
+        match oryn::Chunk::compile_file(file) {
+            Ok(_) => {
+                sp.finish_and_clear();
+                println!(
+                    "    {} {}",
+                    style("✓").green().bold(),
+                    style(file.display()).dim(),
+                );
+                passed += 1;
+            }
+            Err(errors) => {
+                sp.finish_and_clear();
+                println!("    {} {}", style("✗").red().bold(), file.display(),);
+                let source = std::fs::read_to_string(file).unwrap_or_default();
+                error_reports.push((file.display().to_string(), source, errors));
+                failed += 1;
+            }
         }
     }
 
-    if any_errors {
+    // ── error reports ───────────────────────────────────────────────
+    if !error_reports.is_empty() {
+        println!();
+        // Flush stdout so ariadne's stderr output doesn't interleave.
+        let _ = std::io::stdout().flush();
+        for (filename, source, errors) in &error_reports {
+            if let Err(e) = crate::errors::report_errors(filename, source, errors) {
+                eprintln!("error: failed to print diagnostics: {e}");
+            }
+        }
+    }
+
+    // ── summary ─────────────────────────────────────────────────────
+    let elapsed = start.elapsed();
+    println!();
+    if failed == 0 {
+        ui::success("all clear", elapsed);
+    } else {
+        ui::failure_summary(passed, failed, elapsed);
+    }
+    println!();
+
+    if failed > 0 {
         std::process::exit(1);
     }
 }
+
+// ── helpers ─────────────────────────────────────────────────────────
 
 /// True for a file named `package.on` (the empty project-root marker).
 /// These carry no source to compile and are never meaningful as an
@@ -122,28 +192,4 @@ fn collect_on_files(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> 
         }
     }
     Ok(())
-}
-
-/// Type-check a single file. Returns `true` on success, `false` if
-/// any diagnostics were reported.
-fn check_file(file: &Path) -> bool {
-    let source = match std::fs::read_to_string(file) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: failed to read {}: {e}", file.display());
-            return false;
-        }
-    };
-
-    let filename = file.display().to_string();
-
-    if let Err(errors) = oryn::Chunk::compile_file(file) {
-        if let Err(e) = crate::errors::report_errors(&filename, &source, &errors) {
-            eprintln!("error: failed to print diagnostics: {e}");
-        }
-        return false;
-    }
-
-    println!("ok: {}", file.display());
-    true
 }

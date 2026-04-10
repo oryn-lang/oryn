@@ -1,32 +1,15 @@
-// ---------------------------------------------------------------------
-// Functions
-// ---------------------------------------------------------------------
-// Shows: `fn` declarations, required parameter type annotations,
-// return types, recursion, and the `rn` (return) keyword.
-//
-// Run with:
-//   cargo run --bin oryn -- examples/02_functions.on
-
-// All parameters MUST have type annotations — Oryn intentionally
-// doesn't try to infer them. Return types are inferred when omitted,
-// though writing them out is the norm at public boundaries.
 fn add(a: int, b: int) -> int {
     rn a + b
 }
 
-// `rn` means "return a value from a function". It's pronounced "return"
-// but kept short because it appears on most function bodies.
 fn greet(name: String) -> String {
     rn "hello, {name}"
 }
 
-// Functions with no explicit return type return `void`. The body can
-// still use `rn` for early exit.
 fn shout(message: String) {
     print("!!! {message} !!!")
 }
 
-// Recursion is straightforward. The classic fibonacci:
 fn fib(n: int) -> int {
     if n < 2 {
         rn n
@@ -37,9 +20,6 @@ fn fib(n: int) -> int {
 print(greet("Oryn"))
 print("add(2, 3) = {add(2, 3)}")
 shout("dragons")
-
-// Tiny demo loop: print the first ten Fibonacci numbers.
-// (See 03_control_flow.on for a better walk-through of `for` / ranges.)
 for i in 0..10 {
     print("fib({i}) = {fib(i)}")
 }

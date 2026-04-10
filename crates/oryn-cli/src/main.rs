@@ -1,5 +1,6 @@
 mod commands;
 mod errors;
+mod ui;
 
 use std::path::PathBuf;
 
