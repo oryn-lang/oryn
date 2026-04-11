@@ -10,7 +10,7 @@
 // Run with:
 //   cargo run --bin oryn -- examples/10_maps.on
 
-let stats: {String: int} = { "hp": 100, "mp": 25 }
+let stats: {String: int} = {"hp": 100, "mp": 25}
 
 print("initial hp:")
 print(stats["hp"] orelse 0)

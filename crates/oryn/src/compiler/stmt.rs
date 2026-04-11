@@ -403,6 +403,7 @@ impl Compiler {
                     span: &stmt_span,
                     return_type: Some(return_resolved),
                     is_pub,
+                    pre_allocated_local_idx: None,
                 });
             }
             Statement::Return(Some(expr)) => {
@@ -549,6 +550,7 @@ impl Compiler {
                     span: &fn_span,
                     return_type: None,
                     is_pub: false,
+                    pre_allocated_local_idx: None,
                 });
 
                 self.output.tests.push(crate::compiler::TestInfo {

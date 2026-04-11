@@ -87,7 +87,9 @@ for row in grid {
 print("first 3 scores:")
 let seen = 0
 for s in scores {
-    if seen == 3 { break }
+    if seen == 3 {
+        break
+    }
     print(s)
     seen = seen + 1
 }

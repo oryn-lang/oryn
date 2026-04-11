@@ -24,6 +24,13 @@ pub(super) struct FunctionBodyConfig<'a> {
     pub return_type: Option<ResolvedType>,
     pub span: &'a Span,
     pub is_pub: bool,
+    /// If Some, write the compiled function into the existing slot at
+    /// this LOCAL index (position within `output.functions`) instead of
+    /// pushing a new slot. The caller must have reserved the slot before
+    /// calling. Used by `compile_obj_def` to allocate method slots in a
+    /// signature pre-pass so methods can call each other regardless of
+    /// declaration order.
+    pub pre_allocated_local_idx: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -47,24 +54,30 @@ impl Compiler {
             span,
             return_type,
             is_pub,
+            pre_allocated_local_idx,
         } = config;
 
-        let local_idx = self.output.functions.len();
-        let absolute_idx = self.fn_base_offset + local_idx;
         let param_names: Vec<String> = params.iter().map(|p| p.0.clone()).collect();
-
-        // Push a placeholder so the local position is valid.
-        self.output.functions.push(CompiledFunction {
-            name: name.to_string(),
-            arity: params.len(),
-            params: param_names.clone(),
-            param_types: param_types.clone(),
-            return_type: return_type.clone(),
-            num_locals: 0,
-            instructions: Vec::new(),
-            spans: Vec::new(),
-            is_pub,
-        });
+        let local_idx = match pre_allocated_local_idx {
+            Some(idx) => idx,
+            None => {
+                let idx = self.output.functions.len();
+                // Push a placeholder so the local position is valid.
+                self.output.functions.push(CompiledFunction {
+                    name: name.to_string(),
+                    arity: params.len(),
+                    params: param_names.clone(),
+                    param_types: param_types.clone(),
+                    return_type: return_type.clone(),
+                    num_locals: 0,
+                    instructions: Vec::new(),
+                    spans: Vec::new(),
+                    is_pub,
+                });
+                idx
+            }
+        };
+        let absolute_idx = self.fn_base_offset + local_idx;
 
         // Save parent state.
         let parent_locals = std::mem::replace(&mut self.locals, Locals::new());

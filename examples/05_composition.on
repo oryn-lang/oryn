@@ -1,20 +1,28 @@
 // ---------------------------------------------------------------------
 // Composition via `use`
 // ---------------------------------------------------------------------
-// Shows how an `obj` can pull in fields and methods from another `obj`
-// without inheritance. This is Oryn's answer to "I want a lot of game
-// entities that share a health pool" without building a class tree.
+// Oryn has no inheritance. `use` pulls every field and method from
+// another `obj` directly into the current one. Instances of the
+// composing type carry those fields inline and dispatch those methods
+// on themselves.
+//
+// This example shows two things you can do with composition:
+//
+//   1. Pull in a reusable chunk of behaviour (Health → Guard).
+//   2. Override an inherited instance method on the using type, with
+//      the override extending the inherited behaviour by calling the
+//      inherited helpers (`damage`, `is_alive`) on `self`.
 //
 // Run with:
 //   cargo run --bin oryn -- examples/05_composition.on
 
 // A reusable chunk of behaviour. Notice: no `abstract`, no interface —
-// just an ordinary object that happens to be convenient to compose.
+// just an ordinary `obj` that happens to be convenient to compose.
 obj Health {
     hp: int
     max_hp: int
 
-    fn new(max: int) -> Health {
+    fn make(max: int) -> Health {
         rn Health { hp: max, max_hp: max }
     }
 
@@ -25,21 +33,29 @@ obj Health {
     fn damage(self, amount: int) {
         self.hp = self.hp - amount
     }
+
+    // The default take_hit is just `damage`. Using types can override
+    // this to layer their own behaviour on top — see Guard below.
+    fn take_hit(self, amount: int) {
+        self.damage(amount)
+    }
 }
 
 // `use Health` inlines every field and method of Health into Guard.
 // Instances of Guard carry `hp` and `max_hp` directly and can call
-// `damage(...)` / `is_alive()` on themselves as if they'd been
-// declared here. This is composition, not inheritance: there is no
-// Health instance hiding inside a Guard.
+// `damage(...)` / `is_alive()` on themselves as if they'd been declared
+// here. This is composition, not inheritance: there is no Health
+// instance hiding inside a Guard.
 obj Guard {
     use Health
 
     name: String
     alert: bool
 
-    // Static constructor — the only place that has to know about the
-    // fields Health contributed.
+    // Static constructor for Guard. We use a different name from
+    // Health.make so the parameter list can include `name` —
+    // overriding an inherited static would force the same parameter
+    // types. (See the notes at the bottom for the rule.)
     fn spawn(name: String) -> Guard {
         rn Guard { hp: 100, max_hp: 100, name: name, alert: false }
     }
@@ -49,12 +65,16 @@ obj Guard {
         print("{self.name}: Halt!")
     }
 
-    // `take_hit` calls `damage()` and `is_alive()` — both inherited
-    // via `use Health` — without ever mentioning Health explicitly.
+    // Override of Health.take_hit. The override matches the inherited
+    // signature exactly: `(self, int) -> ()`. Inside the override we
+    // call `self.damage(...)` — that's the inherited helper, still
+    // available because we replaced `take_hit`, not `damage`.
     fn take_hit(self, amount: int) {
         self.damage(amount)
         if not self.is_alive() {
             print("{self.name} falls.")
+        } else {
+            print("{self.name} staggers ({self.hp}/{self.max_hp}).")
         }
     }
 }
@@ -62,5 +82,30 @@ obj Guard {
 let g: Guard = Guard.spawn("Halden")
 g.spot_player()
 g.take_hit(40)
-print("hp left: {g.hp}")
 g.take_hit(70)
+
+// ---------------------------------------------------------------------
+// Notes on the rules `use` follows
+// ---------------------------------------------------------------------
+// • Method override: an own declaration with the same name as an
+//   inherited method replaces it. Parameter types must match exactly.
+//   Return type must also match, with one carve-out — a *static*
+//   method returning the source type may be overridden to return the
+//   using type (Self-return covariance). If you want a constructor
+//   with different parameters, give it a different name (see Guard's
+//   `spawn` above) instead of trying to override the parent's.
+//
+// • Field override: not allowed. Fields live at fixed offsets, so
+//   redeclaring an inherited field name is a compile error. Pick a
+//   different name.
+//
+// • No virtual dispatch: an inherited method body always calls the
+//   versions of other methods that existed when it was compiled. So
+//   if Guard overrode `damage` (it doesn't), Health.take_hit would
+//   still call Health.damage internally, not Guard's. Override the
+//   entry point method, not its helpers.
+//
+// • Multi-use: an obj can `use A, use B` from two types at once. If A
+//   and B happen to define the same name, that's a compile error —
+//   unless the using type declares its own version with that name, in
+//   which case the own version explicitly resolves the conflict.
