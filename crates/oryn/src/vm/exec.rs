@@ -1300,20 +1300,32 @@ impl VM {
                             }
                         }
                     }
-                    Instruction::Dup => {
-                        // Peek + clone the TOS without consuming it.
-                        // For primitives this is a real copy; for GC
-                        // values it's a pointer alias (the underlying
-                        // heap object isn't duplicated). Used by
-                        // match codegen so the same scrutinee
-                        // discriminant can be compared against
-                        // multiple arms in sequence.
-                        let value = state
-                            .stack
-                            .last()
-                            .ok_or(RuntimeError::StackUnderflow)?
-                            .clone();
-                        state.stack.push(value);
+                    Instruction::GetEnumPayload(field_idx) => {
+                        // Pop an enum value, push payload[field_idx].
+                        // Used by match codegen to extract bound
+                        // payload fields into local slots inside an
+                        // arm body. The compiler resolves the field
+                        // index from the variant's declared field
+                        // names, so an out-of-range index is a
+                        // compiler bug, not user error.
+                        let field_idx = *field_idx;
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        match value {
+                            Value::Enum(data_ref) => {
+                                let data = data_ref.borrow();
+                                let payload_value =
+                                    data.payload.get(field_idx).cloned().unwrap_or(Value::Nil);
+                                state.stack.push(payload_value);
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Enum,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
                     }
                 }
 

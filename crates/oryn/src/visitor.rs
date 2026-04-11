@@ -321,6 +321,7 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
                 if let Pattern::Variant {
                     enum_name,
                     variant_name,
+                    bindings: _,
                 } = &arm.pattern.node
                 {
                     visitor.on_reference(enum_name, &arm.pattern.span);

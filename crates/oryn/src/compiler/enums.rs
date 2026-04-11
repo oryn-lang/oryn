@@ -256,46 +256,55 @@ impl Compiler {
         }
     }
 
-    /// Compile a `match` expression. Slice 1+2 supports only
-    /// discriminant-only patterns (variant paths and `_`); payload
-    /// destructuring lands in Slice 3.
+    /// Compile a `match` expression. Slice 3 supports tag-only and
+    /// payload-binding patterns (`Variant` and `Variant { field, … }`)
+    /// plus the wildcard `_`. Slice 4 hardens exhaustiveness reporting
+    /// and rejects wildcards that come after every variant has already
+    /// been listed explicitly.
     ///
-    /// **Codegen shape** (per arm, with `Dup` for the discriminant):
+    /// **Codegen shape** (scrutinee stashed in an anonymous local
+    /// so each arm can re-read it for both the discriminant test and
+    /// payload extraction):
     /// ```text
-    ///   <compile scrutinee>      ; scrutinee on stack
-    ///   EnumDiscriminant         ; replace with variant_idx (Int)
-    /// arm_n:
-    ///   Dup                      ; clone the discriminant for the test
-    ///   PushInt(arm_variant_idx)
-    ///   Equal                    ; pops both, pushes Bool
-    ///   JumpIfFalse → arm_n+1    ; pops Bool; falls through if true
-    ///   Pop                      ; matched — drop the spare discriminant
-    ///   <compile arm body>       ; body's value lands on TOS
+    ///   <compile scrutinee>             ; [scrut]
+    ///   SetLocal(scrut_slot)            ; []
+    /// arm_n (variant pattern):
+    ///   GetLocal(scrut_slot)            ; [scrut]
+    ///   EnumDiscriminant                ; [int]
+    ///   PushInt(variant_idx)
+    ///   Equal                           ; [bool]
+    ///   JumpIfFalse → arm_n+1           ; pops bool; falls through if true
+    ///   ; matched — bind any payload fields
+    ///   GetLocal(scrut_slot); GetEnumPayload(field_idx); SetLocal(b1)
+    ///   GetLocal(scrut_slot); GetEnumPayload(field_idx); SetLocal(b2)
+    ///   …
+    ///   <compile arm body>              ; body's value lands on TOS
     ///   Jump → end
-    /// arm_n+1:
-    ///   ...
+    /// arm_n (wildcard):
+    ///   <compile arm body>              ; no test, no fetch
+    ///   Jump → end
     /// end:
     /// ```
     ///
-    /// **Wildcards** skip the Dup/PushInt/Equal/JumpIfFalse
-    /// dance — they always match, so we just `Pop` the
-    /// discriminant and run the body.
+    /// **Per-arm scoping**: payload bindings live only in the arm
+    /// body. We snapshot `Locals` before each body and restore
+    /// after, so binding slots don't leak across arms. The
+    /// `Locals.max_count` field tracks the high-water mark so the
+    /// function reserves enough storage for whichever arm needs
+    /// the most slots.
     ///
-    /// **Fall-through safety net**: after the final arm, any
-    /// path that reaches the end without matching still has the
-    /// original discriminant on the stack. We drop it and push
-    /// `Nil` so the match expression has a uniform "one value on
-    /// TOS" shape. This branch is unreachable for exhaustive
-    /// (or wildcard-terminated) matches but keeps stack
-    /// discipline coherent for non-exhaustive ones (which also
-    /// produce a compile error, so the runtime path is
-    /// best-effort).
+    /// **No fall-through cleanup**: each arm body lands its value
+    /// directly on the stack, then jumps to `end`. There's no
+    /// stranded discriminant to drop. The exhaustiveness check
+    /// prevents unmatched scrutinees at compile time.
     ///
-    /// **Exhaustiveness**: a set-difference check (declared
-    /// variants − arm-covered variants) runs after codegen. If
-    /// any variant is uncovered AND no `_` arm is present, an
-    /// error is pushed but codegen still completes so downstream
-    /// type checking stays coherent.
+    /// **Exhaustiveness** (Slice 4): a set-difference check
+    /// (declared variants − arm-covered variants) runs after
+    /// codegen. If any variant is uncovered AND no `_` arm is
+    /// present, an error is pushed listing the missing variants
+    /// fully qualified. Conversely, a `_` arm that appears AFTER
+    /// every variant is already covered is itself flagged as
+    /// unreachable.
     ///
     /// **Result type**: every arm body's type is computed and
     /// the first non-Unknown arm's type is used as the match
@@ -349,10 +358,16 @@ impl Compiler {
             }
         };
 
-        // 2. Replace the scrutinee with its discriminant. From
-        //    here on the discriminant (an Int) sits on TOS and is
-        //    consumed/restored via Dup as each arm tests it.
-        self.emit(Instruction::EnumDiscriminant, span);
+        // 2. Stash the scrutinee in an anonymous local so each arm
+        //    can re-read it for the discriminant test and for
+        //    payload extraction. The local is named with a leading
+        //    `@` so user code cannot collide with it.
+        let scrut_slot = self.locals.define(
+            "@match_scrutinee".to_string(),
+            super::tables::BindingKind::Internal,
+            scrutinee_type.clone(),
+        );
+        self.emit(Instruction::SetLocal(scrut_slot), span);
 
         // 3. Per-arm dispatch + body. Track coverage for
         //    exhaustiveness, collect end-jumps for patching, and
@@ -370,9 +385,25 @@ impl Compiler {
                 span: arm_span,
             } = arm;
 
-            // Resolve pattern → variant_idx (None means wildcard
-            // or unresolvable). Variants are checked against the
-            // scrutinee's enum, and coverage is tracked.
+            // Resolve pattern → (variant_idx, bindings). None for
+            // variant_idx means wildcard or unresolvable. Coverage
+            // is tracked here so the exhaustiveness pass below sees
+            // the post-arm state. Slice 4 also flags wildcards that
+            // come after every variant has been listed.
+            //
+            // For variant patterns, also validate the brace
+            // bindings (if any) against the variant's payload
+            // declaration. The validated `(field_idx, name, type)`
+            // triples are used during codegen to emit the
+            // GetEnumPayload + SetLocal sequence inside the per-arm
+            // scope.
+            struct ResolvedBinding {
+                field_idx: usize,
+                name: String,
+                ty: ResolvedType,
+            }
+
+            let mut resolved_bindings: Vec<ResolvedBinding> = Vec::new();
             let variant_idx: Option<usize> = match &pattern.node {
                 Pattern::Wildcard => {
                     if has_wildcard && !wildcard_warning_pushed {
@@ -383,12 +414,26 @@ impl Compiler {
                         ));
                         wildcard_warning_pushed = true;
                     }
+                    // Slice 4: a wildcard arm that appears after
+                    // every variant has already been covered is
+                    // itself unreachable. Diagnose it pointing at
+                    // the wildcard's own span so the user can
+                    // delete it cleanly.
+                    if !has_wildcard && covered.iter().all(|c| *c) {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            format!(
+                                "wildcard arm is unreachable: all variants of enum `{enum_name}` are already covered",
+                            ),
+                        ));
+                    }
                     has_wildcard = true;
                     None
                 }
                 Pattern::Variant {
                     enum_name: pat_enum,
                     variant_name,
+                    bindings,
                 } => {
                     if pat_enum != &enum_name {
                         self.output.errors.push(OrynError::compiler(
@@ -414,6 +459,92 @@ impl Compiler {
                                     ));
                                 }
                                 covered[idx] = true;
+
+                                // Validate payload bindings against
+                                // the variant's declared fields.
+                                // `bindings == None` means the user
+                                // wrote a tag-only pattern (no
+                                // braces) — always allowed regardless
+                                // of whether the variant has a
+                                // payload. `bindings == Some(...)`
+                                // means braces were present and we
+                                // need to validate the contents.
+                                let variant = &enum_def.variants[idx];
+                                if let Some(bs) = bindings {
+                                    if variant.field_names.is_empty() {
+                                        // Nullary variant + braces:
+                                        // category error, mirrors
+                                        // the constructor-side rule.
+                                        // Covers both empty `{ }`
+                                        // and bogus `{ x }` cases.
+                                        self.output.errors.push(OrynError::compiler(
+                                            pattern.span.clone(),
+                                            format!(
+                                                "variant `{enum_name}.{variant_name}` is nullary; remove the `{{ }}` block from the pattern"
+                                            ),
+                                        ));
+                                    } else if bs.is_empty() {
+                                        // Empty braces on a payload
+                                        // variant: useless syntax,
+                                        // tell the user to drop them.
+                                        self.output.errors.push(OrynError::compiler(
+                                            pattern.span.clone(),
+                                            format!(
+                                                "empty `{{ }}` block in pattern for `{enum_name}.{variant_name}`; drop the braces or list at least one field binding"
+                                            ),
+                                        ));
+                                    } else {
+                                        // Detect duplicate `name`
+                                        // collisions inside the
+                                        // same brace block — the
+                                        // user wrote e.g.
+                                        // `Variant { x, x }` or
+                                        // `Variant { x: a, y: a }`.
+                                        let mut seen_local_names: Vec<&str> = Vec::new();
+
+                                        for binding in bs {
+                                            match variant
+                                                .field_names
+                                                .iter()
+                                                .position(|f| f == &binding.field)
+                                            {
+                                                Some(field_idx) => {
+                                                    if seen_local_names
+                                                        .contains(&binding.name.as_str())
+                                                    {
+                                                        self.output.errors.push(
+                                                            OrynError::compiler(
+                                                                binding.span.clone(),
+                                                                format!(
+                                                                    "duplicate binding name `{}` in pattern for `{enum_name}.{variant_name}`",
+                                                                    binding.name
+                                                                ),
+                                                            ),
+                                                        );
+                                                    } else {
+                                                        seen_local_names.push(&binding.name);
+                                                    }
+
+                                                    resolved_bindings.push(ResolvedBinding {
+                                                        field_idx,
+                                                        name: binding.name.clone(),
+                                                        ty: variant.field_types[field_idx].clone(),
+                                                    });
+                                                }
+                                                None => {
+                                                    self.output.errors.push(OrynError::compiler(
+                                                        binding.span.clone(),
+                                                        format!(
+                                                            "unknown field `{}` on variant `{enum_name}.{variant_name}`",
+                                                            binding.field
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 Some(idx)
                             }
                             None => {
@@ -430,30 +561,47 @@ impl Compiler {
 
             // Emit per-arm dispatch.
             //
-            // Stack invariant entering an arm: `[..., discriminant]`.
-            // Variant arms: Dup → PushInt → Equal → JumpIfFalse;
-            //               on the matched fall-through, Pop the
-            //               spare discriminant before running the
-            //               body. The body leaves its result on
-            //               TOS, then Jump → end.
-            // Wildcard arms: skip the test, just Pop the
-            //                discriminant and run the body.
+            // Variant arms: GetLocal(scrut) → EnumDiscriminant →
+            //               PushInt → Equal → JumpIfFalse → next.
+            //               Then bind any payload fields, then
+            //               compile the body.
+            // Wildcard arms: skip the test entirely; the body
+            //                always runs (until either matched or
+            //                an earlier arm took the value).
             let skip_arm_jump_idx: Option<usize> = if let Some(idx) = variant_idx {
-                self.emit(Instruction::Dup, &arm_span);
+                self.emit(Instruction::GetLocal(scrut_slot), &arm_span);
+                self.emit(Instruction::EnumDiscriminant, &arm_span);
                 self.emit(Instruction::PushInt(idx as i32), &arm_span);
                 self.emit(Instruction::Equal, &arm_span);
                 let jump_idx = self.output.instructions.len();
                 self.emit(Instruction::JumpIfFalse(0), &arm_span); // patched below
-                self.emit(Instruction::Pop, &arm_span);
                 Some(jump_idx)
             } else {
-                self.emit(Instruction::Pop, &arm_span);
                 None
             };
 
-            // Compile the arm body and reconcile its type.
+            // Compile the arm body inside a fresh scope so payload
+            // bindings vanish at the end. The scope also bounds the
+            // resolved binding locals introduced via the
+            // GetEnumPayload sequence below.
             let body_span = body.span.clone();
-            let body_type = self.compile_expr(body);
+            let body_type = self.with_scope(|this| {
+                // Bind any resolved payload fields as locals in the
+                // arm body. Each binding emits:
+                //   GetLocal(scrut); GetEnumPayload(idx); SetLocal(slot)
+                for binding in &resolved_bindings {
+                    this.emit(Instruction::GetLocal(scrut_slot), &arm_span);
+                    this.emit(Instruction::GetEnumPayload(binding.field_idx), &arm_span);
+                    let slot = this.locals.define(
+                        binding.name.clone(),
+                        super::tables::BindingKind::Let,
+                        binding.ty.clone(),
+                    );
+                    this.emit(Instruction::SetLocal(slot), &arm_span);
+                }
+                this.compile_expr(body)
+            });
+
             match &result_type {
                 None => result_type = Some(body_type),
                 Some(existing) => {
@@ -486,11 +634,15 @@ impl Compiler {
             }
         }
 
-        // Fall-through safety net (see doc comment above).
-        self.emit(Instruction::Pop, span);
-        self.emit(Instruction::PushNil, span);
-
-        // Patch all end-jumps to land here, AFTER the cleanup.
+        // Patch all end-jumps to land here. No fall-through
+        // cleanup is needed: each arm body produces its value
+        // directly on the stack, and the exhaustiveness check
+        // ensures we don't reach the end without a match at
+        // runtime. (For the diagnostic-only case where compilation
+        // proceeds despite a non-exhaustive match, an unmatched
+        // value would land here with whatever the last
+        // JumpIfFalse left on the stack — but the user already
+        // has a hard compile error, so the runtime path is moot.)
         let end_addr = self.output.instructions.len();
         for jump_idx in end_jumps {
             self.output.instructions[jump_idx] = Instruction::Jump(end_addr);
@@ -498,18 +650,18 @@ impl Compiler {
 
         // Exhaustiveness check.
         if !has_wildcard {
-            let missing: Vec<&str> = enum_def
+            let missing: Vec<String> = enum_def
                 .variants
                 .iter()
                 .zip(covered.iter())
                 .filter(|(_, c)| !**c)
-                .map(|(v, _)| v.name.as_str())
+                .map(|(v, _)| format!("{enum_name}.{}", v.name))
                 .collect();
             if !missing.is_empty() {
                 self.output.errors.push(OrynError::compiler(
                     span.clone(),
                     format!(
-                        "non-exhaustive match: missing variants `{}` of enum `{enum_name}` (add `_ => ...` to catch the rest)",
+                        "non-exhaustive match: missing variants `{}` (add `_ => ...` to catch the rest)",
                         missing.join("`, `"),
                     ),
                 ));

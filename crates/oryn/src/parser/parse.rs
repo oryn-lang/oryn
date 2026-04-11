@@ -182,30 +182,71 @@ fn atom<'src>(
 
     // `match scrutinee { pattern => body, ... }` — pattern match
     // on an enum value. The match keyword introduces an
-    // expression (Slice 1+2 makes match the first expression-form
+    // expression (Slice 1 makes match the first expression-form
     // control flow in Oryn; if/while remain statements — see
     // WARTS.md W26).
     //
-    // Patterns in Slice 1+2 are limited to:
-    //   * `EnumName.VariantName` — variant pattern
-    //   * `_`                    — wildcard
+    // Patterns (Slice 3):
+    //   * `EnumName.Variant`                   — tag-only match
+    //   * `EnumName.Variant { field, ... }`    — tag + payload bindings
+    //   * `_`                                  — wildcard
     //
-    // Slice 3 will extend the pattern grammar with payload
-    // bindings (`EnumName.Variant { field }`).
+    // Each binding inside the brace block is either shorthand
+    // (`field` — bind a local with the same name as the payload
+    // field) or explicit (`field: name` — bind under a different
+    // name). Both forms can mix freely. Partial destructuring is
+    // allowed: unlisted fields are simply not bound. The empty
+    // form `Variant { }` is rejected at compile time as
+    // category-confused with a nullary variant pattern.
     let pattern = {
         let wildcard = select! { Token::Ident(name) if name == "_" => () }.map_with(|_, extra| {
             let s: SimpleSpan = extra.span();
             Spanned::new(Pattern::Wildcard, s)
         });
+
+        // A single binding inside `{ ... }`. Try the explicit
+        // `field: name` form first; fall back to shorthand `field`.
+        let binding = select! { Token::Ident(name) => name }
+            .then(
+                just(Token::Colon)
+                    .ignore_then(select! { Token::Ident(name) => name })
+                    .or_not(),
+            )
+            .map_with(|(field, rename), extra| {
+                let s: SimpleSpan = extra.span();
+                let name = rename.unwrap_or_else(|| field.clone());
+                PatternBinding {
+                    field,
+                    name,
+                    span: s.start..s.end,
+                }
+            });
+
+        // The full payload binding block: `{ binding, binding, ... }`.
+        // Trailing comma allowed; whitespace/newlines tolerated
+        // anywhere inside.
+        let bindings_block = just(Token::LeftCurly)
+            .ignore_then(nl.clone().or_not())
+            .ignore_then(
+                binding
+                    .separated_by(just(Token::Comma).then(nl.clone().or_not()))
+                    .allow_trailing()
+                    .collect::<Vec<PatternBinding>>(),
+            )
+            .then_ignore(nl.clone().or_not())
+            .then_ignore(just(Token::RightCurly));
+
         let variant_path = select! { Token::Ident(name) => name }
             .then_ignore(just(Token::Dot))
             .then(select! { Token::Ident(name) => name })
-            .map_with(|(enum_name, variant_name), extra| {
+            .then(bindings_block.or_not())
+            .map_with(|((enum_name, variant_name), bindings), extra| {
                 let s: SimpleSpan = extra.span();
                 Spanned::new(
                     Pattern::Variant {
                         enum_name,
                         variant_name,
+                        bindings,
                     },
                     s,
                 )

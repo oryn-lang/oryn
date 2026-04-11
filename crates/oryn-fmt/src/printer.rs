@@ -617,10 +617,33 @@ impl<'a> Formatter<'a> {
                         Pattern::Variant {
                             enum_name,
                             variant_name,
+                            bindings,
                         } => {
                             self.out.push_str(enum_name);
                             self.out.push('.');
                             self.out.push_str(variant_name);
+                            // Slice 3 payload bindings:
+                            // `Variant { field, other: name }`. The
+                            // empty form is rejected by the compiler,
+                            // so we never round-trip `{ }`. Tag-only
+                            // patterns (`bindings == None`) are
+                            // emitted without braces.
+                            if let Some(bs) = bindings
+                                && !bs.is_empty()
+                            {
+                                self.out.push_str(" { ");
+                                for (i, b) in bs.iter().enumerate() {
+                                    if i > 0 {
+                                        self.out.push_str(", ");
+                                    }
+                                    self.out.push_str(&b.field);
+                                    if b.name != b.field {
+                                        self.out.push_str(": ");
+                                        self.out.push_str(&b.name);
+                                    }
+                                }
+                                self.out.push_str(" }");
+                            }
                         }
                     }
                     self.out.push_str(" => ");

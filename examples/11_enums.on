@@ -109,25 +109,54 @@ print("e2 == e3? {e2 == e3}")  // → true (structural equality)
 print("e4 = {e4}")
 
 // ── 5. Match across mixed variants ──────────────────────────────────
-// Slice 1+2 dispatches on the variant tag only — the payload comes
-// along for the ride but isn't bound into the arm body. Slice 3
-// will add `match e { GameEvent.Damage { amount } => ... }`
-// destructuring; for now, treat the variant as a discriminant.
+// A match arm can either reference a variant by tag only, or open
+// a `{ ... }` block to bind payload fields as locals in the arm
+// body. Tag-only is the simplest form; binding extracts the data
+// you actually need.
 
 fn describe(e: GameEvent) -> String {
     rn match e {
-        GameEvent.Damage => "took damage"
-        GameEvent.Heal => "got healed"
-        GameEvent.Move => "moved"
+        GameEvent.Damage { amount } => "took {amount} damage"
+        GameEvent.Heal { amount } => "got {amount} healed"
+        GameEvent.Move { dx, dy } => "moved by {dx},{dy}"
         GameEvent.GameOver => "game over"
     }
 }
 
-print(describe(e1))  // → took damage
-print(describe(e2))  // → moved
+print(describe(e1))  // → took 10 damage
+print(describe(e2))  // → moved by 3,4
 print(describe(e4))  // → game over
 
-// Wildcard works the same with payload enums.
+// Bindings can also rename — `field: name` extracts `field` from
+// the payload and binds it as `name` in the arm body. Useful when
+// the field's declared name would shadow an outer local or when
+// you want a shorter alias.
+fn move_summary(e: GameEvent) -> String {
+    rn match e {
+        GameEvent.Move { dx: x, dy: y } => "delta=({x}, {y})"
+        _ => "not a move"
+    }
+}
+
+print(move_summary(e2))  // → delta=(3, 4)
+print(move_summary(e4))  // → not a move
+
+// Partial destructuring: list only the fields you care about.
+// Unlisted fields are simply not bound. Here `Move` has both `dx`
+// and `dy`, but the function only needs `dx`.
+fn dx_of(e: GameEvent) -> int {
+    rn match e {
+        GameEvent.Move { dx } => dx
+        _ => 0
+    }
+}
+
+print("dx_of(e2) = {dx_of(e2)}")   // → 3
+print("dx_of(e4) = {dx_of(e4)}")   // → 0
+
+// Tag-only on a payload variant still works — leave off the
+// braces and the payload is matched but not bound. Useful when
+// you only care about which variant fired.
 fn is_terminal(e: GameEvent) -> bool {
     rn match e {
         GameEvent.GameOver => true
@@ -178,15 +207,20 @@ print(describe(classify(80)))  // → got healed
 //   variant with the same name are still distinct types.
 //
 // • Exhaustiveness: a match without a `_` must cover every declared
-//   variant. The compiler lists the missing variants in the error.
-//   Adding a `_` arm switches off the check entirely — there's no
-//   middle ground.
+//   variant. The compiler lists the missing variants fully qualified
+//   (e.g. `Color.Red`, `Color.Blue`) in the error. Adding a `_` arm
+//   switches off the check, but a `_` that comes after every variant
+//   is already listed is itself rejected as unreachable.
 //
 // • Match arms are expressions: every arm body produces a value, and
 //   they must all have the same type. The match expression's value
 //   is the chosen arm's value.
 //
-// • Payload destructuring: not yet — Slice 3 adds the
-//   `Variant { field } => ...` form that binds payload fields into
-//   the arm body. Until then, you can dispatch on the variant tag
-//   but not read the payload from within the arm.
+// • Payload destructuring: write `Variant { field, ... }` to bind
+//   payload fields as locals in the arm body. Each binding is either
+//   shorthand (`field` — bind a local with the same name as the
+//   payload field) or explicit (`field: name` — bind under a
+//   different name). Both forms can mix in one block. Partial
+//   destructuring is allowed: unlisted fields are simply not bound.
+//   Bindings are arm-local and do not leak across arms or out of
+//   the match expression.

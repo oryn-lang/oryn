@@ -358,24 +358,57 @@ pub struct MatchArm {
 }
 
 /// A pattern that appears on the left of `=>` in a match arm.
-/// Slice 1+2 supports only the discriminant subset: a fully-qualified
-/// enum variant path (`Color.Red`, `FsResult.Ok`) and the wildcard
-/// `_`. Slice 3 will add payload bindings (`FsResult.Ok { content }`),
-/// Slice 4 will add nested patterns and exhaustiveness across them.
+///
+/// As of Slice 3, patterns are:
+///   * `EnumName.Variant` — tag-only match, no payload binding.
+///   * `EnumName.Variant { field, … }` — tag match plus payload
+///     destructuring. Each binding is either shorthand (`field` —
+///     bind a local with the same name as the field) or explicit
+///     (`field: name` — bind a local under a different name). Both
+///     forms can mix in the same brace block. Partial destructuring
+///     is allowed: unlisted fields are simply not bound.
+///   * `_` — wildcard, matches anything. Used as a catch-all in
+///     non-exhaustive matches.
 #[derive(Debug)]
 pub enum Pattern {
     /// `EnumName.VariantName` — matches when the scrutinee is the
     /// named variant, regardless of payload contents. The compiler
     /// resolves the names against the enum table to verify the
     /// variant exists and to compute the discriminant for codegen.
+    ///
+    /// `bindings` is `None` for a tag-only match (no `{}` block at
+    /// all). It is `Some(vec![..])` when the user wrote a brace
+    /// block, even if that block is empty — the empty form
+    /// `Variant { }` is preserved here so the compiler can
+    /// produce a precise "remove the empty `{}`" error rather
+    /// than silently treating it as tag-only.
     Variant {
         enum_name: String,
         variant_name: String,
+        bindings: Option<Vec<PatternBinding>>,
     },
     /// `_` — matches anything. Used as a catch-all in non-exhaustive
-    /// matches. Does not bind a name; Slice 3 will add a binding form
-    /// if we want it.
+    /// matches. Does not bind a name.
     Wildcard,
+}
+
+/// A single payload field binding inside a `Variant { ... }` pattern.
+/// Shorthand form `field` produces `PatternBinding { field: "field",
+/// name: "field" }`; explicit form `field: name` produces
+/// `PatternBinding { field: "field", name: "name" }`. The `field`
+/// half is resolved against the variant's declared field names; the
+/// `name` half is what the arm body sees as a local.
+#[derive(Debug, Clone)]
+pub struct PatternBinding {
+    /// The payload field to extract from the matched variant. Must
+    /// match a declared field on that variant.
+    pub field: String,
+    /// The local name introduced into the arm body. Equal to `field`
+    /// for the shorthand form.
+    pub name: String,
+    /// The byte-offset span of the binding in source. Covers the
+    /// shorthand `field` or the entire `field: name` pair.
+    pub span: Span,
 }
 
 #[derive(Debug)]

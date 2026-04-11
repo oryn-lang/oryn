@@ -189,12 +189,15 @@ pub enum Instruction {
     /// expected variant index. Type errors at runtime if the value
     /// isn't an enum.
     EnumDiscriminant,
-    /// Duplicate the top of the stack: peek at TOS, clone it, and
-    /// push the clone. Used by match codegen so the discriminant
-    /// can be compared once per arm without re-running the
-    /// scrutinee. Cloning a value is cheap for primitives and a
-    /// pointer-clone for GC values.
-    Dup,
+    /// Pop an enum value, push the payload field at the given
+    /// declaration-order index. The compiler resolves field names
+    /// to indices via [`EnumVariantInfo::field_names`], so the
+    /// runtime path is just a vector lookup. Type errors at
+    /// runtime if the value isn't an enum or the index is out of
+    /// range (the latter is a compiler bug, not user error). Used
+    /// by match codegen for `Variant { field } => ...` payload
+    /// destructuring.
+    GetEnumPayload(usize),
 }
 
 // ---------------------------------------------------------------------------

@@ -1980,6 +1980,8 @@ fn enum_match_payload_variant_dispatches_correctly() {
 
 #[test]
 fn enum_match_non_exhaustive_rejected() {
+    // Slice 4 polish: missing variants are listed fully
+    // qualified (`Color.Blue` not bare `Blue`).
     let errors = crate::Chunk::compile(
         "enum Color { Red\n Green\n Blue }\n\
          let c = Color.Red\n\
@@ -1992,8 +1994,9 @@ fn enum_match_non_exhaustive_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| format!("{e}").contains("non-exhaustive") && format!("{e}").contains("Blue")),
-        "expected non-exhaustive error mentioning Blue, got {errors:?}"
+            .any(|e| format!("{e}").contains("non-exhaustive")
+                && format!("{e}").contains("Color.Blue")),
+        "expected non-exhaustive error mentioning Color.Blue, got {errors:?}"
     );
 }
 
@@ -2232,4 +2235,316 @@ fn enum_print_payload_string_field_quoted() {
         String::from_utf8(buf).unwrap(),
         "FsResult.Ok { content: \"hi\" }\n"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Slice 3 + 4: payload bindings in match patterns and full
+// exhaustiveness checking. Patterns now allow `Variant { field, ... }`
+// brace blocks where each binding is either shorthand (`field`) or
+// explicit (`field: name`). Slice 4 fully qualifies missing-variant
+// names in non-exhaustive errors and rejects wildcard arms that
+// appear after every variant has already been covered.
+// ---------------------------------------------------------------------------
+
+// ----- enum_bind: shorthand and explicit payload bindings -----
+
+#[test]
+fn enum_bind_shorthand_single_field() {
+    // The simplest case: one field, shorthand binds it under its
+    // own name. The body uses the binding via string interp.
+    let chunk = crate::Chunk::compile(
+        "enum P { Pair { x: int } }\n\
+         let p = P.Pair { x: 7 }\n\
+         let v: int = match p { P.Pair { x } => x }\n\
+         assert(v == 7)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_bind_shorthand_multiple_fields() {
+    let chunk = crate::Chunk::compile(
+        "enum Move { Step { dx: int, dy: int } }\n\
+         let m = Move.Step { dx: 3, dy: 4 }\n\
+         let sum: int = match m { Move.Step { dx, dy } => dx + dy }\n\
+         assert(sum == 7)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_bind_explicit_rename() {
+    // `field: name` form binds the payload under a different
+    // local name. The original `dx`/`dy` names should NOT be in
+    // scope.
+    let chunk = crate::Chunk::compile(
+        "enum Move { Step { dx: int, dy: int } }\n\
+         let m = Move.Step { dx: 3, dy: 4 }\n\
+         let sum: int = match m { Move.Step { dx: a, dy: b } => a + b }\n\
+         assert(sum == 7)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_bind_mixed_shorthand_and_rename() {
+    // Both forms can mix in the same brace block.
+    let chunk = crate::Chunk::compile(
+        "enum Move { Step { dx: int, dy: int } }\n\
+         let m = Move.Step { dx: 3, dy: 4 }\n\
+         let sum: int = match m { Move.Step { dx, dy: y } => dx + y }\n\
+         assert(sum == 7)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_bind_partial_destructuring_allowed() {
+    // Partial destructuring: a 2-field variant can be matched with
+    // a single binding; the unlisted field is simply not bound.
+    let chunk = crate::Chunk::compile(
+        "enum Move { Step { dx: int, dy: int } }\n\
+         let m = Move.Step { dx: 3, dy: 4 }\n\
+         let just_x: int = match m { Move.Step { dx } => dx }\n\
+         assert(just_x == 3)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_bind_tag_only_on_payload_variant_still_works() {
+    // Backwards-compatibility: tag-only `Variant` (no braces) on
+    // a payload-carrying variant must still be valid. Slice 1+2
+    // syntax is preserved.
+    let chunk = crate::Chunk::compile(
+        "enum Move { Step { dx: int, dy: int } }\n\
+         let m = Move.Step { dx: 1, dy: 2 }\n\
+         let s: String = match m { Move.Step => \"moved\" }\n\
+         assert(s == \"moved\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_bind_mixed_arms_some_with_bindings_some_without() {
+    let chunk = crate::Chunk::compile(
+        "enum FsResult { Ok { content: String } NotFound }\n\
+         let r = FsResult.Ok { content: \"hi\" }\n\
+         let label: String = match r {\n\
+             FsResult.Ok { content } => content\n\
+             FsResult.NotFound => \"missing\"\n\
+         }\n\
+         assert(label == \"hi\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_bind_string_payload_typed_correctly() {
+    // The binding's static type comes from the variant's declared
+    // field type. Verify by using a String binding in a context
+    // that requires a String.
+    let chunk = crate::Chunk::compile(
+        "enum E { Msg { text: String } }\n\
+         let e = E.Msg { text: \"hello\" }\n\
+         let upper: String = match e { E.Msg { text } => text }\n\
+         assert(upper == \"hello\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_bind_scope_does_not_leak_across_arms() {
+    // Bindings are arm-local. After the arm body, the binding
+    // names are no longer in scope, so a later use must produce
+    // an undefined-variable error.
+    let errors = crate::Chunk::compile(
+        "enum P { Pair { x: int } NoPayload }\n\
+         let p = P.Pair { x: 1 }\n\
+         let r: int = match p { P.Pair { x } => x\n P.NoPayload => 0 }\n\
+         print(x)",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("undefined variable `x`")),
+        "expected undefined-variable error after match scope, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_bind_unknown_field_rejected() {
+    let errors = crate::Chunk::compile(
+        "enum Move { Step { dx: int, dy: int } }\n\
+         let m = Move.Step { dx: 1, dy: 2 }\n\
+         let v: int = match m { Move.Step { wat } => wat }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("unknown field `wat`")),
+        "expected unknown-field error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_bind_duplicate_local_name_rejected() {
+    // Two bindings with the same local name (after rename
+    // resolution) are rejected as a category error.
+    let errors = crate::Chunk::compile(
+        "enum Move { Step { dx: int, dy: int } }\n\
+         let m = Move.Step { dx: 1, dy: 2 }\n\
+         let v: int = match m { Move.Step { dx: a, dy: a } => a }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate binding name `a`")),
+        "expected duplicate binding error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_bind_nullary_with_braces_rejected() {
+    // `Color.Red { }` is a category error: nullary variants have
+    // no payload. Same rule as the constructor side.
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green }\n\
+         let c = Color.Red\n\
+         let s: String = match c { Color.Red { } => \"r\"\n Color.Green => \"g\" }",
+    )
+    .unwrap_err();
+    assert!(
+        errors.iter().any(|e| format!("{e}").contains("nullary")),
+        "expected nullary-with-braces error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_bind_type_mismatch_in_arm_body_rejected() {
+    // Bindings carry the variant's declared field type. Using a
+    // String binding where an int is required is a type error.
+    let errors = crate::Chunk::compile(
+        "enum E { Msg { text: String } }\n\
+         let e = E.Msg { text: \"hi\" }\n\
+         let n: int = match e { E.Msg { text } => text }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("type mismatch")
+                || format!("{e}").contains("expected `int`")),
+        "expected binding-type-mismatch error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_bind_does_not_pollute_outer_locals() {
+    // A binding inside a match arm shadows any outer let with the
+    // same name only for the arm's body. After the match, the
+    // outer value is unchanged.
+    let chunk = crate::Chunk::compile(
+        "enum P { Pair { x: int } }\n\
+         let x = 100\n\
+         let p = P.Pair { x: 7 }\n\
+         let inside: int = match p { P.Pair { x } => x }\n\
+         assert(inside == 7)\n\
+         assert(x == 100)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+// ----- enum_exhaust: Slice 4 exhaustiveness polish -----
+
+#[test]
+fn enum_exhaust_missing_vars_fully_qualified() {
+    // Slice 4 polish: every missing variant is listed with its
+    // full `EnumName.Variant` qualification, not just the bare
+    // variant name.
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green\n Blue }\n\
+         let c = Color.Red\n\
+         let s: String = match c { Color.Red => \"r\" }",
+    )
+    .unwrap_err();
+    let msg = errors
+        .iter()
+        .map(|e| format!("{e}"))
+        .find(|m| m.contains("non-exhaustive"))
+        .expect("expected a non-exhaustive error");
+    assert!(
+        msg.contains("Color.Green") && msg.contains("Color.Blue"),
+        "expected fully-qualified missing variants, got {msg}"
+    );
+}
+
+#[test]
+fn enum_exhaust_dead_wildcard_after_total_coverage_rejected() {
+    // Slice 4: a wildcard arm that comes after every variant has
+    // been listed explicitly is dead code. Reject it.
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green\n Blue }\n\
+         let c = Color.Red\n\
+         let s: String = match c {\n\
+             Color.Red => \"r\"\n\
+             Color.Green => \"g\"\n\
+             Color.Blue => \"b\"\n\
+             _ => \"x\"\n\
+         }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("wildcard arm is unreachable")
+                && format!("{e}").contains("all variants")),
+        "expected dead-wildcard error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_exhaust_wildcard_first_position_still_unreachable_for_later_arms() {
+    // The pre-existing reachability check (a second `_` after the
+    // first) should still fire. This pins the older behaviour.
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green }\n\
+         let c = Color.Red\n\
+         let s: String = match c { _ => \"a\"\n _ => \"b\" }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("unreachable")),
+        "expected unreachable-after-wildcard error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_exhaust_variant_after_wildcard_currently_compiles() {
+    // Pin current behaviour: Slice 4 explicitly does NOT detect
+    // a variant arm that follows a `_` wildcard as unreachable.
+    // The design call was "ship E1 (qualify variants) + E2 (dead
+    // wildcard after total coverage) and defer the rest". This
+    // test exists so the gap is captured if we ever decide to
+    // close it later.
+    crate::Chunk::compile(
+        "enum Color { Red\n Green\n Blue }\n\
+         let c = Color.Red\n\
+         let s: String = match c { Color.Red => \"r\"\n _ => \"x\"\n Color.Green => \"g\" }",
+    )
+    .unwrap();
 }

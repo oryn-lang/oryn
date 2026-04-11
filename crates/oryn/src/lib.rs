@@ -64,8 +64,8 @@ pub use errors::{FileDiagnostics, OrynError, RuntimeError};
 pub use lexer::{Token, lex, lex_all};
 pub use modules::{find_project_root, resolve_import};
 pub use parser::{
-    BinOp, EnumVariant, Expression, MatchArm, ObjField, ObjMethod, Param, Pattern, Spanned,
-    Statement, StringPart, TypeAnnotation, UnaryOp, parse,
+    BinOp, EnumVariant, Expression, MatchArm, ObjField, ObjMethod, Param, Pattern, PatternBinding,
+    Spanned, Statement, StringPart, TypeAnnotation, UnaryOp, parse,
 };
 pub use visitor::{AstVisitor, walk_expr, walk_stmt, walk_stmts};
 pub use vm::{Chunk, VM};
