@@ -1,0 +1,86 @@
+// First-class functions: function references, anonymous functions,
+// and closures with snapshot capture.
+
+// ── 1. A function as a value ────────────────────────────────────────
+// A bare identifier resolving to a top-level function evaluates to
+// a function value. The annotation `fn(int) -> int` is the type of
+// "a function taking int and returning int".
+
+fn double(x: int) -> int { return x * 2 }
+fn triple(x: int) -> int { return x * 3 }
+
+let f: fn(int) -> int = double
+print("f(21) = {f(21)}")                            // 42
+
+// ── 2. Functions passed as arguments ────────────────────────────────
+// Function values are first-class — pass them around like any other
+// value, store them in lists, return them from other functions.
+
+fn apply(op: fn(int) -> int, x: int) -> int {
+    return op(x)
+}
+
+print("apply(double, 5) = {apply(double, 5)}")     // 10
+print("apply(triple, 5) = {apply(triple, 5)}")     // 15
+
+// ── 3. Anonymous functions (no captures) ────────────────────────────
+// Inline `fn(...) -> T { body }` creates an anonymous function with
+// the same shape as a top-level declaration minus the name. With no
+// outer-local references, an anonymous function has no captures and
+// behaves identically to a named top-level fn.
+
+let quadruple = fn(x: int) -> int { return x * 4 }
+print("quadruple(7) = {quadruple(7)}")              // 28
+
+// Anonymous functions can be called inline by parenthesizing them
+// and applying postfix `(args)`:
+print((fn(x: int) -> int { return x + 100 })(7))   // 107
+
+// ── 4. Closures with snapshot capture ───────────────────────────────
+// An anonymous function that references an outer local becomes a
+// closure: the compiler walks the body, finds free variables that
+// resolve to outer locals, and snapshots their values into the
+// closure's environment at the moment the closure is created.
+//
+// Captures are read-only inside the closure body. If you need
+// mutable shared state, put it in a struct field — the closure can
+// capture the struct value and call its mut methods.
+
+fn run() {
+    let threshold = 10
+    let is_big = fn(x: int) -> bool { return x > threshold }
+    print("is_big(5)  = {is_big(5)}")               // false
+    print("is_big(15) = {is_big(15)}")              // true
+}
+run()
+
+// ── 5. Closures returned from functions ─────────────────────────────
+// Combining captures with first-class function returns gives the
+// classic factory pattern. Each call to `make_adder` produces a new
+// closure with its own captured `n`.
+
+fn make_adder(n: int) -> fn(int) -> int {
+    return fn(x: int) -> int { return x + n }
+}
+
+let add100 = make_adder(100)
+let add5 = make_adder(5)
+print("add100(7) = {add100(7)}")                    // 107
+print("add5(7)   = {add5(7)}")                      // 12
+
+// ── 6. Snapshot semantics ───────────────────────────────────────────
+// Each closure carries its own copy of the captured values, taken
+// at construction time. Closures created later are independent;
+// changes to the outer state don't affect closures already built.
+
+fn show() {
+    let label = "first"
+    let p1 = fn() { print("hello from {label}") }
+    let label2 = "second"
+    let p2 = fn() { print("hello from {label2}") }
+    p1()                                            // hello from first
+    p2()                                            // hello from second
+}
+show()
+
+print("--- done ---")

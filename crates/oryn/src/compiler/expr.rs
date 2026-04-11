@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::OrynError;
 use crate::compiler::types::ResolvedType;
-use crate::parser::{BinOp, Expression, Span, Spanned, StringPart, UnaryOp};
+use crate::parser::{
+    BinOp, Expression, Param, Span, Spanned, Statement, StringPart, TypeAnnotation, UnaryOp,
+};
 
 use super::block::BlockMode;
 use super::compile::Compiler;
@@ -789,6 +791,22 @@ impl Compiler {
                     let result_type = const_value.resolved_type();
                     self.emit(instr, &span);
                     result_type
+                } else if let Some(idx) = self.fn_table.resolve(&name) {
+                    // First-class function reference: a bare identifier
+                    // that resolves to a top-level function in a value
+                    // position becomes a `MakeFunction(idx)` instruction
+                    // pushing a `Value::Function(idx)` onto the stack.
+                    // The result type is `Function { params, return }`
+                    // derived from the function's signature.
+                    self.emit(Instruction::MakeFunction(idx), &span);
+                    if let Some(sig) = self.fn_table.signatures.get(&name) {
+                        ResolvedType::Function {
+                            params: sig.param_types.clone(),
+                            return_type: Box::new(sig.return_type.clone()),
+                        }
+                    } else {
+                        ResolvedType::Unknown
+                    }
                 } else {
                     self.output.errors.push(OrynError::compiler(
                         span.clone(),
@@ -1429,82 +1447,80 @@ impl Compiler {
             }
 
             // -- Calls --
-            Expression::Call { name, args } => {
+            //
+            // Three dispatch shapes, picked by inspecting the call's
+            // target:
+            //
+            //   1. Direct named call — target is a bare `Ident` whose
+            //      name resolves to a top-level function or builtin.
+            //      Emits the fast `Call(idx, arity)` or
+            //      `CallBuiltin(b, arity)` instruction. This is the
+            //      hot path that every existing call site takes.
+            //
+            //   2. Local-bound function value — target is a bare
+            //      `Ident` that resolves to a local of type
+            //      `Function { ... }` (e.g., `let f = double; f(21)`).
+            //      Compiles the local read to push the function value,
+            //      then emits `CallValue(arity)` for indirect dispatch.
+            //
+            //   3. General indirect call — target is any other
+            //      expression (parenthesized callable, anonymous
+            //      function, field access holding a function, etc.).
+            //      Compiles the target normally and emits
+            //      `CallValue(arity)`.
+            Expression::Call { target, args } => {
                 let arity = args.len();
 
-                // Capture each argument's root name (if any) BEFORE
-                // compiling, so the val-into-mut-param check can
-                // consult the locals table after the type check.
-                let arg_root_names: Vec<Option<String>> = args
-                    .iter()
-                    .map(|a| expression_root_name(&a.node).map(|s| s.to_string()))
-                    .collect();
+                // Try the direct-name fast path first.
+                if let Expression::Ident(name) = &target.node {
+                    let name = name.clone();
 
-                let mut arg_types = Vec::new();
-                for arg in args {
-                    let arg_type = self.compile_expr(arg);
-                    arg_types.push(arg_type);
-                }
+                    // Direct call to a top-level function or builtin.
+                    // Take this path even if a local with the same
+                    // name exists in scope — the existing semantics
+                    // shadow locals only for value reads, not for
+                    // calls.
+                    let is_top_level_fn = self.fn_table.resolve(&name).is_some();
+                    let is_builtin = Self::builtin_from_name(&name).is_some();
 
-                if let Some(sig) = self.fn_table.signatures.get(&name) {
-                    if arity != sig.param_types.len() {
-                        self.output.errors.push(OrynError::compiler(
-                            span.clone(),
-                            format!(
-                                "arity mismatch: expected {} arguments, got {}",
-                                sig.param_types.len(),
-                                arity
-                            ),
-                        ));
+                    if is_top_level_fn || is_builtin {
+                        return self.compile_direct_named_call(name, args, &span);
                     }
-                    let sig_params = sig.param_types.clone();
-                    let sig_param_is_mut = sig.param_is_mut.clone();
-                    for (i, (arg_type, param_type)) in arg_types.iter().zip(&sig_params).enumerate()
-                    {
-                        self.check_types(
-                            param_type,
-                            arg_type,
-                            &span,
-                            &format!("argument {} type mismatch", i + 1),
-                        );
-                    }
-                    // Val-into-mut-param check: if a parameter is
-                    // declared `mut`, the argument cannot be
-                    // val-rooted (would let the function mutate a
-                    // value the caller declared can't change).
-                    for (i, root) in arg_root_names.iter().enumerate() {
-                        let param_wants_mut = sig_param_is_mut.get(i).copied().unwrap_or(false);
-                        if param_wants_mut
-                            && let Some(arg_name) = root
-                            && let Some(entry) = self.locals.resolve(arg_name)
-                            && !entry.is_mutable()
-                        {
-                            let op = format!("pass to mut parameter {} of `{name}`", i + 1);
-                            self.output.errors.push(OrynError::compiler(
-                                span.clone(),
-                                super::stmt::immutability_error(arg_name, &entry.kind, &op),
-                            ));
-                        }
-                    }
-                }
 
-                if let Some(idx) = self.fn_table.resolve(&name) {
-                    self.emit(Instruction::Call(idx, arity), &span);
-                } else if let Some(builtin) = Self::builtin_from_name(&name) {
-                    self.emit(Instruction::CallBuiltin(builtin, arity), &span);
-                } else {
+                    // Not a top-level fn or builtin — try resolving
+                    // as a local with function type. If it's a local
+                    // but not function-typed, we still fall through
+                    // to the generic indirect path so the type checker
+                    // can produce the right error.
+                    if let Some(entry) = self.locals.resolve(&name) {
+                        let local_type = entry.obj_type.clone();
+                        return self.compile_indirect_call(*target, args, local_type, &span);
+                    }
+
+                    // Truly undefined name — produce a clean error
+                    // and emit a placeholder so downstream type
+                    // checking has something to work with.
                     self.output.errors.push(OrynError::compiler(
                         span.clone(),
                         format!("undefined function `{name}`"),
                     ));
+                    // Compile args anyway so any errors inside them
+                    // surface to the user.
+                    for arg in args {
+                        self.compile_expr(arg);
+                    }
+                    for _ in 0..arity {
+                        self.emit(Instruction::Pop, &span);
+                    }
                     self.emit(Instruction::PushInt(0), &span);
+                    return ResolvedType::Unknown;
                 }
 
-                self.fn_table
-                    .signatures
-                    .get(&name)
-                    .map(|sig| sig.return_type.clone())
-                    .unwrap_or(ResolvedType::Unknown)
+                // Target is a non-identifier expression — compile it
+                // and dispatch through CallValue based on its type.
+                let target_inner = *target;
+                let target_type = ResolvedType::Unknown; // placeholder; real type comes from compiling the target
+                self.compile_indirect_call(target_inner, args, target_type, &span)
             }
 
             // -- Blocks --
@@ -1827,6 +1843,12 @@ impl Compiler {
                 body,
                 else_body,
             } => self.compile_if_let_expression(name, *value, *body, else_body.map(|b| *b), &span),
+
+            Expression::AnonymousFunction {
+                params,
+                return_type,
+                body,
+            } => self.compile_anonymous_function(params, return_type, *body, &span),
         }
     }
 
@@ -2091,6 +2113,594 @@ impl Compiler {
             self.output.instructions[jump_to_end_idx] = Instruction::Jump(end);
 
             ResolvedType::Nil
+        }
+    }
+
+    /// Compile a direct named call to a top-level function or
+    /// builtin. This is the fast path for `foo(args)` where `foo`
+    /// resolves to a registered function name.
+    ///
+    /// Type-checks the arguments against the function signature
+    /// (including the val-into-mut-param check), then emits the
+    /// direct dispatch instruction (`Call(idx, arity)` or
+    /// `CallBuiltin(b, arity)`).
+    fn compile_direct_named_call(
+        &mut self,
+        name: String,
+        args: Vec<Spanned<Expression>>,
+        span: &Span,
+    ) -> ResolvedType {
+        let arity = args.len();
+
+        // Capture each argument's root name BEFORE compiling, so the
+        // val-into-mut-param check can consult the locals table after
+        // type checking.
+        let arg_root_names: Vec<Option<String>> = args
+            .iter()
+            .map(|a| expression_root_name(&a.node).map(|s| s.to_string()))
+            .collect();
+
+        let mut arg_types = Vec::new();
+        for arg in args {
+            let arg_type = self.compile_expr(arg);
+            arg_types.push(arg_type);
+        }
+
+        if let Some(sig) = self.fn_table.signatures.get(&name) {
+            if arity != sig.param_types.len() {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!(
+                        "arity mismatch: expected {} arguments, got {}",
+                        sig.param_types.len(),
+                        arity
+                    ),
+                ));
+            }
+            let sig_params = sig.param_types.clone();
+            let sig_param_is_mut = sig.param_is_mut.clone();
+            for (i, (arg_type, param_type)) in arg_types.iter().zip(&sig_params).enumerate() {
+                self.check_types(
+                    param_type,
+                    arg_type,
+                    span,
+                    &format!("argument {} type mismatch", i + 1),
+                );
+            }
+            // Val-into-mut-param check.
+            for (i, root) in arg_root_names.iter().enumerate() {
+                let param_wants_mut = sig_param_is_mut.get(i).copied().unwrap_or(false);
+                if param_wants_mut
+                    && let Some(arg_name) = root
+                    && let Some(entry) = self.locals.resolve(arg_name)
+                    && !entry.is_mutable()
+                {
+                    let op = format!("pass to mut parameter {} of `{name}`", i + 1);
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        super::stmt::immutability_error(arg_name, &entry.kind, &op),
+                    ));
+                }
+            }
+        }
+
+        if let Some(idx) = self.fn_table.resolve(&name) {
+            self.emit(Instruction::Call(idx, arity), span);
+        } else if let Some(builtin) = Self::builtin_from_name(&name) {
+            self.emit(Instruction::CallBuiltin(builtin, arity), span);
+        } else {
+            // Caller verified at least one of these resolves before
+            // calling this helper, so this branch is dead in practice.
+            self.output.errors.push(OrynError::compiler(
+                span.clone(),
+                format!("undefined function `{name}`"),
+            ));
+            self.emit(Instruction::PushInt(0), span);
+        }
+
+        self.fn_table
+            .signatures
+            .get(&name)
+            .map(|sig| sig.return_type.clone())
+            .unwrap_or(ResolvedType::Unknown)
+    }
+
+    /// Compile an indirect call through a function value. The
+    /// `target` is any expression that evaluates to a `Function` or
+    /// `Closure` value at runtime; the compiler verifies its type is
+    /// `ResolvedType::Function { ... }` before emitting `CallValue`.
+    ///
+    /// `_target_type_hint` is the locally-resolved type for the
+    /// target if known via shortcut (e.g., looked up directly from
+    /// the locals table for a bare ident); pass `Unknown` to defer
+    /// to whatever the target's compiled-expression type yields.
+    fn compile_indirect_call(
+        &mut self,
+        target: Spanned<Expression>,
+        args: Vec<Spanned<Expression>>,
+        _target_type_hint: ResolvedType,
+        span: &Span,
+    ) -> ResolvedType {
+        let arity = args.len();
+        if arity > u8::MAX as usize {
+            self.output.errors.push(OrynError::compiler(
+                span.clone(),
+                format!("call has too many arguments ({arity}); maximum is 255"),
+            ));
+            self.emit(Instruction::PushInt(0), span);
+            return ResolvedType::Unknown;
+        }
+
+        // Compile the target first; the result is on TOS.
+        let target_type = self.compile_expr(target);
+
+        // Extract the function signature from the target's type.
+        let (param_types, return_type) = match &target_type {
+            ResolvedType::Function {
+                params,
+                return_type,
+            } => (params.clone(), (**return_type).clone()),
+            ResolvedType::Unknown => {
+                // Upstream error already reported; type-check args
+                // against Unknown to absorb any further mismatches
+                // and emit the call so the stack stays balanced.
+                for arg in args {
+                    self.compile_expr(arg);
+                }
+                self.emit(Instruction::CallValue(arity as u8), span);
+                return ResolvedType::Unknown;
+            }
+            other => {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!(
+                        "cannot call value of type `{}` — only function values are callable",
+                        other.display_name()
+                    ),
+                ));
+                // Drop the non-callable target and absorb the args.
+                self.emit(Instruction::Pop, span);
+                for arg in args {
+                    self.compile_expr(arg);
+                }
+                for _ in 0..arity {
+                    self.emit(Instruction::Pop, span);
+                }
+                self.emit(Instruction::PushInt(0), span);
+                return ResolvedType::Unknown;
+            }
+        };
+
+        // Arity check.
+        if arity != param_types.len() {
+            self.output.errors.push(OrynError::compiler(
+                span.clone(),
+                format!(
+                    "arity mismatch: expected {} arguments, got {arity}",
+                    param_types.len()
+                ),
+            ));
+        }
+
+        // Type-check args against the function-type signature.
+        for (i, arg) in args.into_iter().enumerate() {
+            let arg_type = self.compile_expr(arg);
+            if let Some(expected) = param_types.get(i) {
+                self.check_types(
+                    expected,
+                    &arg_type,
+                    span,
+                    &format!("argument {} type mismatch", i + 1),
+                );
+            }
+        }
+
+        self.emit(Instruction::CallValue(arity as u8), span);
+        return_type
+    }
+
+    /// Compile an anonymous function expression `fn(params) -> T { body }`.
+    ///
+    /// Steps:
+    /// 1. Resolve the param types and the return type.
+    /// 2. Walk the body to enumerate captures (free variables that
+    ///    resolve to outer locals). Reject mutations of captured names
+    ///    inline as part of the same walk.
+    /// 3. Compile the body as a synthetic top-level function whose
+    ///    parameter list is `[user_params..., captured_locals...]`.
+    /// 4. At the construction site, push each captured value onto the
+    ///    stack via `GetLocal(outer_slot)`, then emit `MakeClosure` (or
+    ///    `MakeFunction` if there are no captures).
+    /// 5. Return type: `Function { user_param_types, return_type }`.
+    ///    The captures are invisible at the type level — they live on
+    ///    the runtime closure value, not in the function's signature.
+    fn compile_anonymous_function(
+        &mut self,
+        params: Vec<Param>,
+        return_type: Option<TypeAnnotation>,
+        body: Spanned<Expression>,
+        span: &Span,
+    ) -> ResolvedType {
+        // 1. Resolve param types.
+        let mut param_types: Vec<ResolvedType> = Vec::with_capacity(params.len());
+        for p in &params {
+            let t = match &p.type_ann {
+                Some(ann) => match self.resolve_type_annotation(ann) {
+                    Ok(t) => t,
+                    Err(msg) => {
+                        self.output
+                            .errors
+                            .push(OrynError::compiler(span.clone(), msg));
+                        ResolvedType::Unknown
+                    }
+                },
+                None => {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        format!(
+                            "anonymous function parameter `{}` requires a type annotation",
+                            p.name
+                        ),
+                    ));
+                    ResolvedType::Unknown
+                }
+            };
+            param_types.push(t);
+        }
+
+        // Resolve return type. Default to Nil for void functions.
+        let return_resolved = match &return_type {
+            Some(rt) => match self.resolve_type_annotation(rt) {
+                Ok(t) => t,
+                Err(msg) => {
+                    self.output
+                        .errors
+                        .push(OrynError::compiler(span.clone(), msg));
+                    ResolvedType::Unknown
+                }
+            },
+            None => ResolvedType::Nil,
+        };
+
+        // 2. Capture analysis: walk the body once and enumerate free
+        //    variables that resolve to outer locals.
+        let user_param_names: HashSet<String> = params.iter().map(|p| p.name.clone()).collect();
+        let mut captures: Vec<(String, ResolvedType, super::tables::BindingKind)> = Vec::new();
+        let mut seen_captures: HashSet<String> = HashSet::new();
+        self.collect_captures(
+            &body.node,
+            &user_param_names,
+            &mut captures,
+            &mut seen_captures,
+            span,
+        );
+
+        // 3. Build the synthetic param list — user params + captures.
+        //    Each capture appears as an extra param at the end of the
+        //    function's parameter slot layout, so the body can address
+        //    it via plain `GetLocal` like any other local.
+        let mut synthetic_params: Vec<Param> = params.clone();
+        for (name, _ty, _kind) in &captures {
+            synthetic_params.push(Param {
+                name: name.clone(),
+                type_ann: None, // we'll bypass type_ann by passing types directly via param_local_fn
+                is_mut: false,
+            });
+        }
+
+        // The synthetic param types include user param types followed
+        // by capture types (in capture order).
+        let mut synthetic_param_types: Vec<ResolvedType> = param_types.clone();
+        for (_name, ty, _kind) in &captures {
+            synthetic_param_types.push(ty.clone());
+        }
+
+        // 4. Compile the body as a synthetic top-level function.
+        //    Generate a unique name based on the source span so two
+        //    anonymous functions never collide.
+        let synthetic_name = format!("@anon@{}", span.start);
+
+        // Param-local callback: maps each synthetic param to its
+        // (BindingKind, ResolvedType). User params become Param;
+        // captures become Param too (read-only inside the closure
+        // body — the capture-mutability check enforced this above).
+        let synth_param_types_clone = synthetic_param_types.clone();
+        let synth_params_clone = synthetic_params.clone();
+        let param_local_fn = move |p: &Param| -> (super::tables::BindingKind, ResolvedType) {
+            let idx = synth_params_clone
+                .iter()
+                .position(|sp| sp.name == p.name)
+                .unwrap_or(0);
+            let ty = synth_param_types_clone
+                .get(idx)
+                .cloned()
+                .unwrap_or(ResolvedType::Unknown);
+            (super::tables::BindingKind::Param, ty)
+        };
+
+        let synth_idx = self.compile_function_body(super::func::FunctionBodyConfig {
+            name: &synthetic_name,
+            params: &synthetic_params,
+            param_types: synthetic_param_types,
+            param_local_fn: &param_local_fn,
+            self_name: None,
+            body,
+            return_type: Some(return_resolved.clone()),
+            span,
+            is_pub: false,
+            is_mut: false,
+            pre_allocated_local_idx: None,
+        });
+
+        // 5. At the construction site, push each captured value onto
+        //    the stack (in capture order, matching what MakeClosure
+        //    expects), then emit MakeFunction or MakeClosure.
+        let n_captures = captures.len();
+        if n_captures == 0 {
+            self.emit(Instruction::MakeFunction(synth_idx), span);
+        } else {
+            for (cap_name, _ty, _kind) in &captures {
+                if let Some(entry) = self.locals.resolve(cap_name) {
+                    self.emit(Instruction::GetLocal(entry.slot), span);
+                }
+            }
+            self.emit(Instruction::MakeClosure(synth_idx, n_captures as u8), span);
+        }
+
+        ResolvedType::Function {
+            params: param_types,
+            return_type: Box::new(return_resolved),
+        }
+    }
+
+    /// Walk an expression looking for free variables that resolve to
+    /// outer locals (captures) and for assignments that target a
+    /// captured name (which we reject because closures are read-only
+    /// on captures).
+    ///
+    /// `local_set` starts as the closure's own params and grows as
+    /// the walker enters nested `let`/`val`/`if let` scopes inside
+    /// the body. Anything not in `local_set` that DOES resolve in
+    /// `self.locals` (the outer scope at construction time) becomes
+    /// a capture.
+    ///
+    /// Nested anonymous functions are walked recursively but their
+    /// own params are added to a fresh local set for that walk —
+    /// captures of an inner closure are also captures of the outer.
+    fn collect_captures(
+        &mut self,
+        expr: &Expression,
+        local_set: &HashSet<String>,
+        captures: &mut Vec<(String, ResolvedType, super::tables::BindingKind)>,
+        seen: &mut HashSet<String>,
+        span: &Span,
+    ) {
+        match expr {
+            Expression::Ident(name) => {
+                if !local_set.contains(name)
+                    && !seen.contains(name)
+                    && let Some(entry) = self.locals.resolve(name)
+                {
+                    seen.insert(name.clone());
+                    captures.push((name.clone(), entry.obj_type.clone(), entry.kind));
+                }
+            }
+            Expression::BinaryOp { left, right, .. } => {
+                self.collect_captures(&left.node, local_set, captures, seen, span);
+                self.collect_captures(&right.node, local_set, captures, seen, span);
+            }
+            Expression::UnaryOp { expr: inner, .. } => {
+                self.collect_captures(&inner.node, local_set, captures, seen, span);
+            }
+            Expression::Call { target, args } => {
+                self.collect_captures(&target.node, local_set, captures, seen, span);
+                for arg in args {
+                    self.collect_captures(&arg.node, local_set, captures, seen, span);
+                }
+            }
+            Expression::MethodCall { object, args, .. } => {
+                self.collect_captures(&object.node, local_set, captures, seen, span);
+                for arg in args {
+                    self.collect_captures(&arg.node, local_set, captures, seen, span);
+                }
+            }
+            Expression::FieldAccess { object, .. } => {
+                self.collect_captures(&object.node, local_set, captures, seen, span);
+            }
+            Expression::Index { object, index } => {
+                self.collect_captures(&object.node, local_set, captures, seen, span);
+                self.collect_captures(&index.node, local_set, captures, seen, span);
+            }
+            Expression::Range { start, end, .. } => {
+                self.collect_captures(&start.node, local_set, captures, seen, span);
+                self.collect_captures(&end.node, local_set, captures, seen, span);
+            }
+            Expression::Try(inner) | Expression::UnwrapError(inner) => {
+                self.collect_captures(&inner.node, local_set, captures, seen, span);
+            }
+            Expression::Coalesce { left, right } => {
+                self.collect_captures(&left.node, local_set, captures, seen, span);
+                self.collect_captures(&right.node, local_set, captures, seen, span);
+            }
+            Expression::ListLiteral(elements) => {
+                for el in elements {
+                    self.collect_captures(&el.node, local_set, captures, seen, span);
+                }
+            }
+            Expression::MapLiteral(entries) => {
+                for (k, v) in entries {
+                    self.collect_captures(&k.node, local_set, captures, seen, span);
+                    self.collect_captures(&v.node, local_set, captures, seen, span);
+                }
+            }
+            Expression::ObjLiteral { fields, .. } => {
+                for (_name, v) in fields {
+                    self.collect_captures(&v.node, local_set, captures, seen, span);
+                }
+            }
+            Expression::Block(stmts) => {
+                // Track block-local lets so they don't get captured.
+                let mut block_locals = local_set.clone();
+                for stmt in stmts {
+                    self.collect_captures_stmt(&stmt.node, &mut block_locals, captures, seen, span);
+                }
+            }
+            Expression::If {
+                condition,
+                body,
+                else_body,
+            } => {
+                self.collect_captures(&condition.node, local_set, captures, seen, span);
+                self.collect_captures(&body.node, local_set, captures, seen, span);
+                if let Some(eb) = else_body {
+                    self.collect_captures(&eb.node, local_set, captures, seen, span);
+                }
+            }
+            Expression::IfLet {
+                value,
+                name,
+                body,
+                else_body,
+            } => {
+                self.collect_captures(&value.node, local_set, captures, seen, span);
+                let mut body_locals = local_set.clone();
+                body_locals.insert(name.clone());
+                self.collect_captures(&body.node, &body_locals, captures, seen, span);
+                if let Some(eb) = else_body {
+                    self.collect_captures(&eb.node, local_set, captures, seen, span);
+                }
+            }
+            Expression::Match { scrutinee, arms } => {
+                self.collect_captures(&scrutinee.node, local_set, captures, seen, span);
+                for arm in arms {
+                    let mut arm_locals = local_set.clone();
+                    // Add pattern bindings to the arm-local scope so
+                    // they're not captured. Wildcards bind nothing;
+                    // ok patterns bind the success name; variant
+                    // patterns bind their destructured field names.
+                    use crate::parser::Pattern;
+                    match &arm.pattern.node {
+                        Pattern::Wildcard => {}
+                        Pattern::Ok { name } => {
+                            arm_locals.insert(name.clone());
+                        }
+                        Pattern::Variant { bindings, .. } => {
+                            if let Some(bs) = bindings {
+                                for binding in bs {
+                                    arm_locals.insert(binding.name.clone());
+                                }
+                            }
+                        }
+                    }
+                    self.collect_captures(&arm.body.node, &arm_locals, captures, seen, span);
+                }
+            }
+            Expression::StringInterp(parts) => {
+                for part in parts {
+                    if let crate::parser::StringPart::Interp(e) = part {
+                        self.collect_captures(&e.node, local_set, captures, seen, span);
+                    }
+                }
+            }
+            Expression::AnonymousFunction { params, body, .. } => {
+                // Walk into the nested closure body, but with a
+                // fresh local set seeded only by the inner closure's
+                // own params. The outer closure's local set is NOT
+                // visible to the inner closure body — only the
+                // outer's captures (via self.locals) are. Captures
+                // discovered inside the inner body are added to the
+                // OUTER closure's capture list too, since the outer
+                // body needs to make them available for the inner
+                // construction site.
+                let mut inner_locals: HashSet<String> = HashSet::new();
+                for p in params {
+                    inner_locals.insert(p.name.clone());
+                }
+                self.collect_captures(&body.node, &inner_locals, captures, seen, span);
+            }
+            // Literals, string-literal-only forms, and bare keywords have
+            // no captures.
+            Expression::Int(_)
+            | Expression::Float(_)
+            | Expression::True
+            | Expression::False
+            | Expression::String(_)
+            | Expression::Nil => {}
+        }
+    }
+
+    /// Statement-level capture walk for blocks. Tracks let/val
+    /// declarations as block-local so they don't get captured, and
+    /// recursively walks expressions.
+    fn collect_captures_stmt(
+        &mut self,
+        stmt: &Statement,
+        block_locals: &mut HashSet<String>,
+        captures: &mut Vec<(String, ResolvedType, super::tables::BindingKind)>,
+        seen: &mut HashSet<String>,
+        span: &Span,
+    ) {
+        match stmt {
+            Statement::Let { name, value, .. } | Statement::Val { name, value, .. } => {
+                self.collect_captures(&value.node, block_locals, captures, seen, span);
+                block_locals.insert(name.clone());
+            }
+            Statement::Assignment { name, value } => {
+                // Reject assignment to a captured outer name. We
+                // detect this by: name is NOT in block_locals AND
+                // does resolve to an outer local.
+                if !block_locals.contains(name) && self.locals.resolve(name).is_some() {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        format!(
+                            "cannot mutate captured value `{name}` inside an anonymous function — captures are read-only; put mutable state in a struct field"
+                        ),
+                    ));
+                }
+                self.collect_captures(&value.node, block_locals, captures, seen, span);
+            }
+            Statement::FieldAssignment { object, value, .. }
+            | Statement::IndexAssignment { object, value, .. } => {
+                // Mutating a field/index of a captured value is
+                // allowed (the closure can mutate the contents of a
+                // captured struct/list/map even though the binding
+                // itself is read-only). Just walk both sides.
+                self.collect_captures(&object.node, block_locals, captures, seen, span);
+                self.collect_captures(&value.node, block_locals, captures, seen, span);
+            }
+            Statement::Return(opt) => {
+                if let Some(e) = opt {
+                    self.collect_captures(&e.node, block_locals, captures, seen, span);
+                }
+            }
+            Statement::While { condition, body } => {
+                self.collect_captures(&condition.node, block_locals, captures, seen, span);
+                self.collect_captures(&body.node, block_locals, captures, seen, span);
+            }
+            Statement::For {
+                name,
+                iterable,
+                body,
+            } => {
+                self.collect_captures(&iterable.node, block_locals, captures, seen, span);
+                let mut for_locals = block_locals.clone();
+                for_locals.insert(name.clone());
+                self.collect_captures(&body.node, &for_locals, captures, seen, span);
+            }
+            Statement::Expression(e) => {
+                self.collect_captures(&e.node, block_locals, captures, seen, span);
+            }
+            Statement::Assert { condition } => {
+                self.collect_captures(&condition.node, block_locals, captures, seen, span);
+            }
+            // Statements that don't reference outer state.
+            Statement::Function { .. }
+            | Statement::ObjDef { .. }
+            | Statement::EnumDef { .. }
+            | Statement::Import { .. }
+            | Statement::Test { .. }
+            | Statement::Break
+            | Statement::Continue => {}
         }
     }
 }

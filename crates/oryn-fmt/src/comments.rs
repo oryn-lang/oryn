@@ -172,6 +172,9 @@ impl CommentAttachments {
                     self.walk_expression(else_body, parsed);
                 }
             }
+            Expression::AnonymousFunction { body, .. } => {
+                self.walk_expression(body, parsed);
+            }
             Expression::Nil
             | Expression::True
             | Expression::False

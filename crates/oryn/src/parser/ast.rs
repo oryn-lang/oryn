@@ -163,8 +163,19 @@ pub enum Expression {
         op: UnaryOp,
         expr: Box<Spanned<Expression>>,
     },
+    /// `target(args)` — function call. The target is any expression
+    /// that evaluates to a callable: most commonly a bare identifier
+    /// resolving to a top-level function (the fast path), but also
+    /// a local variable holding a function value, a parenthesized
+    /// expression, or a chained call like `make_handler()(arg)`.
+    ///
+    /// The compiler dispatches on the target shape: if the target
+    /// is an `Ident` whose name resolves to a top-level function in
+    /// the function table, it emits the direct `Call(idx, arity)`
+    /// instruction. Otherwise it compiles the target as a value and
+    /// emits `CallValue(arity)` to dispatch through the value.
     Call {
-        name: String,
+        target: Box<Spanned<Expression>>,
         args: Vec<Spanned<Expression>>,
     },
     /// `try expr` — propagate error from `!T`.
@@ -227,6 +238,20 @@ pub enum Expression {
         scrutinee: Box<Spanned<Expression>>,
         arms: Vec<MatchArm>,
     },
+    /// `fn(x: int) -> int { return x * 2 }` — an anonymous function
+    /// expression. Same shape as a top-level [`Statement::Function`]
+    /// minus the name and visibility. May reference outer locals;
+    /// the compiler walks the body during compilation, records the
+    /// captured names, and emits `MakeClosure` at the construction
+    /// site to wrap the synthetic compiled function with a snapshot
+    /// of those captures. Captured values are read-only inside the
+    /// closure body — the compiler rejects assignments to captured
+    /// names.
+    AnonymousFunction {
+        params: Vec<Param>,
+        return_type: Option<TypeAnnotation>,
+        body: Box<Spanned<Expression>>,
+    },
 }
 
 /// A binary operator.
@@ -278,6 +303,14 @@ pub enum TypeAnnotation {
     /// `{K: V}` — a homogeneous map whose key and value types are tracked
     /// statically but erased at runtime.
     Map(Box<TypeAnnotation>, Box<TypeAnnotation>),
+    /// `fn(int, int) -> int` — a function type. Mirrors the syntax of
+    /// `fn` declarations: optional return type (defaults to `nil`), no
+    /// parameter names. Used for typing function-valued bindings,
+    /// parameters, struct fields, and return values.
+    Function {
+        params: Vec<TypeAnnotation>,
+        return_type: Option<Box<TypeAnnotation>>,
+    },
 }
 
 /// A field declared inside an `obj` body. The `is_pub` flag controls

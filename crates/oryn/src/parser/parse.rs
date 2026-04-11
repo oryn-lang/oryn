@@ -16,12 +16,17 @@ type TokenInput<'src> = MappedInput<'src, Token, SimpleSpan, &'src [TokenSpanned
 
 /// What kind of suffix follows a postfix step. Built once per postfix
 /// match; the foldl callback decides whether to construct a FieldAccess,
-/// MethodCall, ObjLiteral, or Index expression.
+/// MethodCall, ObjLiteral, Index, or bare Call expression.
 enum PostfixSuffix {
     Field(String),
     Call(String, Vec<Spanned<Expression>>),
     ObjLit(String, Vec<(String, Spanned<Expression>)>),
     Index(Spanned<Expression>),
+    /// Bare `(args)` after any expression — wraps the preceding
+    /// expression in a [`Expression::Call`] with the expression as
+    /// the call target. Used for indirect calls through function
+    /// values, e.g. `(make_handler())(arg)` or `(obj.field)(arg)`.
+    BareCall(Vec<Spanned<Expression>>),
 }
 
 /// Walk a chain of `Expression::FieldAccess` rooted in `Expression::Ident`
@@ -130,7 +135,17 @@ fn atom<'src>(
     // An identifier optionally followed by (args) or { fields }.
     // Ident + (args) = function call, Ident + { fields } = object literal,
     // bare Ident = variable reference.
+    //
+    // Note: the `(args)` arm wraps the bare identifier in a
+    // `Spanned<Expression::Ident>` and stores it as the call's
+    // `target`. The compiler unwraps this back to the identifier
+    // form to take the fast `Call(idx, arity)` path when the name
+    // resolves to a top-level function.
     let ident_or_call = select! { Token::Ident(name) => name }
+        .map_with(|name, extra| {
+            let s: SimpleSpan = extra.span();
+            (name, s.start..s.end)
+        })
         .then(
             expr.clone()
                 .separated_by(just(Token::Comma))
@@ -150,8 +165,14 @@ fn atom<'src>(
                 .or_not(),
         )
         .map(
-            |((name, call_args), obj_fields)| match (call_args, obj_fields) {
-                (Some(args), _) => Expression::Call { name, args },
+            |(((name, name_span), call_args), obj_fields)| match (call_args, obj_fields) {
+                (Some(args), _) => Expression::Call {
+                    target: Box::new(Spanned {
+                        node: Expression::Ident(name),
+                        span: name_span,
+                    }),
+                    args,
+                },
                 (_, Some(fields)) => Expression::ObjLiteral {
                     type_name: vec![name],
                     fields,
@@ -423,6 +444,81 @@ fn program<'src>() -> impl Parser<
     // `expr.clone()`), then define `block` from `stmt`.
     let mut block = Recursive::declare();
 
+    // Type-annotation parser. Defined here at the top of `program()`
+    // so it's in scope for both `expr` (which needs it for anonymous
+    // function expressions) and `stmt` (which needs it for let/val
+    // bindings, function signatures, struct fields, etc.). The type
+    // grammar is closed under itself — it never recurses into the
+    // expression parser — so it can be built independently.
+    let type_ann_parser = recursive(|type_ann_rec| {
+        let dotted_name = select! { Token::Ident(name) => name }
+            .separated_by(just(Token::Dot))
+            .at_least(1)
+            .collect::<Vec<String>>()
+            .map(TypeAnnotation::Named);
+
+        let paren_type = type_ann_rec
+            .clone()
+            .delimited_by(just(Token::LeftParen), just(Token::RightParen));
+
+        let list_type = type_ann_rec
+            .clone()
+            .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
+            .map(|inner| TypeAnnotation::List(Box::new(inner)));
+
+        let map_type = type_ann_rec
+            .clone()
+            .then_ignore(just(Token::Colon))
+            .then(type_ann_rec.clone())
+            .delimited_by(just(Token::LeftCurly), just(Token::RightCurly))
+            .map(|(key, value)| TypeAnnotation::Map(Box::new(key), Box::new(value)));
+
+        let base_type = paren_type.or(list_type).or(map_type).or(dotted_name);
+
+        // `maybe T` — prefix nillable.
+        let nillable = just(Token::Maybe)
+            .ignore_then(type_ann_rec.clone())
+            .map(|inner| TypeAnnotation::Nillable(Box::new(inner)));
+
+        // `error T` (loose) or `error T of E` (precise) — prefix
+        // error union with optional postfix `of` clause.
+        let precise_error_enum = just(Token::Of)
+            .ignore_then(
+                select! { Token::Ident(name) => name }
+                    .separated_by(just(Token::Dot))
+                    .at_least(1)
+                    .collect::<Vec<String>>(),
+            )
+            .or_not();
+        let error_union = just(Token::Error)
+            .ignore_then(type_ann_rec.clone())
+            .then(precise_error_enum)
+            .map(|(inner, error_enum)| TypeAnnotation::ErrorUnion {
+                error_enum,
+                inner: Box::new(inner),
+            });
+
+        // `fn(int, int) -> int` — function type annotation.
+        let fn_param_list_ty = type_ann_rec
+            .clone()
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<TypeAnnotation>>()
+            .delimited_by(just(Token::LeftParen), just(Token::RightParen));
+        let fn_return_ty = just(Token::Arrow)
+            .ignore_then(type_ann_rec.clone())
+            .or_not();
+        let function_type = just(Token::Fn)
+            .ignore_then(fn_param_list_ty)
+            .then(fn_return_ty)
+            .map(|(params, return_type)| TypeAnnotation::Function {
+                params,
+                return_type: return_type.map(Box::new),
+            });
+
+        choice((nillable, error_union, function_type, base_type))
+    })
+    .boxed();
+
     let expr = recursive(|expr| {
         let atom = atom(expr.clone(), block.clone());
 
@@ -467,7 +563,7 @@ fn program<'src>() -> impl Parser<
         let dotted_suffix = just(Token::Dot)
             .ignore_then(select! { Token::Ident(name) => name })
             .then(choice((
-                postfix_call_args.map(DottedTail::Call),
+                postfix_call_args.clone().map(DottedTail::Call),
                 postfix_obj_fields.map(DottedTail::ObjLit),
                 chumsky::primitive::empty().map(|_| DottedTail::Field),
             )))
@@ -482,53 +578,125 @@ fn program<'src>() -> impl Parser<
             .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
             .map(PostfixSuffix::Index);
 
-        let postfix_step = choice((dotted_suffix, index_suffix));
+        // Bare `(args)` postfix — wraps the preceding expression in a
+        // Call with the expression as the target. Enables calling
+        // function values, anonymous functions, the result of another
+        // call, or a parenthesized callable: `(make_handler())(arg)`,
+        // `(fn(x: int) -> int { return x * 2 })(21)`, etc.
+        //
+        // Method calls and object literals (`obj.field(args)`,
+        // `Type { ... }`) are still handled by `dotted_suffix` so the
+        // existing dispatch shape is preserved — this BareCall step
+        // only fires when there's no leading dot.
+        let bare_call_suffix = postfix_call_args.clone().map(PostfixSuffix::BareCall);
 
-        let postfix = atom
-            .clone()
-            .foldl(postfix_step.repeated(), |object, suffix| {
-                let span = object.span.clone();
-                match suffix {
-                    PostfixSuffix::Call(name, args) => Spanned {
-                        node: Expression::MethodCall {
-                            object: Box::new(object),
-                            method: name,
-                            args,
-                        },
-                        span,
-                    },
-                    PostfixSuffix::Field(name) => Spanned {
-                        node: Expression::FieldAccess {
-                            object: Box::new(object),
-                            field: name,
-                        },
-                        span,
-                    },
-                    PostfixSuffix::ObjLit(name, fields) => {
-                        // Walk the accumulated chain back to the root Ident
-                        // to build the qualified type path. The current
-                        // `name` (just consumed) is the type name; the chain
-                        // in `object` provides the module prefix segments.
-                        let mut path = Vec::new();
-                        collect_path(&object.node, &mut path);
-                        path.push(name);
-                        Spanned {
-                            node: Expression::ObjLiteral {
-                                type_name: path,
-                                fields,
-                            },
-                            span,
-                        }
-                    }
-                    PostfixSuffix::Index(index) => Spanned {
-                        node: Expression::Index {
-                            object: Box::new(object),
-                            index: Box::new(index),
-                        },
-                        span,
-                    },
-                }
+        let postfix_step = choice((dotted_suffix, index_suffix, bare_call_suffix));
+
+        // Anonymous function expression: `fn(params) -> T { body }`
+        // (the return type is optional). The shape mirrors a top-level
+        // `fn` declaration minus the name and visibility. Disambiguated
+        // from a statement-level fn declaration by position — this
+        // arm only fires inside an expression context.
+        //
+        // Defined here at the postfix level so an anonymous function
+        // can be the target of a postfix call (e.g.,
+        // `(fn(x: int) -> int { return x * 2 })(21)` which is more
+        // commonly written as `(fn(x: int) -> int { ... })(21)`).
+        let anon_fn_param = just(Token::Mut)
+            .or_not()
+            .map(|t| t.is_some())
+            .then(select! { Token::Ident(name) => name })
+            .then(
+                just(Token::Colon)
+                    .ignore_then(type_ann_parser.clone())
+                    .or_not(),
+            )
+            .map(|((is_mut, name), type_ann)| Param {
+                name,
+                type_ann,
+                is_mut,
             });
+        let anon_fn_param_list = anon_fn_param
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<Param>>()
+            .delimited_by(just(Token::LeftParen), just(Token::RightParen));
+        let anon_fn_return = just(Token::Arrow)
+            .ignore_then(type_ann_parser.clone())
+            .or_not();
+        let anon_fn = just(Token::Fn)
+            .ignore_then(anon_fn_param_list)
+            .then(anon_fn_return)
+            .then(block.clone())
+            .map_with(|((params, return_type), body), extra| {
+                let s: SimpleSpan = extra.span();
+                Spanned::new(
+                    Expression::AnonymousFunction {
+                        params,
+                        return_type,
+                        body: Box::new(body),
+                    },
+                    s,
+                )
+            });
+
+        // The seed of the postfix chain accepts either a regular
+        // atom or an anonymous function expression. Trying anon_fn
+        // first means a bare `fn(...) { ... }` in expression
+        // position is recognized as a closure, not as some other
+        // form starting with `Token::Fn` (there isn't one, but
+        // ordering is the safer default).
+        let postfix_seed = choice((anon_fn, atom.clone()));
+
+        let postfix = postfix_seed.foldl(postfix_step.repeated(), |object, suffix| {
+            let span = object.span.clone();
+            match suffix {
+                PostfixSuffix::Call(name, args) => Spanned {
+                    node: Expression::MethodCall {
+                        object: Box::new(object),
+                        method: name,
+                        args,
+                    },
+                    span,
+                },
+                PostfixSuffix::Field(name) => Spanned {
+                    node: Expression::FieldAccess {
+                        object: Box::new(object),
+                        field: name,
+                    },
+                    span,
+                },
+                PostfixSuffix::ObjLit(name, fields) => {
+                    // Walk the accumulated chain back to the root Ident
+                    // to build the qualified type path. The current
+                    // `name` (just consumed) is the type name; the chain
+                    // in `object` provides the module prefix segments.
+                    let mut path = Vec::new();
+                    collect_path(&object.node, &mut path);
+                    path.push(name);
+                    Spanned {
+                        node: Expression::ObjLiteral {
+                            type_name: path,
+                            fields,
+                        },
+                        span,
+                    }
+                }
+                PostfixSuffix::Index(index) => Spanned {
+                    node: Expression::Index {
+                        object: Box::new(object),
+                        index: Box::new(index),
+                    },
+                    span,
+                },
+                PostfixSuffix::BareCall(args) => Spanned {
+                    node: Expression::Call {
+                        target: Box::new(object),
+                        args,
+                    },
+                    span,
+                },
+            }
+        });
 
         // Unary minus: tighter than *, so -2 * 3 is (-2) * 3.
         // .boxed() erases the deeply nested combinator type to speed up compilation.
@@ -731,90 +899,10 @@ fn program<'src>() -> impl Parser<
             .labelled("import statement")
             .boxed();
 
-        // Recursive type annotation parser supporting:
-        //   T, mod.T        → TypeAnnotation::Named
-        //   T?              → TypeAnnotation::Nillable
-        //   !T              → TypeAnnotation::ErrorUnion
-        //   [T]             → TypeAnnotation::List
-        //   {K: V}          → TypeAnnotation::Map
-        //   !(T?), (!T)?    → allowed with parentheses
-        //   !T?             → rejected (ambiguous without parentheses)
-        // Type grammar (Slice 5 — words-everywhere policy):
-        //
-        //   maybe T          → nillable
-        //   error T          → error union
-        //   maybe error T    → nillable error union (composition reads
-        //                       left-to-right as prefix operators)
-        //   error maybe T    → error union of nillable
-        //   [T]              → list
-        //   {K: V}           → map
-        //   (T)              → parens
-        //   T                → bare named type / dotted path
-        //
-        // Both `maybe` and `error` are prefix keywords; they compose
-        // freely without parentheses because there's no parser
-        // ambiguity between two prefix forms.
-        let type_ann_parser = recursive(|type_ann_rec| {
-            let dotted_name = select! { Token::Ident(name) => name }
-                .separated_by(just(Token::Dot))
-                .at_least(1)
-                .collect::<Vec<String>>()
-                .map(TypeAnnotation::Named);
-
-            let paren_type = type_ann_rec
-                .clone()
-                .delimited_by(just(Token::LeftParen), just(Token::RightParen));
-
-            let list_type = type_ann_rec
-                .clone()
-                .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
-                .map(|inner| TypeAnnotation::List(Box::new(inner)));
-
-            let map_type = type_ann_rec
-                .clone()
-                .then_ignore(just(Token::Colon))
-                .then(type_ann_rec.clone())
-                .delimited_by(just(Token::LeftCurly), just(Token::RightCurly))
-                .map(|(key, value)| TypeAnnotation::Map(Box::new(key), Box::new(value)));
-
-            let base_type = paren_type.or(list_type).or(map_type).or(dotted_name);
-
-            // `maybe T` — prefix nillable.
-            let nillable = just(Token::Maybe)
-                .ignore_then(type_ann_rec.clone())
-                .map(|inner| TypeAnnotation::Nillable(Box::new(inner)));
-
-            // `error T` (loose) or `error T of E` (precise) — prefix
-            // error union. The optional postfix `of <dotted_name>`
-            // pins a specific error enum that the function is
-            // allowed to return on the error side; omitting it
-            // keeps the loose semantics where any `error enum`
-            // value may appear. The `of` clause attaches to the
-            // most recent `error` keyword, and no other type rule
-            // knows `of`, so the greedy type_ann parse followed by
-            // an optional `of` suffix is unambiguous.
-            let precise_error_enum = just(Token::Of)
-                .ignore_then(
-                    select! { Token::Ident(name) => name }
-                        .separated_by(just(Token::Dot))
-                        .at_least(1)
-                        .collect::<Vec<String>>(),
-                )
-                .or_not();
-            let error_union = just(Token::Error)
-                .ignore_then(type_ann_rec.clone())
-                .then(precise_error_enum)
-                .map(|(inner, error_enum)| TypeAnnotation::ErrorUnion {
-                    error_enum,
-                    inner: Box::new(inner),
-                });
-
-            // Try the prefix forms first so `maybe`/`error` are
-            // recognized as type modifiers, not consumed as
-            // identifiers by the bare-type fallthrough.
-            choice((nillable, error_union, base_type))
-        });
-
+        // Type-annotation parser is hoisted to the top of `program()`
+        // so it's in scope for both `expr` and `stmt`. The local
+        // `type_annotation` here is just a `:` followed by a clone of
+        // the hoisted parser.
         let type_annotation = just(Token::Colon).ignore_then(type_ann_parser.clone());
 
         // The block parser is the outer `Recursive::declare()`-d one

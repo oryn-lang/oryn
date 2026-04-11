@@ -156,6 +156,12 @@ pub enum ValueType {
     List,
     Map,
     MapKey,
+    /// A first-class top-level function reference (`Value::Function`).
+    Function,
+    /// An anonymous function or closure (`Value::Closure`). Distinct
+    /// from `Function` because closures carry an environment, but
+    /// they're callable through the same `CallValue` instruction.
+    Closure,
 }
 
 impl From<&Value<'_>> for ValueType {
@@ -174,6 +180,8 @@ impl From<&Value<'_>> for ValueType {
             Value::String(_) => ValueType::String,
             Value::List(_) => ValueType::List,
             Value::Map(_) => ValueType::Map,
+            Value::Function(_) => ValueType::Function,
+            Value::Closure(_) => ValueType::Closure,
         }
     }
 }
@@ -192,6 +200,8 @@ impl fmt::Display for ValueType {
             ValueType::List => write!(f, "list"),
             ValueType::Map => write!(f, "map"),
             ValueType::MapKey => write!(f, "map key"),
+            ValueType::Function => write!(f, "function"),
+            ValueType::Closure => write!(f, "closure"),
         }
     }
 }

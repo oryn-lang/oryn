@@ -270,6 +270,25 @@ pub(super) fn resolve_type(
                 Box::new(value_resolved),
             ))
         }
+        TypeAnnotation::Function {
+            params,
+            return_type,
+        } => {
+            let mut resolved_params: Vec<ResolvedType> = Vec::with_capacity(params.len());
+            for p in params {
+                resolved_params.push(resolve_type(p, obj_table, enum_table, modules)?);
+            }
+            // Default to `Nil` for void-returning functions, mirroring
+            // how the rest of the compiler handles "no useful return".
+            let resolved_return = match return_type {
+                Some(rt) => resolve_type(rt, obj_table, enum_table, modules)?,
+                None => ResolvedType::Nil,
+            };
+            Ok(ResolvedType::Function {
+                params: resolved_params,
+                return_type: Box::new(resolved_return),
+            })
+        }
     }
 }
 

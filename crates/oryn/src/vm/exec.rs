@@ -6,7 +6,7 @@ use gc_arena::{Arena, Gc, Rootable};
 
 use crate::compiler::{BuiltinFunction, Instruction, ListMethod};
 use crate::errors::{RuntimeError, ValueType};
-use crate::vm::value::{EnumData, ListData, MapData, MapKey, ObjData, RangeValue};
+use crate::vm::value::{ClosureData, EnumData, ListData, MapData, MapKey, ObjData, RangeValue};
 
 use super::chunk::Chunk;
 use super::value::{CallFrame, Value, VmState};
@@ -379,6 +379,22 @@ impl VM {
                                 format!("<map of {}>", data.entries.len())
                             }
                             Value::Nil => "nil".to_string(),
+                            Value::Function(idx) => {
+                                let name = chunk
+                                    .functions
+                                    .get(*idx)
+                                    .map(|f| f.name.as_str())
+                                    .unwrap_or("?");
+                                format!("<fn {name}>")
+                            }
+                            Value::Closure(c) => {
+                                let name = chunk
+                                    .functions
+                                    .get(c.fn_idx)
+                                    .map(|f| f.name.as_str())
+                                    .unwrap_or("?");
+                                format!("<closure {name}>")
+                            }
                             Value::Uninitialized => {
                                 return Err(RuntimeError::TypeError {
                                     expected: ValueType::String,
@@ -755,6 +771,22 @@ impl VM {
                                         }
                                         Value::String(s) => s.as_str().to_string(),
                                         Value::Nil => "nil".to_string(),
+                                        Value::Function(idx) => {
+                                            let name = chunk
+                                                .functions
+                                                .get(*idx)
+                                                .map(|f| f.name.as_str())
+                                                .unwrap_or("?");
+                                            format!("<fn {name}>")
+                                        }
+                                        Value::Closure(c) => {
+                                            let name = chunk
+                                                .functions
+                                                .get(c.fn_idx)
+                                                .map(|f| f.name.as_str())
+                                                .unwrap_or("?");
+                                            format!("<closure {name}>")
+                                        }
                                     })
                                     .collect();
 
@@ -1330,6 +1362,122 @@ impl VM {
                             }
                         }
                     }
+                    Instruction::MakeFunction(func_idx) => {
+                        // Push a top-level function reference. The
+                        // operand is the absolute index into
+                        // chunk.functions; no GC interaction needed.
+                        state.stack.push(Value::Function(*func_idx));
+                    }
+                    Instruction::MakeClosure(func_idx, n_captures) => {
+                        // Pop n_captures values from the stack (in
+                        // reverse-push order), reverse them so they're
+                        // in the order the compiler recorded them,
+                        // wrap into a ClosureData, and push the new
+                        // closure value onto the stack.
+                        let n = *n_captures as usize;
+                        if state.stack.len() < n {
+                            return Err(RuntimeError::StackUnderflow);
+                        }
+                        let captures: Vec<Value<'_>> = state.stack.split_off(state.stack.len() - n);
+                        let closure_data = ClosureData {
+                            fn_idx: *func_idx,
+                            captures,
+                        };
+                        let closure = Gc::new(mc, closure_data);
+                        state.stack.push(Value::Closure(closure));
+                    }
+                    Instruction::CallValue(arity) => {
+                        // Indirect call: extract the callable from
+                        // below the args, then use the same calling
+                        // convention as `Instruction::Call` — leave
+                        // the args on the operand stack so the
+                        // function prologue's `SetLocal` instructions
+                        // pop them into local slots. For closures,
+                        // append the captures on top of the args so
+                        // the prologue pops them as additional
+                        // synthetic params.
+                        let arity = *arity as usize;
+
+                        // The callable is on the stack BELOW the args.
+                        // Stack layout (top to bottom):
+                        //   [arg_{arity-1}, ..., arg_0, callable, ...]
+                        if state.stack.len() < arity + 1 {
+                            return Err(RuntimeError::StackUnderflow);
+                        }
+                        let callable_pos = state.stack.len() - arity - 1;
+
+                        // Resolve to (function index, optional captures).
+                        let (func_idx, captures): (usize, Option<Vec<Value<'_>>>) =
+                            match &state.stack[callable_pos] {
+                                Value::Function(idx) => (*idx, None),
+                                Value::Closure(c) => {
+                                    let data = &**c;
+                                    (data.fn_idx, Some(data.captures.clone()))
+                                }
+                                other => {
+                                    let span = Self::current_span_from_state(&state.frames, chunk);
+                                    return Err(RuntimeError::TypeError {
+                                        expected: ValueType::Function,
+                                        actual: ValueType::from(other),
+                                        span,
+                                    });
+                                }
+                            };
+
+                        let func = &chunk.functions[func_idx];
+
+                        // For closures, the compiled function's arity
+                        // includes the captures appended after the
+                        // user params. The user-visible arity is
+                        // func.arity minus the number of captures.
+                        let n_captures = captures.as_ref().map(|c| c.len()).unwrap_or(0);
+                        let user_visible_arity = func.arity.saturating_sub(n_captures);
+                        if arity != user_visible_arity {
+                            let span = Self::current_span_from_state(&state.frames, chunk);
+                            return Err(RuntimeError::ArityMismatch {
+                                name: func.name.clone(),
+                                expected: user_visible_arity,
+                                actual: arity,
+                                span,
+                            });
+                        }
+
+                        // Remove the callable from the operand stack
+                        // (preserving the args above it). After this,
+                        // the stack ends with [arg_0, ..., arg_{arity-1}].
+                        state.stack.remove(callable_pos);
+
+                        // For closures, push the captures on top of
+                        // the args so the prologue can pop them as
+                        // additional params. The closure's compiled
+                        // function expects the layout:
+                        //   stack: [arg_0, ..., arg_{arity-1}, cap_0, ..., cap_{n-1}]
+                        // and the prologue's reverse-order SetLocal
+                        // sequence pops them into slots
+                        //   [user_arity..user_arity+n_captures] (captures)
+                        //   [0..user_arity] (user args)
+                        if let Some(caps) = captures {
+                            for cap in caps {
+                                state.stack.push(cap);
+                            }
+                        }
+
+                        // Standard frame setup: advance the caller's
+                        // ip, reserve locals, push the new frame.
+                        state.frames[frame_idx].ip += 1;
+
+                        let local_base = state.locals.len();
+                        state
+                            .locals
+                            .resize(local_base + func.num_locals, Value::Uninitialized);
+                        state.frames.push(CallFrame {
+                            function_idx: Some(func_idx),
+                            ip: 0,
+                            local_base,
+                        });
+
+                        continue;
+                    }
                 }
 
                 state.frames[frame_idx].ip += 1;
@@ -1433,6 +1581,22 @@ impl VM {
             Value::Map(map_ref) => {
                 let data = map_ref.borrow();
                 format!("<map of {}>", data.entries.len())
+            }
+            Value::Function(idx) => {
+                let name = chunk
+                    .functions
+                    .get(*idx)
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("?");
+                format!("<fn {name}>")
+            }
+            Value::Closure(c) => {
+                let name = chunk
+                    .functions
+                    .get(c.fn_idx)
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("?");
+                format!("<closure {name}>")
             }
             Value::Uninitialized => "<uninitialized>".to_string(),
         }

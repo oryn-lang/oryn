@@ -43,6 +43,26 @@ pub(crate) enum Value<'gc> {
     /// future payload mutation but isn't currently used in
     /// Slice 1+2 — payload extraction lands in Slice 3.
     Enum(Gc<'gc, RefLock<EnumData<'gc>>>),
+    /// A first-class top-level function reference. Carries the
+    /// absolute index into `Chunk.functions`. No GC needed: the
+    /// index is just a `usize`, and the function's bytecode lives
+    /// in the chunk (not the GC arena).
+    ///
+    /// `Function` and `Closure` are distinct because closures
+    /// additionally carry captured values; a bare function
+    /// reference has no environment to manage. The CallValue
+    /// instruction handles both cases — see `vm/exec.rs`.
+    Function(usize),
+    /// An anonymous function or closure that may capture outer
+    /// locals at construction time. The `ClosureData` carries
+    /// both the synthetic function index and the snapshot of
+    /// captured values; the snapshot is taken when `MakeClosure`
+    /// runs, so each closure instance has its own immutable
+    /// environment.
+    ///
+    /// GC-managed because captures may transitively hold heap
+    /// values (strings, lists, structs, enums, other closures).
+    Closure(Gc<'gc, ClosureData<'gc>>),
 }
 
 /// Runtime storage for a list value. Mirrors [`ObjData`] — the fields
@@ -104,6 +124,34 @@ pub(crate) struct RangeValue {
     pub current: i32,
     pub end: i32,
     pub inclusive: bool,
+}
+
+/// Runtime storage for a closure value. Carries the synthetic
+/// function index plus the snapshot of values captured at the
+/// closure's construction site. Captures are immutable inside the
+/// closure body — the compiler enforces this with a capture-
+/// mutability check during anonymous-function compilation.
+///
+/// At call time the VM lays out the closure's locals as
+/// `[user_param_0, ..., user_param_{arity-1}, capture_0, ...,
+/// capture_{n-1}]` — the captures are appended after the user
+/// params and accessed via the same `GetLocal` machinery. The
+/// compiler arranges for identifier references inside the closure
+/// body to resolve to the right local index.
+#[derive(Debug, PartialEq, Collect)]
+#[collect(no_drop)]
+pub(crate) struct ClosureData<'gc> {
+    /// Absolute index of the synthetic compiled function in
+    /// `Chunk.functions`. The compiler generates a fresh function
+    /// per anonymous-function expression and registers it with a
+    /// generated name (`@anon@<span>` or similar) so the existing
+    /// `Call` infrastructure can dispatch to it without changes.
+    pub fn_idx: usize,
+    /// Captured outer-local values, in the order the compiler
+    /// recorded them during the capture pass. The closure body
+    /// addresses these via local slots starting at the user
+    /// param count.
+    pub captures: Vec<Value<'gc>>,
 }
 
 /// A call frame on the VM's call stack. Each function invocation

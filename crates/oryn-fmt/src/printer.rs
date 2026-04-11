@@ -495,8 +495,13 @@ impl<'a> Formatter<'a> {
                 });
                 self.write_expression(expr, PREC_UNARY);
             }
-            Expression::Call { name, args } => {
-                self.out.push_str(name);
+            Expression::Call { target, args } => {
+                // Write the target with postfix precedence so a
+                // non-trivial target gets the parens it needs (e.g.
+                // `(make_handler())(arg)`). For the common case
+                // where the target is a bare identifier, no parens
+                // are added.
+                self.write_expression(target, PREC_POSTFIX);
                 self.out.push('(');
                 self.write_args(args);
                 self.out.push(')');
@@ -639,6 +644,33 @@ impl<'a> Formatter<'a> {
                     self.write_block_expression(else_body);
                 }
             }
+            Expression::AnonymousFunction {
+                params,
+                return_type,
+                body,
+            } => {
+                self.out.push_str("fn(");
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        self.out.push_str(", ");
+                    }
+                    if p.is_mut {
+                        self.out.push_str("mut ");
+                    }
+                    self.out.push_str(&p.name);
+                    if let Some(ann) = &p.type_ann {
+                        self.out.push_str(": ");
+                        self.write_type_name(ann);
+                    }
+                }
+                self.out.push(')');
+                if let Some(rt) = return_type {
+                    self.out.push_str(" -> ");
+                    self.write_type_name(rt);
+                }
+                self.out.push(' ');
+                self.write_block_expression(body);
+            }
         }
 
         if needs_parens {
@@ -675,6 +707,23 @@ impl<'a> Formatter<'a> {
                 if let Some(path) = error_enum {
                     self.out.push_str(" of ");
                     self.out.push_str(&path.join("."));
+                }
+            }
+            TypeAnnotation::Function {
+                params,
+                return_type,
+            } => {
+                self.out.push_str("fn(");
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        self.out.push_str(", ");
+                    }
+                    self.write_type_name(p);
+                }
+                self.out.push(')');
+                if let Some(rt) = return_type {
+                    self.out.push_str(" -> ");
+                    self.write_type_name(rt);
                 }
             }
             TypeAnnotation::List(inner) => {

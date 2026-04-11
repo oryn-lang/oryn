@@ -20,6 +20,24 @@ fn format_type_annotation(ann: &TypeAnnotation) -> String {
             ),
             None => format!("error {}", format_type_annotation(inner)),
         },
+        TypeAnnotation::Function {
+            params,
+            return_type,
+        } => {
+            let mut s = String::from("fn(");
+            for (i, p) in params.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&format_type_annotation(p));
+            }
+            s.push(')');
+            if let Some(rt) = return_type {
+                s.push_str(" -> ");
+                s.push_str(&format_type_annotation(rt));
+            }
+            s
+        }
         TypeAnnotation::List(inner) => format!("[{}]", format_type_annotation(inner)),
         TypeAnnotation::Map(key, value) => {
             format!(
@@ -328,8 +346,18 @@ impl AstVisitor for LspVisitor<'_> {
                 self.register_reference(name, &expr.span);
             }
 
-            Expression::Call { name, args } => {
-                self.register_reference(name, &expr.span);
+            Expression::Call { target, args } => {
+                // For direct calls (target is a bare identifier),
+                // register the function name as a reference so
+                // go-to-definition / find-references work. For
+                // indirect calls through function values, walk the
+                // target normally so any nested references inside
+                // it (e.g., field accesses) are still tracked.
+                if let Expression::Ident(name) = &target.node {
+                    self.register_reference(name, &target.span);
+                } else {
+                    self.visit_expr(target);
+                }
                 for arg in args {
                     self.visit_expr(arg);
                 }

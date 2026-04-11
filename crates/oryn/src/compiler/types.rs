@@ -131,6 +131,24 @@ pub enum Instruction {
     CallMethod(String, usize),
     /// Call a builtin function identified at compile time.
     CallBuiltin(BuiltinFunction, usize),
+    /// Push a top-level function reference as a `Value::Function(idx)`.
+    /// Emitted when a bare identifier resolves to a top-level function
+    /// in a value position (e.g., `let f = double` or `xs.map(double)`).
+    /// No GC interaction — the operand is a copy.
+    MakeFunction(usize),
+    /// Pop `n_captures` values from the stack and build a closure value
+    /// `Value::Closure { fn_idx, captures }` wrapping the synthetic
+    /// anonymous function at index `fn_idx`. The captures are popped
+    /// in reverse-push order and stored in the closure's environment
+    /// in the order the compiler recorded them during the capture pass.
+    MakeClosure(usize, u8),
+    /// Indirect call: pop `arity` arguments and the callable from
+    /// the stack, dispatch to either `Value::Function(idx)` (no
+    /// captures) or `Value::Closure(c)` (captures laid into local
+    /// slots after the user params). Sets up a fresh `CallFrame` and
+    /// jumps to the function's bytecode. Type errors at runtime if
+    /// the popped value isn't function-shaped.
+    CallValue(u8),
     Pop,
     JumpIfFalse(usize),
     Jump(usize),
@@ -527,6 +545,24 @@ pub(crate) enum ResolvedType {
     /// `{K: V}` — a homogeneous map whose key/value types are tracked
     /// statically but erased at runtime.
     Map(Box<ResolvedType>, Box<ResolvedType>),
+    /// `fn(int, int) -> int` — a function type. The same shape is used
+    /// for top-level function references, anonymous-function values,
+    /// and closures: the type only describes the user-visible param
+    /// list and return type. Captures (for closures) live on the
+    /// runtime value, not in the type.
+    ///
+    /// Compatibility is structural and invariant: two `Function`
+    /// types match iff their param lists are pointwise equal and
+    /// their return types are equal. No covariance/contravariance
+    /// for now — easy to relax later if needed.
+    ///
+    /// Void-returning functions use `Box::new(ResolvedType::Nil)`
+    /// for the return type, mirroring the rest of the compiler's
+    /// "Nil = no useful return value" convention.
+    Function {
+        params: Vec<ResolvedType>,
+        return_type: Box<ResolvedType>,
+    },
     /// Internal-only nil type. Used for contextual typing of the `nil`
     /// literal. Not user-declarable.
     Nil,
@@ -626,6 +662,26 @@ impl ResolvedType {
             ResolvedType::List(inner) => format!("[{}]", inner.display_name()).into(),
             ResolvedType::Map(key, value) => {
                 format!("{{{}: {}}}", key.display_name(), value.display_name()).into()
+            }
+            ResolvedType::Function {
+                params,
+                return_type,
+            } => {
+                let mut s = String::from("fn(");
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&p.display_name());
+                }
+                s.push(')');
+                // Omit `-> nil` for void-returning functions; that's
+                // the default and the source syntax also omits it.
+                if !matches!(return_type.as_ref(), ResolvedType::Nil) {
+                    s.push_str(" -> ");
+                    s.push_str(&return_type.display_name());
+                }
+                s.into()
             }
             ResolvedType::Nil => "nil".into(),
             ResolvedType::Unknown => "unknown".into(),

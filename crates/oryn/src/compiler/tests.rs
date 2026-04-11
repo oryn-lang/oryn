@@ -37,7 +37,7 @@ fn expression_statements_are_popped() {
 #[test]
 fn builtin_calls_are_lowered_to_typed_builtins() {
     let stmts = vec![spanned(Statement::Expression(spanned(Expression::Call {
-        name: "print".to_string(),
+        target: Box::new(spanned(Expression::Ident("print".to_string()))),
         args: vec![spanned(Expression::Int(1))],
     })))];
 

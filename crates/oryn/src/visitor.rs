@@ -231,8 +231,16 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
             visitor.visit_expr(operand);
         }
 
-        Expression::Call { name, args } => {
-            visitor.on_reference(name, &expr.span);
+        Expression::Call { target, args } => {
+            // If the target is a bare identifier (the common case for
+            // direct function calls), report it as a reference so the
+            // LSP can find call sites. For indirect calls through
+            // function values, the target gets walked normally below.
+            if let Expression::Ident(name) = &target.node {
+                visitor.on_reference(name, &target.span);
+            } else {
+                visitor.visit_expr(target);
+            }
             for arg in args {
                 visitor.visit_expr(arg);
             }
@@ -317,6 +325,22 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
             if let Some(else_body) = else_body {
                 visitor.visit_expr(else_body);
             }
+        }
+
+        Expression::AnonymousFunction { params, body, .. } => {
+            // Anonymous functions get their own scope: params are
+            // bound inside the body. Captures from the outer scope
+            // resolve through normal lexical lookup, but the visitor
+            // doesn't enforce read-only-on-captures — that's a
+            // compiler-side check. The expression's own span is used
+            // as the binding location for params since `Param` itself
+            // doesn't carry a span.
+            visitor.enter_scope();
+            for param in params {
+                visitor.on_define(&param.name, &expr.span, &expr.span);
+            }
+            visitor.visit_expr(body);
+            visitor.exit_scope();
         }
     }
 }

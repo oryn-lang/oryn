@@ -623,6 +623,14 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
                 let s = if *arity == 1 { "arg" } else { "args" };
                 format!("CallBuiltin {} ({arity} {s})", builtin.name())
             }
+            Instruction::MakeFunction(idx) => format!("MakeFunction fn#{idx}"),
+            Instruction::MakeClosure(idx, n_captures) => {
+                format!("MakeClosure fn#{idx} ({n_captures} captures)")
+            }
+            Instruction::CallValue(arity) => {
+                let s = if *arity == 1 { "arg" } else { "args" };
+                format!("CallValue ({arity} {s})")
+            }
             Instruction::Pop => "Pop".to_string(),
             Instruction::JumpIfFalse(target) => format!("JumpIfFalse -> {target:04}"),
             Instruction::Jump(target) => format!("Jump -> {target:04}"),
