@@ -833,10 +833,11 @@ fn field_assignment_root_name(expr: &Expression) -> Option<&str> {
 /// after "cannot " — e.g. "reassign", "mutate field of",
 /// "call mutating method `push` on".
 pub(super) fn immutability_error(name: &str, kind: &BindingKind, op: &str) -> String {
-    // `self` inside a non-`mut fn` method is bound with kind `Param`
-    // for enforcement purposes, but the user-facing message should
-    // explain the actual rule (the method is not declared `mut fn`)
-    // rather than calling `self` a parameter.
+    // `self` inside a method that takes plain `self` (not `mut self`)
+    // is bound with kind `Param` for enforcement purposes, but the
+    // user-facing message should explain the actual rule (the
+    // method's receiver isn't declared `mut self`) rather than
+    // calling `self` a parameter.
     if name == "self" {
         return format!(
             "cannot {op} `self` in a non-mutating method; declare the method's receiver as `mut self` to allow mutation"

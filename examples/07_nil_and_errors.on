@@ -44,18 +44,20 @@ print("fallback = {fallback}")  // → default  (missing is nil)
 let points = no_score orelse 0
 print("points   = {points}")  // → 0
 
-// Nested coalescing: since `a orelse b` returns T (non-nillable), you
-// cannot chain directly like `a orelse b orelse c`. Instead, nest with
-// parentheses so the inner coalesce still sees a nillable left side.
+// Chaining: `orelse` is right-associative, so a chain of fallbacks
+// reads naturally and short-circuits at the first non-nil source.
+// Each prior result is still nillable when the next `orelse` sees
+// it; only the rightmost source needs to be plain T (the final
+// fallback).
 let first: int? = nil
 let second: int? = nil
 let third: int? = 7
-let pick = first orelse (second orelse (third orelse 0))
+let pick = first orelse second orelse third orelse 0
 print("pick = {pick}")  // → 7  (first two are nil)
 
 let all_nil: int? = nil
 let also_nil: int? = nil
-let last_resort = all_nil orelse (also_nil orelse 99)
+let last_resort = all_nil orelse also_nil orelse 99
 print("last_resort = {last_resort}")  // → 99  (everything was nil)
 
 // ── 3. if-let unwrapping ────────────────────────────────────────────

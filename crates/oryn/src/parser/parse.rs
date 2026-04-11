@@ -459,20 +459,32 @@ fn program<'src>() -> impl Parser<
             binop_fold,
         );
 
-        // orelse (nil coalescing — loosest binary operator)
-        let coalesce = or.clone().foldl(
-            just(Token::Orelse).then(or).repeated(),
-            |left, (_tok, right)| {
-                let span = left.span.start..right.span.end;
+        // orelse (nil coalescing — loosest binary operator).
+        //
+        // Right-associative: `a orelse b orelse c` parses as
+        // `a orelse (b orelse c)`. Left-associative would type-error
+        // because `(a orelse b)` produces a non-nillable T, and the
+        // outer `orelse` would then have a non-nillable left operand.
+        // The natural reading of a fallback chain is right-to-left,
+        // and so is its type rule.
+        //
+        // Implementation: parse `(or orelse)*` pairs followed by a
+        // final `or`, then `foldr` from the right so each new
+        // Coalesce wraps the accumulated rest as its right child.
+        let coalesce = or
+            .clone()
+            .then_ignore(just(Token::Orelse))
+            .repeated()
+            .foldr(or.clone().boxed(), |left, acc| {
+                let span = left.span.start..acc.span.end;
                 Spanned {
                     node: Expression::Coalesce {
                         left: Box::new(left),
-                        right: Box::new(right),
+                        right: Box::new(acc),
                     },
                     span,
                 }
-            },
-        );
+            });
 
         coalesce.labelled("expression").boxed()
     });

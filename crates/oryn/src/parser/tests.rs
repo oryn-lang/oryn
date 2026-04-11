@@ -326,18 +326,23 @@ fn parses_coalesce_expression() {
 }
 
 #[test]
-fn coalesce_is_left_associative() {
-    // a orelse b orelse c → Coalesce(Coalesce(a, b), c)
+fn coalesce_is_right_associative() {
+    // `a orelse b orelse c` parses as `a orelse (b orelse c)`
+    // → Coalesce(a, Coalesce(b, c)). Right-associativity is the
+    // only sensible direction for nil-coalescing chains: each
+    // Coalesce produces a non-nillable result, so a left-associative
+    // fold would mean the second `orelse` had a non-nillable left
+    // operand and would fail to type-check.
     let stmts = parse_ok("a orelse b orelse c");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::Coalesce { left, right },
             ..
         }) => {
-            assert!(matches!(left.node, Expression::Coalesce { .. }));
-            assert!(matches!(right.node, Expression::Ident(_)));
+            assert!(matches!(left.node, Expression::Ident(_)));
+            assert!(matches!(right.node, Expression::Coalesce { .. }));
         }
-        other => panic!("expected Coalesce(Coalesce, Ident), got {other:?}"),
+        other => panic!("expected Coalesce(Ident, Coalesce), got {other:?}"),
     }
 }
 

@@ -1576,3 +1576,67 @@ fn mut_h3_signature_mut_must_match_implementation() {
         "expected sig mutability mismatch, got {errors:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// W9 — `orelse` is right-associative so chains compose naturally.
+//
+// Before this fix, `a orelse b orelse c` parsed left-associatively as
+// `(a orelse b) orelse c`, which type-checked the inner expression as
+// non-nillable T and then rejected the outer `orelse` for having a
+// non-nillable left operand. The user had to write
+// `a orelse (b orelse c)` explicitly. The parser is now
+// right-associative, so the natural form works.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn orelse_chain_three_elements_compiles_and_runs() {
+    // All three sources are nil except the last; the chain should
+    // produce the last value (3). Under the old left-associative
+    // rule this would not even compile.
+    let chunk = crate::Chunk::compile(
+        "fn first() -> int? { rn nil }\n\
+         fn second() -> int? { rn nil }\n\
+         fn third() -> int { rn 3 }\n\
+         let x: int = first() orelse second() orelse third()\n\
+         assert(x == 3)",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn orelse_chain_short_circuits_at_first_non_nil() {
+    // The chain stops at the first non-nil source. With `first`
+    // returning a real value, `second` and `third` should not be
+    // observable in the result.
+    let chunk = crate::Chunk::compile(
+        "fn first() -> int? { rn 1 }\n\
+         fn second() -> int? { rn 2 }\n\
+         fn third() -> int { rn 3 }\n\
+         let x: int = first() orelse second() orelse third()\n\
+         assert(x == 1)",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn orelse_chain_four_elements() {
+    // Pin associativity beyond the trivial 3-case. Four nillable
+    // sources, only the third has a value. Right-associative
+    // grouping `a orelse (b orelse (c orelse d))` short-circuits at
+    // the first non-nil reachable from the right.
+    let chunk = crate::Chunk::compile(
+        "fn a() -> int? { rn nil }\n\
+         fn b() -> int? { rn nil }\n\
+         fn c() -> int? { rn 7 }\n\
+         fn d() -> int { rn 99 }\n\
+         let x: int = a() orelse b() orelse c() orelse d()\n\
+         assert(x == 7)",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}

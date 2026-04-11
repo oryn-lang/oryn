@@ -17,5 +17,8 @@ cargo fmt --all -- --check
 echo "[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings
 
+echo "[pre-commit] oryn fmt examples/"
+cargo run --quiet --bin oryn -- fmt examples/
+
 echo "[pre-commit] oryn check examples/"
 cargo run --quiet --bin oryn -- check examples/

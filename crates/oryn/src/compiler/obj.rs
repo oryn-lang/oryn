@@ -685,8 +685,8 @@ impl Compiler {
             // its param/return shape already matched when the parent
             // type was compiled, so skip the shape recheck. The mut
             // agreement check below still runs, because the inherited
-            // method may have a different `mut fn` status from what
-            // the required signature wants.
+            // method may take a `self` of different mutability from
+            // what the required signature wants.
 
             // Check `mut fn` agreement. A `mut fn` signature must be
             // implemented by a `mut fn` method, and a plain `fn`
