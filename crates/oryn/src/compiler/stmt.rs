@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::OrynError;
 use crate::compiler::types::ResolvedType;
 use crate::parser::{Expression, Span, Spanned, Statement, TypeAnnotation};
@@ -289,103 +287,21 @@ impl Compiler {
                 }
             }
 
-            // -- Functions --
-            Statement::Function {
-                name,
-                params,
-                body,
-                return_type,
-                is_pub,
-            } => {
-                // Resolve param types once, then derive both the HashMap
-                // (for the closure) and the Vec (for FunctionBodyConfig).
-                let resolved_params: HashMap<String, ResolvedType> = params
-                    .iter()
-                    .map(|p| {
-                        let t = p
-                            .type_ann
-                            .as_ref()
-                            .map(|a| match self.resolve_type_annotation(a) {
-                                Ok(t) => t,
-                                Err(msg) => {
-                                    self.output
-                                        .errors
-                                        .push(OrynError::compiler(stmt_span.clone(), msg));
-                                    ResolvedType::Unknown
-                                }
-                            })
-                            .unwrap_or(ResolvedType::Unknown);
-                        (p.name.clone(), t)
-                    })
-                    .collect();
-
-                let param_types: Vec<ResolvedType> = params
-                    .iter()
-                    .map(|p| {
-                        resolved_params
-                            .get(&p.name)
-                            .cloned()
-                            .unwrap_or(ResolvedType::Unknown)
-                    })
-                    .collect();
-
-                let param_fn = move |p: &crate::parser::Param| {
-                    let resolved = resolved_params
-                        .get(&p.name)
-                        .cloned()
-                        .unwrap_or(ResolvedType::Unknown);
-                    // `mut x: T` opts the parameter into mutability.
-                    // Without `mut`, top-level function params are
-                    // always immutable in Oryn (no opt-out at the
-                    // call site).
-                    let kind = if p.is_mut {
-                        BindingKind::MutParam
-                    } else {
-                        BindingKind::Param
-                    };
-                    (kind, resolved)
-                };
-
-                for param in &params {
-                    if param.type_ann.is_none() {
-                        self.output.errors.push(OrynError::compiler(
-                            stmt_span.clone(),
-                            format!("parameter `{}` requires a type annotation", param.name),
-                        ));
-                    }
-                }
-
-                let return_resolved = match &return_type {
-                    Some(rt) => match self.resolve_type_annotation(rt) {
-                        Ok(t) => t,
-                        Err(msg) => {
-                            self.output
-                                .errors
-                                .push(OrynError::compiler(stmt_span.clone(), msg));
-                            ResolvedType::Unknown
-                        }
-                    },
-                    None => ResolvedType::Unknown,
-                };
-
-                self.output
-                    .type_map
-                    .insert(stmt_span.clone(), &return_resolved);
-
-                self.compile_function_body(FunctionBodyConfig {
-                    name: &name,
-                    params: &params,
-                    param_types,
-                    param_local_fn: &param_fn,
-                    self_name: Some(&name),
-                    body,
-                    span: &stmt_span,
-                    return_type: Some(return_resolved),
-                    is_pub,
-                    is_mut: false,
-                    pre_allocated_local_idx: None,
-                });
+            // -- Type and function declarations --
+            //
+            // Top-level type and function declarations are hoisted out
+            // of source order by Phase A in `compile()` (see
+            // `compile.rs`). Phase A handles the full pipeline for
+            // them: signature resolution, slot reservation,
+            // placeholder seeding, and body compilation. They never
+            // reach `compile_stmt`, which only walks the source-
+            // ordered remainder of the module body.
+            Statement::Function { .. } | Statement::ObjDef { .. } | Statement::EnumDef { .. } => {
+                unreachable!(
+                    "type and function declarations are handled in Phase A; compile_stmt only sees the source-ordered remainder"
+                );
             }
+
             Statement::Return(Some(expr)) => {
                 let return_type = self.compile_expr(expr);
 
@@ -399,26 +315,6 @@ impl Compiler {
             Statement::Return(None) => {
                 self.emit(Instruction::PushInt(0), &stmt_span);
                 self.emit(Instruction::Return, &stmt_span);
-            }
-
-            // -- Objects --
-            Statement::ObjDef {
-                name,
-                fields,
-                methods,
-                uses,
-                is_pub,
-            } => {
-                self.compile_obj_def(name, fields, methods, uses, &stmt_span, is_pub);
-            }
-
-            Statement::EnumDef {
-                name,
-                variants,
-                is_pub,
-                is_error,
-            } => {
-                self.compile_enum_def(name, variants, &stmt_span, is_pub, is_error);
             }
 
             // -- Control flow --

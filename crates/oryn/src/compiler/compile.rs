@@ -1,12 +1,15 @@
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::OrynError;
-use crate::compiler::types::{ModuleTable, ObjDefInfo, ResolvedType};
+use crate::compiler::types::{EnumDefInfo, ModuleTable, ObjDefInfo, ResolvedType};
 use crate::native::NativeRegistry;
 use crate::parser::{Span, Spanned, Statement, TypeAnnotation};
 
-use super::tables::{EnumTable, FunctionSignature, FunctionTable, Locals, ObjTable};
-use super::types::{CompilerOutput, Instruction};
+use super::func::FunctionBodyConfig;
+use super::obj::PreparedObjDef;
+use super::tables::{BindingKind, EnumTable, FunctionSignature, FunctionTable, Locals, ObjTable};
+use super::types::{CompiledFunction, CompilerOutput, Instruction};
 
 // ---------------------------------------------------------------------------
 // Loop tracking
@@ -61,6 +64,17 @@ pub(super) struct Compiler {
     /// the `Chunk` so the VM can dispatch by index without needing
     /// to rebuild it.
     pub(super) native: Arc<NativeRegistry>,
+    /// Names of obj defs that have been fully prepared (flattened
+    /// fields, reserved method slots, signatures resolved). Phase A
+    /// seeds placeholder entries in `obj_table` for every obj def in
+    /// the module so that field-type annotations can forward-reference
+    /// any named type, but `use` flattening must only read from
+    /// parents that have been fully prepared — otherwise inherited
+    /// fields/methods would come back empty. This set tracks which
+    /// parents are safe to flatten from. Populated by
+    /// [`super::obj::Compiler::prepare_obj_def`] as it finishes each
+    /// obj def.
+    pub(super) prepared_obj_names: HashSet<String>,
 }
 
 impl Compiler {
@@ -83,7 +97,64 @@ impl Compiler {
             current_module_path,
             current_fn_is_mut: false,
             native,
+            prepared_obj_names: HashSet::new(),
         }
+    }
+
+    /// Seed a placeholder obj def in the obj_table and output so that
+    /// forward references to this type (by name, in field annotations,
+    /// or in parameter/return types) resolve successfully during
+    /// Phase A. The placeholder is replaced in-place once
+    /// [`super::obj::Compiler::prepare_obj_def`] runs for the obj.
+    /// Pass the `is_pub` flag through so cross-module visibility checks
+    /// see the right answer even before the real def lands.
+    pub(super) fn seed_obj_placeholder(&mut self, name: String, is_pub: bool) {
+        use std::collections::HashMap;
+        self.obj_table.register(
+            name.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            Vec::new(),
+            is_pub,
+        );
+        self.output.obj_defs.push(ObjDefInfo {
+            name,
+            fields: Vec::new(),
+            field_types: Vec::new(),
+            field_is_pub: Vec::new(),
+            methods: HashMap::new(),
+            static_methods: HashMap::new(),
+            method_is_pub: HashMap::new(),
+            static_method_is_pub: HashMap::new(),
+            method_signatures: HashMap::new(),
+            static_method_signatures: HashMap::new(),
+            signatures: Vec::new(),
+            is_pub,
+        });
+        debug_assert_eq!(self.obj_table.defs.len(), self.output.obj_defs.len());
+    }
+
+    /// Seed a placeholder enum def in the enum_table and output so that
+    /// forward references resolve during Phase A. Finalized in-place by
+    /// [`Self::finalize_enum_def`] once variant payload types can be
+    /// resolved against the fully-seeded type environment.
+    pub(super) fn seed_enum_placeholder(&mut self, name: String, is_pub: bool, is_error: bool) {
+        self.enum_table
+            .register(name.clone(), Vec::new(), is_pub, is_error);
+        self.output.enum_defs.push(EnumDefInfo {
+            name,
+            variants: Vec::new(),
+            is_pub,
+            is_error,
+        });
+        debug_assert_eq!(self.enum_table.defs.len(), self.output.enum_defs.len());
     }
 
     /// True if the current compilation unit is an imported module (not the
@@ -115,6 +186,26 @@ impl Compiler {
 /// `current_module_path` is empty for the entry file and the dotted
 /// import path for an imported module — used to gate module-only
 /// behaviors and to enforce cross-module privacy.
+///
+/// Compilation runs in two phases:
+///
+/// **Phase A (type environment)** seeds placeholder entries in the obj
+/// and enum tables for every type declared in the module, then resolves
+/// enum variant payload types and runs
+/// [`Compiler::prepare_obj_def`] on every obj def. After Phase A the obj
+/// table, enum table, and output's obj/enum def vectors all hold the
+/// final field and method signature information for every declared type.
+/// Method body bytecode has not been emitted yet, but every function
+/// slot has been reserved so callers can emit `Call(abs_idx, arity)`
+/// against a stable index. This pass gives field type annotations and
+/// method signatures visibility into every type in the module, not just
+/// those declared above them in source order.
+///
+/// **Phase B (bodies and module-level code)** compiles each obj def's
+/// method bodies into their pre-allocated slots, then walks the
+/// remaining top-level statements in source order so module-level
+/// initializers (`let`/`val`), test blocks, and top-level expressions
+/// preserve their execution order semantics.
 pub(crate) fn compile(
     statements: Vec<Spanned<Statement>>,
     modules: ModuleTable,
@@ -126,15 +217,467 @@ pub(crate) fn compile(
     let mut c = Compiler::new(fn_base_offset, obj_base_offset, current_module_path, native);
     c.modules = modules;
 
-    for stmt in statements {
-        let fn_count_before = c.output.functions.len();
-        let obj_count_before = c.output.obj_defs.len();
+    // ------------------------------------------------------------------
+    // Phase A — seed type environment
+    // ------------------------------------------------------------------
 
+    // A0/A1: Walk statements once, bucket enum defs, obj defs, and
+    // top-level functions for Phase A processing, and forward every
+    // other statement to Phase B. Each enum/obj def also gets a
+    // placeholder registered in its table so that forward references
+    // from later Phase A sub-passes resolve by name.
+    //
+    // Duplicate top-level type or function names are rejected here.
+    // Oryn has no overloading, so two `fn foo` declarations (or two
+    // `struct Foo`, or two `enum Foo`) can never both be reachable —
+    // under Phase A's name-keyed table seeding the second declaration
+    // would silently shadow the first, producing surprising call
+    // resolution at every earlier call site. Catch the collision now
+    // and emit a clear error instead.
+    let mut enum_preps: Vec<EnumPrep> = Vec::new();
+    let mut obj_preps: Vec<ObjPrep> = Vec::new();
+    let mut fn_data: Vec<FnData> = Vec::new();
+    let mut phase_b_stmts: Vec<Spanned<Statement>> = Vec::new();
+    let mut seen_type_names: HashSet<String> = HashSet::new();
+    let mut seen_fn_names: HashSet<String> = HashSet::new();
+
+    for stmt in statements {
+        let Spanned { node, span } = stmt;
+        match node {
+            Statement::EnumDef {
+                name,
+                variants,
+                is_pub,
+                is_error,
+            } => {
+                if !seen_type_names.insert(name.clone()) {
+                    c.output.errors.push(OrynError::compiler(
+                        span,
+                        format!("duplicate type declaration `{name}` in this module"),
+                    ));
+                    continue;
+                }
+                c.seed_enum_placeholder(name.clone(), is_pub, is_error);
+                enum_preps.push(EnumPrep {
+                    span,
+                    name,
+                    variants,
+                    is_pub,
+                    is_error,
+                });
+            }
+            Statement::ObjDef {
+                name,
+                fields,
+                methods,
+                uses,
+                is_pub,
+            } => {
+                if !seen_type_names.insert(name.clone()) {
+                    c.output.errors.push(OrynError::compiler(
+                        span,
+                        format!("duplicate type declaration `{name}` in this module"),
+                    ));
+                    continue;
+                }
+                c.seed_obj_placeholder(name.clone(), is_pub);
+                obj_preps.push(ObjPrep {
+                    span,
+                    name,
+                    fields,
+                    methods,
+                    uses,
+                    is_pub,
+                });
+            }
+            Statement::Function {
+                name,
+                params,
+                body,
+                return_type,
+                is_pub,
+            } => {
+                if !seen_fn_names.insert(name.clone()) {
+                    c.output.errors.push(OrynError::compiler(
+                        span,
+                        format!("duplicate top-level function `{name}` in this module"),
+                    ));
+                    continue;
+                }
+                fn_data.push(FnData {
+                    span,
+                    name,
+                    params,
+                    body,
+                    return_type,
+                    is_pub,
+                });
+            }
+            _ => phase_b_stmts.push(Spanned { node, span }),
+        }
+    }
+
+    // A2: Resolve enum variant payload types into the seeded
+    // placeholders. Cross-references between enums work because every
+    // enum name is already in `enum_table` from the seeding pass.
+    for ep in enum_preps {
+        let EnumPrep {
+            span,
+            name,
+            variants,
+            is_pub,
+            is_error,
+        } = ep;
+        c.finalize_enum_def(name, variants, &span, is_pub, is_error);
+    }
+
+    // A3: Topologically sort obj defs by their single-segment `use`
+    // dependencies, then prepare each in dependency order. This lifts
+    // the definition-order requirement for composition: `struct Guard {
+    // use Health }` may appear anywhere in the module relative to
+    // `struct Health`. Cycles (e.g. `A use B; B use A`) produce a
+    // `use cycle` error for each member of the cycle and are skipped
+    // in the prepare loop below — their placeholders stay empty.
+    //
+    // Cross-module `use` paths (multi-segment) never contribute to the
+    // local DAG because their parents live in other compilation units
+    // that are already fully compiled by the time this function runs.
+    // Undefined single-segment `use` targets also don't contribute to
+    // the DAG; prepare_obj_def's `prepared_obj_names` check emits the
+    // "undefined type" error for those.
+    let obj_count = obj_preps.len();
+    let name_to_idx: HashMap<String, usize> = obj_preps
+        .iter()
+        .enumerate()
+        .map(|(i, op)| (op.name.clone(), i))
+        .collect();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); obj_count];
+    let mut in_degree: Vec<usize> = vec![0; obj_count];
+    for (idx, op) in obj_preps.iter().enumerate() {
+        // A HashSet prevents a double-counted edge when the same obj
+        // uses the same parent twice (which is itself a user error but
+        // shouldn't corrupt in_degree counting).
+        let mut seen: HashSet<usize> = HashSet::new();
+        for used in &op.uses {
+            if used.len() == 1
+                && let Some(&parent_idx) = name_to_idx.get(&used[0])
+                && parent_idx != idx
+                && seen.insert(parent_idx)
+            {
+                children[parent_idx].push(idx);
+                in_degree[idx] += 1;
+            }
+        }
+    }
+
+    // Kahn's algorithm.
+    let mut queue: VecDeque<usize> = (0..obj_count).filter(|&i| in_degree[i] == 0).collect();
+    let mut topo_order: Vec<usize> = Vec::with_capacity(obj_count);
+    while let Some(idx) = queue.pop_front() {
+        topo_order.push(idx);
+        for &child in &children[idx] {
+            in_degree[child] -= 1;
+            if in_degree[child] == 0 {
+                queue.push_back(child);
+            }
+        }
+    }
+
+    // Any obj still carrying a non-zero in-degree belongs to a cycle.
+    // Emit a `use cycle` error for each, listing the other cyclic
+    // parents the obj depends on so the message is actionable.
+    if topo_order.len() < obj_count {
+        let in_cycle: HashSet<usize> = (0..obj_count).filter(|&i| in_degree[i] > 0).collect();
+        for &idx in &in_cycle {
+            let op = &obj_preps[idx];
+            let cyclic_parents: Vec<String> = op
+                .uses
+                .iter()
+                .filter_map(|used| {
+                    if used.len() != 1 {
+                        return None;
+                    }
+                    let parent_idx = name_to_idx.get(&used[0])?;
+                    if in_cycle.contains(parent_idx) {
+                        Some(used[0].clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            c.output.errors.push(OrynError::compiler(
+                op.span.clone(),
+                format!(
+                    "object `{}` forms a `use` cycle with: {}",
+                    op.name,
+                    cyclic_parents.join(", ")
+                ),
+            ));
+        }
+    }
+
+    // Prepare obj defs in topological order. Cyclic entries are left
+    // untouched — their placeholder obj_table entries stay empty, and
+    // Phase B2 skips them because they were never pushed into
+    // `prepared_objs`.
+    let mut obj_preps_opts: Vec<Option<ObjPrep>> = obj_preps.into_iter().map(Some).collect();
+    let mut prepared_objs: Vec<PreparedObjDef> = Vec::with_capacity(topo_order.len());
+    for idx in topo_order {
+        let op = obj_preps_opts[idx]
+            .take()
+            .expect("topo_order should not visit an obj twice");
+        let ObjPrep {
+            span,
+            name,
+            fields,
+            methods,
+            uses,
+            is_pub,
+        } = op;
+        let prepared = c.prepare_obj_def(name, fields, methods, uses, &span, is_pub);
+        prepared_objs.push(prepared);
+    }
+
+    // A4: Pre-resolve each top-level function's parameter and return
+    // types, reserve a placeholder `CompiledFunction` slot, and
+    // register the function in `fn_table` with its full signature.
+    // After this pass, any top-level function can be called from any
+    // other top-level expression or body — source order no longer
+    // matters for top-level function references.
+    //
+    // Slot reservation here also means that when Phase B compiles a
+    // top-level expression like `let x = helper()`, the expression
+    // compiler reads `helper`'s signature out of `fn_table` and emits
+    // `Call(abs_idx, arity)` against the reserved slot. The slot's
+    // bytecode is filled in later by the body-compile pass, but the
+    // index is already stable.
+    let mut fn_preps: Vec<FnPrep> = Vec::with_capacity(fn_data.len());
+    for data in fn_data {
+        let FnData {
+            span,
+            name,
+            params,
+            body,
+            return_type,
+            is_pub,
+        } = data;
+
+        // Resolve each parameter's type annotation. Missing annotations
+        // are reported here and fall through as `Unknown` so the rest
+        // of the function's signature still lines up.
+        for param in &params {
+            if param.type_ann.is_none() {
+                c.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!("parameter `{}` requires a type annotation", param.name),
+                ));
+            }
+        }
+
+        let resolved_params: HashMap<String, ResolvedType> = params
+            .iter()
+            .map(|p| {
+                let t = p
+                    .type_ann
+                    .as_ref()
+                    .map(|a| match c.resolve_type_annotation(a) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            c.output.errors.push(OrynError::compiler(span.clone(), msg));
+                            ResolvedType::Unknown
+                        }
+                    })
+                    .unwrap_or(ResolvedType::Unknown);
+                (p.name.clone(), t)
+            })
+            .collect();
+        let param_types: Vec<ResolvedType> = params
+            .iter()
+            .map(|p| {
+                resolved_params
+                    .get(&p.name)
+                    .cloned()
+                    .unwrap_or(ResolvedType::Unknown)
+            })
+            .collect();
+        let return_resolved = match &return_type {
+            Some(rt) => match c.resolve_type_annotation(rt) {
+                Ok(t) => t,
+                Err(msg) => {
+                    c.output.errors.push(OrynError::compiler(span.clone(), msg));
+                    ResolvedType::Unknown
+                }
+            },
+            None => ResolvedType::Unknown,
+        };
+        c.output.type_map.insert(span.clone(), &return_resolved);
+
+        // Reserve the slot. The placeholder's `param_types` and
+        // `return_type` are real — `expr.rs` reads them off the slot
+        // when compiling call sites, and those reads must succeed
+        // against the placeholder before the body bytecode exists.
+        let local_idx = c.output.functions.len();
+        let param_names_vec: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        let param_is_mut_vec: Vec<bool> = params.iter().map(|p| p.is_mut).collect();
+        c.output.functions.push(CompiledFunction {
+            name: name.clone(),
+            arity: params.len(),
+            params: param_names_vec,
+            param_types: param_types.clone(),
+            param_is_mut: param_is_mut_vec.clone(),
+            return_type: Some(return_resolved.clone()),
+            num_locals: 0,
+            instructions: Vec::new(),
+            spans: Vec::new(),
+            is_pub,
+            is_mut: false,
+        });
+        c.fn_table.register(name.clone(), local_idx);
+        c.fn_table.signatures.insert(
+            name.clone(),
+            FunctionSignature {
+                param_types: param_types.clone(),
+                return_type: return_resolved.clone(),
+                param_is_mut: param_is_mut_vec,
+                is_mut: false,
+            },
+        );
+
+        fn_preps.push(FnPrep {
+            span,
+            name,
+            params,
+            body,
+            is_pub,
+            local_idx,
+            param_types,
+            resolved_params,
+            return_resolved,
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Phase B — compile bodies and module-level code
+    // ------------------------------------------------------------------
+
+    // B1: Top-level statements in source order. These may reference
+    // top-level functions (registered in A4), obj static/instance
+    // methods (registered in A3), enum variants (registered in A2),
+    // and module constants (registered here as the bindings execute).
+    // Module-level execution order is preserved for let/val
+    // initializers, tests, and top-level expressions — only type
+    // declarations and top-level function definitions are hoisted out
+    // of source order by Phase A.
+    for stmt in phase_b_stmts {
         c.compile_stmt(stmt);
-        c.sync_tables(fn_count_before, obj_count_before);
+    }
+
+    // B2: Compile top-level function bodies into their pre-allocated
+    // slots. Bodies have visibility into every obj def, every other
+    // top-level function, and every module constant registered by
+    // this point.
+    for fp in fn_preps {
+        let FnPrep {
+            span,
+            name,
+            params,
+            body,
+            is_pub,
+            local_idx,
+            param_types,
+            resolved_params,
+            return_resolved,
+        } = fp;
+
+        let param_fn = move |p: &crate::parser::Param| {
+            let resolved = resolved_params
+                .get(&p.name)
+                .cloned()
+                .unwrap_or(ResolvedType::Unknown);
+            // `mut x: T` opts the parameter into mutability.
+            // Without `mut`, top-level function params are always
+            // immutable in Oryn (no opt-out at the call site).
+            let kind = if p.is_mut {
+                BindingKind::MutParam
+            } else {
+                BindingKind::Param
+            };
+            (kind, resolved)
+        };
+
+        c.compile_function_body(FunctionBodyConfig {
+            name: &name,
+            params: &params,
+            param_types,
+            param_local_fn: &param_fn,
+            self_name: Some(&name),
+            body,
+            span: &span,
+            return_type: Some(return_resolved),
+            is_pub,
+            is_mut: false,
+            pre_allocated_local_idx: Some(local_idx),
+        });
+    }
+
+    // B3: Compile obj method bodies into their pre-allocated slots.
+    // Method bodies now have visibility into every declared type's
+    // fields and method signatures, and into every top-level function
+    // and module constant registered in B1.
+    for prepared in prepared_objs {
+        c.compile_obj_def_bodies(prepared);
     }
 
     c.output
+}
+
+/// Destructured `Statement::EnumDef` captured in Phase A0 for
+/// finalization in Phase A2.
+struct EnumPrep {
+    span: Span,
+    name: String,
+    variants: Vec<crate::parser::EnumVariant>,
+    is_pub: bool,
+    is_error: bool,
+}
+
+/// Destructured `Statement::ObjDef` captured in Phase A0 for
+/// preparation in Phase A3.
+struct ObjPrep {
+    span: Span,
+    name: String,
+    fields: Vec<crate::parser::ObjField>,
+    methods: Vec<crate::parser::ObjMethod>,
+    uses: Vec<Vec<String>>,
+    is_pub: bool,
+}
+
+/// Destructured `Statement::Function` captured in Phase A0 before
+/// type resolution. Phase A4 processes these into [`FnPrep`] entries
+/// after all enum and obj types are available, so forward references
+/// through function signatures resolve regardless of source order.
+struct FnData {
+    span: Span,
+    name: String,
+    params: Vec<crate::parser::Param>,
+    body: Spanned<crate::parser::Expression>,
+    return_type: Option<crate::parser::TypeAnnotation>,
+    is_pub: bool,
+}
+
+/// Top-level function with its signature resolved and its function
+/// slot reserved. Phase B2 walks these and compiles each body into
+/// its pre-allocated slot via `compile_function_body`.
+struct FnPrep {
+    span: Span,
+    name: String,
+    params: Vec<crate::parser::Param>,
+    body: Spanned<crate::parser::Expression>,
+    is_pub: bool,
+    local_idx: usize,
+    param_types: Vec<ResolvedType>,
+    resolved_params: HashMap<String, ResolvedType>,
+    return_resolved: ResolvedType,
 }
 
 // ---------------------------------------------------------------------------
@@ -465,44 +1008,6 @@ impl Compiler {
                     actual.display_name()
                 ),
             ));
-        }
-    }
-
-    /// Register newly compiled functions and objects in the lookup tables
-    /// so subsequent statements can reference them.
-    fn sync_tables(&mut self, fn_count_before: usize, obj_count_before: usize) {
-        for i in fn_count_before..self.output.functions.len() {
-            let func = &self.output.functions[i];
-            self.fn_table.register(func.name.clone(), i);
-
-            if let Some(ref rt) = func.return_type {
-                self.fn_table.signatures.insert(
-                    func.name.clone(),
-                    FunctionSignature {
-                        param_types: func.param_types.clone(),
-                        return_type: rt.clone(),
-                        param_is_mut: func.param_is_mut.clone(),
-                        is_mut: func.is_mut,
-                    },
-                );
-            }
-        }
-
-        for i in obj_count_before..self.output.obj_defs.len() {
-            self.obj_table.register(
-                self.output.obj_defs[i].name.clone(),
-                self.output.obj_defs[i].fields.clone(),
-                self.output.obj_defs[i].field_types.clone(),
-                self.output.obj_defs[i].field_is_pub.clone(),
-                self.output.obj_defs[i].methods.clone(),
-                self.output.obj_defs[i].static_methods.clone(),
-                self.output.obj_defs[i].method_is_pub.clone(),
-                self.output.obj_defs[i].static_method_is_pub.clone(),
-                self.output.obj_defs[i].method_signatures.clone(),
-                self.output.obj_defs[i].static_method_signatures.clone(),
-                self.output.obj_defs[i].signatures.clone(),
-                self.output.obj_defs[i].is_pub,
-            );
         }
     }
 }

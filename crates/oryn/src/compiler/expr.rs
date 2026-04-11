@@ -8,7 +8,33 @@ use crate::parser::{
 
 use super::block::BlockMode;
 use super::compile::Compiler;
+use super::tables::FunctionSignature;
 use super::types::{ConstValue, Instruction};
+
+/// Disposition of a `Type.method(...)` call site when the receiver is
+/// a bare type name resolved against `obj_table`. The old code path
+/// only recognized static methods on the named type; the W13 addition
+/// also recognizes instance methods and treats the first argument as
+/// an explicit `self`, enabling a call-to-parent-method form without
+/// a `super` keyword.
+enum QualifiedCallKind {
+    /// `Type.static_fn(args...)` — dispatch to the named type's
+    /// static method. `func_idx` is the absolute function index.
+    Static { func_idx: usize },
+    /// `Type.instance_method(self, args...)` — W13 qualified
+    /// parent-call. `func_idx` is the absolute function index of the
+    /// method on the named type. `signature` is the method signature
+    /// (without `self`), used for arg type checking and mut-self rule
+    /// enforcement.
+    Instance {
+        func_idx: usize,
+        signature: Option<FunctionSignature>,
+    },
+    /// The named type exists but has neither a static method nor an
+    /// instance method with the given name. Produces the standard
+    /// "undefined static method" error.
+    NotFound,
+}
 
 /// Walk a chain of `FieldAccess` nodes rooted in an `Ident` and collect
 /// the path segments. Returns `Some(["math", "nested", "lib"])` for an
@@ -634,6 +660,218 @@ impl Compiler {
     ///    (the bidirectional check). Type-check each arg against the
     ///    returned param list and emit `CallNative(idx, arity)`.
     ///
+    /// Compile a `Type.instance_method(self, args...)` qualified
+    /// parent-call (W13). The first argument is an explicit `self`;
+    /// the remaining arguments match the method's declared parameter
+    /// list (which, in `FunctionSignature`, excludes `self`).
+    ///
+    /// First-arg type soundness: the first arg's type must be an
+    /// object whose flattened field layout has `target_type_name`'s
+    /// fields as a prefix. Given `use`-flattening semantics, this is
+    /// exactly the set of types that either equal `target_type_name`
+    /// or transitively `use` it. Rejecting mismatches is a hard
+    /// requirement — calling `Health.tick(enemy, ...)` where `enemy`
+    /// has no relation to `Health` would let the method body read
+    /// field offsets that don't exist in `enemy`.
+    ///
+    /// Mutability rules are reused from the normal instance-method
+    /// dispatch path (`mut fn` cannot be called on a val-rooted
+    /// receiver; a plain `fn` cannot call a `mut fn` on `self`; a
+    /// `mut` parameter cannot accept a val-rooted argument). The
+    /// receiver for those rules is the first positional argument.
+    fn compile_qualified_instance_call(
+        &mut self,
+        target_type_name: &str,
+        method: &str,
+        func_idx: usize,
+        signature: Option<FunctionSignature>,
+        args: Vec<Spanned<Expression>>,
+        span: &crate::parser::Span,
+    ) -> ResolvedType {
+        let arity = args.len();
+
+        // The first argument is the explicit self. We need its root
+        // name for the val-rooted check BEFORE compiling it, because
+        // compiling consumes the AST.
+        let self_root_name: Option<String> = args
+            .first()
+            .and_then(|a| expression_root_name(&a.node).map(|s| s.to_string()));
+
+        // Mutability rules 1 and 2 from the normal dispatch path,
+        // specialized to the qualified form: the "receiver" here is
+        // the first positional arg, not `object`. Rule 3 (val-into-
+        // mut-param for non-self params) runs after arg compilation
+        // alongside the per-arg type check.
+        let callee_is_mut = signature.as_ref().map(|s| s.is_mut).unwrap_or(false);
+        if callee_is_mut {
+            if let Some(ref root_name) = self_root_name
+                && let Some(entry) = self.locals.resolve(root_name)
+                && !entry.is_mutable()
+            {
+                let op = format!("call mutating method `{method}` on");
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    super::stmt::immutability_error(root_name, &entry.kind, &op),
+                ));
+            }
+            if let Some(ref root_name) = self_root_name
+                && root_name == "self"
+                && !self.current_fn_is_mut
+            {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!(
+                        "cannot call mutating method `{method}` from a non-mutating method; declare the enclosing method's receiver as `mut self` to allow mutation"
+                    ),
+                ));
+            }
+        }
+
+        // Compile all args. The first becomes `self` on the stack;
+        // the rest are the declared params. Capture root names for
+        // the mut-param check.
+        let mut arg_types: Vec<ResolvedType> = Vec::with_capacity(arity);
+        let mut arg_root_names: Vec<Option<String>> = Vec::with_capacity(arity);
+        for arg in args {
+            arg_root_names.push(expression_root_name(&arg.node).map(|s| s.to_string()));
+            arg_types.push(self.compile_expr(arg));
+        }
+
+        // Arity check: sig.param_types excludes self, so expected
+        // arity on the call site is sig.param_types.len() + 1.
+        if let Some(ref sig) = signature {
+            let expected = sig.param_types.len() + 1;
+            if arity != expected {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!(
+                        "arity mismatch: expected {} arguments (including self), got {}",
+                        expected, arity
+                    ),
+                ));
+            }
+            // Per-arg type check for the non-self args against the
+            // method signature.
+            for (i, (arg_type, param_type)) in
+                arg_types.iter().skip(1).zip(&sig.param_types).enumerate()
+            {
+                self.check_types(
+                    param_type,
+                    arg_type,
+                    span,
+                    &format!("argument {} type mismatch", i + 2),
+                );
+            }
+            // Rule 3: mut params cannot accept val-rooted args.
+            for (i, root) in arg_root_names.iter().skip(1).enumerate() {
+                let param_wants_mut = sig.param_is_mut.get(i).copied().unwrap_or(false);
+                if param_wants_mut
+                    && let Some(name) = root
+                    && let Some(entry) = self.locals.resolve(name)
+                    && !entry.is_mutable()
+                {
+                    let op = format!("pass to mut parameter {} of `{method}`", i + 2);
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        super::stmt::immutability_error(name, &entry.kind, &op),
+                    ));
+                }
+            }
+        }
+
+        // First-arg type soundness. The arg's type must be an Object
+        // whose `ObjDefInfo.fields` has `target_type_name`'s fields
+        // as a prefix. `use`-flattening lays inherited fields at the
+        // start of the field vector, so the prefix check is exactly
+        // "this type transitively uses `target_type_name`, or equals
+        // it". Unknown arg types pass through silently so we don't
+        // double-report errors from earlier in the pipeline.
+        match arg_types.first() {
+            None => {
+                // Zero args — arity check above already reported.
+            }
+            Some(ResolvedType::Unknown) => {}
+            Some(ResolvedType::Object {
+                name: self_name,
+                module: self_module,
+            }) => {
+                if !self.is_use_descendant_or_self(self_name, self_module, target_type_name) {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        format!(
+                            "qualified call `{target_type_name}.{method}` expects a `self` of type `{target_type_name}` or a type that uses `{target_type_name}`, got `{self_name}`"
+                        ),
+                    ));
+                }
+            }
+            Some(other) => {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!(
+                        "qualified call `{target_type_name}.{method}` expects a `self` argument of type `{target_type_name}`, got `{}`",
+                        other.display_name()
+                    ),
+                ));
+            }
+        }
+
+        self.emit(Instruction::Call(func_idx, arity), span);
+        signature
+            .map(|s| s.return_type)
+            .unwrap_or(ResolvedType::Unknown)
+    }
+
+    /// Returns `true` if `self_type_name` equals `target_type_name`
+    /// or if `self_type_name`'s flattened field set is a superset of
+    /// `target_type_name`'s: every field named in the target's
+    /// `ObjDefInfo.fields` must also appear on the self type with a
+    /// compatible type. Under `use`-flattening semantics that's
+    /// precisely the set of types that either equal
+    /// `target_type_name` or transitively `use` it (possibly
+    /// alongside other parents, which reorder fields into a
+    /// non-prefix layout). Field accesses in the target's method
+    /// body are resolved by name at runtime via
+    /// `Instruction::GetField`, so non-prefix layouts are safe so
+    /// long as the required names exist.
+    ///
+    /// Only same-module lookups are attempted; if `self_module` is
+    /// non-empty (the arg is an imported type) the check is
+    /// conservatively allowed — cross-module soundness can be
+    /// tightened later.
+    fn is_use_descendant_or_self(
+        &self,
+        self_type_name: &str,
+        self_module: &[String],
+        target_type_name: &str,
+    ) -> bool {
+        if self_type_name == target_type_name {
+            return true;
+        }
+        // Cross-module `self` arg: pass through for now. A thorough
+        // check would need to fetch the imported obj_def from the
+        // module table, and that path isn't plumbed here yet.
+        if !self_module.is_empty() && self_module != self.current_module_path.as_slice() {
+            return true;
+        }
+        let Some((_, self_def)) = self.obj_table.resolve(self_type_name) else {
+            return false;
+        };
+        let Some((_, target_def)) = self.obj_table.resolve(target_type_name) else {
+            return false;
+        };
+        for (i, field) in target_def.fields.iter().enumerate() {
+            let Some(self_idx) = self_def.fields.iter().position(|f| f == field) else {
+                return false;
+            };
+            let target_ty = target_def.field_types.get(i);
+            let self_ty = self_def.field_types.get(self_idx);
+            if target_ty != self_ty {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Adding a new method is a one-file change in `native/<type>.rs`
     /// — no changes needed here.
     pub(super) fn compile_native_method(
@@ -1501,72 +1739,107 @@ impl Compiler {
                     }
                 }
 
-                let static_call = match &object.node {
+                // Same-module `Type.method(...)` dispatch. Two shapes:
+                //
+                //   1. `Type.static_method(args...)` — the existing
+                //      static-method call.
+                //   2. `Type.instance_method(self, args...)` — the W13
+                //      qualified parent-call. The first argument is
+                //      the explicit `self`; the remaining arguments
+                //      match the method's declared parameter list.
+                //      The first arg's type must equal `Type` or be
+                //      an object whose flattened field layout has
+                //      `Type`'s fields as a prefix (which, given
+                //      `use`-flattening semantics, means the arg's
+                //      type transitively `use`s `Type`). This lets an
+                //      override call the inherited version without a
+                //      `super` keyword and naturally disambiguates
+                //      multi-use parents: `Health.tick(self, ...)`
+                //      vs `Mana.tick(self, ...)`.
+                let qualified_info = match &object.node {
                     Expression::Ident(type_name)
                         if self.locals.resolve(type_name).is_none()
                             && self.obj_table.resolve(type_name).is_some() =>
                     {
-                        Some((
-                            type_name.clone(),
-                            self.obj_table
-                                .resolve(type_name)
-                                .and_then(|(_, def)| def.static_methods.get(&method).copied()),
-                        ))
+                        let (_, def) = self.obj_table.resolve(type_name).unwrap();
+                        let kind = if let Some(&func_idx) = def.static_methods.get(&method) {
+                            QualifiedCallKind::Static { func_idx }
+                        } else if let Some(&func_idx) = def.methods.get(&method) {
+                            let signature = def.method_signatures.get(&method).cloned();
+                            QualifiedCallKind::Instance {
+                                func_idx,
+                                signature,
+                            }
+                        } else {
+                            QualifiedCallKind::NotFound
+                        };
+                        Some((type_name.clone(), kind))
                     }
                     _ => None,
                 };
 
-                if let Some((type_name, static_info)) = static_call {
-                    if let Some(func_idx) = static_info {
-                        // func_idx is absolute; convert to local to index
-                        // into the current compilation unit's functions.
-                        let local = self.local_fn_idx(func_idx);
-                        let (param_types, return_type) = {
-                            let func = &self.output.functions[local];
+                if let Some((type_name, kind)) = qualified_info {
+                    match kind {
+                        QualifiedCallKind::Static { func_idx } => {
+                            // func_idx is absolute; convert to local to index
+                            // into the current compilation unit's functions.
+                            let local = self.local_fn_idx(func_idx);
+                            let (param_types, return_type) = {
+                                let func = &self.output.functions[local];
 
-                            (func.param_types.clone(), func.return_type.clone())
-                        };
+                                (func.param_types.clone(), func.return_type.clone())
+                            };
 
-                        let mut arg_types = Vec::new();
-                        for arg in args {
-                            arg_types.push(self.compile_expr(arg));
+                            let mut arg_types = Vec::new();
+                            for arg in args {
+                                arg_types.push(self.compile_expr(arg));
+                            }
+
+                            if arity != param_types.len() {
+                                self.output.errors.push(OrynError::compiler(
+                                    span.clone(),
+                                    format!(
+                                        "arity mismatch: expected {} arguments, got {}",
+                                        param_types.len(),
+                                        arity
+                                    ),
+                                ));
+                            }
+                            for (i, (arg_type, param_type)) in
+                                arg_types.iter().zip(&param_types).enumerate()
+                            {
+                                self.check_types(
+                                    param_type,
+                                    arg_type,
+                                    &span,
+                                    &format!("argument {} type mismatch", i + 1),
+                                );
+                            }
+
+                            self.emit(Instruction::Call(func_idx, arity), &span);
+
+                            return return_type.unwrap_or(ResolvedType::Unknown);
                         }
-
-                        if arity != param_types.len() {
-                            self.output.errors.push(OrynError::compiler(
-                                span.clone(),
-                                format!(
-                                    "arity mismatch: expected {} arguments, got {}",
-                                    param_types.len(),
-                                    arity
-                                ),
-                            ));
-                        }
-                        for (i, (arg_type, param_type)) in
-                            arg_types.iter().zip(&param_types).enumerate()
-                        {
-                            self.check_types(
-                                param_type,
-                                arg_type,
-                                &span,
-                                &format!("argument {} type mismatch", i + 1),
+                        QualifiedCallKind::Instance {
+                            func_idx,
+                            signature,
+                        } => {
+                            return self.compile_qualified_instance_call(
+                                &type_name, &method, func_idx, signature, args, &span,
                             );
                         }
-
-                        self.emit(Instruction::Call(func_idx, arity), &span);
-
-                        return_type.unwrap_or(ResolvedType::Unknown)
-                    } else {
-                        self.output.errors.push(OrynError::compiler(
-                            span.clone(),
-                            format!("undefined static method `{}.{method}`", type_name),
-                        ));
-
-                        self.emit(Instruction::PushInt(0), &span);
-
-                        ResolvedType::Unknown
+                        QualifiedCallKind::NotFound => {
+                            self.output.errors.push(OrynError::compiler(
+                                span.clone(),
+                                format!("undefined static method `{}.{method}`", type_name),
+                            ));
+                            self.emit(Instruction::PushInt(0), &span);
+                            return ResolvedType::Unknown;
+                        }
                     }
-                } else {
+                }
+
+                {
                     let receiver_type = self.infer_object_type(&object.node);
 
                     let direct_method = match &receiver_type {

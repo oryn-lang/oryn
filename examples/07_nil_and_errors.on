@@ -234,7 +234,7 @@ print("compute(100, 5, 0) = {c3}")  // → MathError.DivByZero
 // like `error int of MathError`, the compiler checks that every
 // MathError variant is covered (or that a `_` catches the rest).
 
-fn describe(r: error int of MathError) -> string {
+fn explain(r: error int of MathError) -> string {
     return match r {
         ok v                         => "got {v}"
         MathError.DivByZero          => "division by zero"
@@ -242,8 +242,8 @@ fn describe(r: error int of MathError) -> string {
     }
 }
 
-print("describe divide(10, 2) = {describe(divide(10, 2))}")
-print("describe divide(10, 0) = {describe(divide(10, 0))}")
+print("explain divide(10, 2) = {explain(divide(10, 2))}")
+print("explain divide(10, 0) = {explain(divide(10, 0))}")
 
 // ── 8. `if let` on an error union ──────────────────────────────────
 // `if let x = call()` binds the success value in the then-branch

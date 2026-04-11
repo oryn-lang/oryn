@@ -809,17 +809,219 @@ assert(c.foo() == 10)
 }
 
 #[test]
-fn composition_e3_chain_depends_on_definition_order() {
-    // Using a type before it is defined should error.
+fn composition_e3_chain_order_independent() {
+    // Under Phase A topological sorting, obj defs may appear in any
+    // order within a module. The child-before-parent declaration
+    // below used to fail with "undefined type `B` in use declaration"
+    // because the old linear pipeline resolved `use` clauses at the
+    // point of each obj's compilation. The topo sort lifts that
+    // restriction.
+    let src = r#"
+struct C {
+    use B
+    z: int
+    fn sum(self) -> int { return self.x + self.y + self.z }
+}
+struct B {
+    use A
+    y: int
+}
+struct A { x: int }
+let c = C { x: 1, y: 2, z: 3 }
+assert(c.sum() == 6)
+"#;
+    let chunk = crate::Chunk::compile(src).unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn w13_qualified_parent_call_from_override() {
+    // W13: inside a method that overrides an inherited one, the user
+    // can call the parent's implementation via `Parent.method(self, ...)`
+    // without any `super` keyword. The override's own logic runs first
+    // and then delegates to the inherited body.
+    let chunk = crate::Chunk::compile(
+        r#"struct Health {
+    hp: int
+    fn tick(self) -> int { return self.hp + 1 }
+}
+struct Guard {
+    use Health
+    name: string
+    fn tick(self) -> int {
+        return Health.tick(self) + 100
+    }
+}
+let g = Guard { hp: 10, name: "G" }
+assert(g.tick() == 111)
+"#,
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn w13_qualified_parent_call_rejects_unrelated_self() {
+    // The first-arg soundness check rejects `Health.tick(enemy, ...)`
+    // when `enemy`'s type has no layout relationship with Health.
+    // Without this check the method body would read self's `hp` at
+    // an offset that doesn't exist in Enemy.
     let errors = crate::Chunk::compile(
-        "struct C {\n    use B\n    z: int\n}
-struct B {\n    use A\n    y: int\n}
-struct A { x: int }",
+        r#"struct Health { hp: int   fn tick(self) -> int { return self.hp } }
+struct Enemy { dmg: int }
+let e = Enemy { dmg: 5 }
+let _ = Health.tick(e)
+"#,
     )
     .unwrap_err();
     assert!(
-        !errors.is_empty(),
-        "expected forward-reference to error, got {errors:?}"
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("qualified call `Health.tick`")
+                && format!("{e}").contains("got `Enemy`")),
+        "expected qualified-call soundness rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn w13_qualified_parent_call_multi_use_disambiguation() {
+    // Multi-use composition: the using type inherits `tick` from
+    // both Health and Mana. The own `tick` explicitly calls
+    // `Health.tick(self)` — the qualified form naturally disambiguates
+    // between parents without a `super` keyword.
+    let chunk = crate::Chunk::compile(
+        r#"struct Health {
+    hp: int
+    fn tick(self) -> int { return self.hp }
+}
+struct Mana {
+    mp: int
+    fn tick(self) -> int { return self.mp }
+}
+struct Mage {
+    use Health
+    use Mana
+    fn tick(self) -> int { return Health.tick(self) + Mana.tick(self) }
+}
+let m = Mage { hp: 7, mp: 3 }
+assert(m.tick() == 10)
+"#,
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn duplicate_top_level_function_rejected() {
+    // Two `fn foo` declarations cannot both be reachable — Oryn has
+    // no overloading. Under Phase A signature pre-registration the
+    // second would silently shadow the first and surprise every call
+    // site. Reject the duplicate at the start of Phase A instead.
+    let errors = crate::Chunk::compile(
+        "fn foo(x: int) -> int { return x }\n\
+         fn foo(x: int, y: int) -> int { return x + y }\n",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate top-level function `foo`")),
+        "expected duplicate-fn error, got {errors:?}"
+    );
+}
+
+#[test]
+fn duplicate_struct_rejected() {
+    let errors =
+        crate::Chunk::compile("struct Foo { x: int }\nstruct Foo { y: int }\n").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate type declaration `Foo`")),
+        "expected duplicate-type error, got {errors:?}"
+    );
+}
+
+#[test]
+fn duplicate_enum_rejected() {
+    let errors = crate::Chunk::compile("enum Color { Red }\nenum Color { Blue }\n").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate type declaration `Color`")),
+        "expected duplicate-type error, got {errors:?}"
+    );
+}
+
+#[test]
+fn duplicate_struct_and_enum_with_same_name_rejected() {
+    // `struct Foo` and `enum Foo` share the type-name namespace and
+    // collide.
+    let errors = crate::Chunk::compile("struct Foo { x: int }\nenum Foo { Bar }\n").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate type declaration `Foo`")),
+        "expected duplicate-type error, got {errors:?}"
+    );
+}
+
+#[test]
+fn forward_ref_top_level_function() {
+    // A top-level let that calls a function defined later in the
+    // same file used to fail with "undefined function" because the
+    // old linear compile pipeline registered each fn only after
+    // compiling the statement that declared it. Phase A4 pre-allocates
+    // function slots before any module-level code runs, so forward
+    // references compile and run correctly.
+    let chunk =
+        crate::Chunk::compile("let x = later()\nprint(x)\nfn later() -> int { return 42 }\n")
+            .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn forward_ref_top_level_function_mutual() {
+    // Two top-level functions that call each other. Under the old
+    // linear pipeline, whichever was compiled first couldn't see the
+    // other. Phase A4 registers every top-level function signature
+    // before any body is compiled, so mutual recursion compiles.
+    let chunk = crate::Chunk::compile(
+        "fn is_even(n: int) -> bool {\n\
+             if n == 0 { return true } else { return is_odd(n - 1) }\n\
+         }\n\
+         fn is_odd(n: int) -> bool {\n\
+             if n == 0 { return false } else { return is_even(n - 1) }\n\
+         }\n\
+         assert(is_even(4))\n\
+         assert(is_odd(7))\n",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn composition_e4_use_cycle_rejected() {
+    // A `use` cycle (A uses B, B uses A) should produce a clear
+    // cycle error rather than panicking or silently producing an
+    // obj with empty inherited tables. The topo sort in Phase A3
+    // detects cycles via Kahn's algorithm; any obj still carrying a
+    // non-zero in-degree after the sort is cyclic.
+    let errors = crate::Chunk::compile(
+        "struct A { use B   x: int }
+struct B { use A   y: int }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("`use` cycle")),
+        "expected `use` cycle error, got {errors:?}"
     );
 }
 

@@ -24,12 +24,49 @@ enum OverrideKind {
     MultiUseResolution,
 }
 
+/// Resolved per-method metadata produced by [`Compiler::prepare_obj_def`]
+/// and consumed by [`Compiler::compile_obj_def_bodies`]. `local_idx`
+/// points at the placeholder slot reserved during the prepare pass; the
+/// body pass overwrites that slot.
+pub(super) struct PreparedMethod {
+    pub(super) local_idx: usize,
+    pub(super) param_types: Vec<ResolvedType>,
+    pub(super) return_type: ResolvedType,
+    pub(super) resolved_params: HashMap<String, ResolvedType>,
+}
+
+/// State handed from [`Compiler::prepare_obj_def`] to
+/// [`Compiler::compile_obj_def_bodies`]. Under Phase A placeholder
+/// seeding the full `ObjDefInfo` is already finalized in
+/// `obj_table.defs[local_idx]` and `output.obj_defs[local_idx]` before
+/// method bodies run, so the body pass only needs the method list,
+/// per-method prepared slots, and enough context to emit body
+/// bytecode into the pre-allocated function slots.
+pub(super) struct PreparedObjDef {
+    pub(super) name: String,
+    pub(super) stmt_span: Span,
+    pub(super) methods: Vec<ObjMethod>,
+    pub(super) prepared: HashMap<String, PreparedMethod>,
+}
+
 // ---------------------------------------------------------------------------
 // Object definition compilation
 // ---------------------------------------------------------------------------
 
 impl Compiler {
-    pub(super) fn compile_obj_def(
+    /// Pass 1 of obj def compilation: flatten `use` clauses, validate
+    /// field and method conflicts, resolve own-method signatures, apply
+    /// override semantics, and reserve a placeholder function slot for
+    /// each own method. The returned [`PreparedObjDef`] owns the method
+    /// AST (moved out so pass 2 can consume it) and carries every bit of
+    /// state pass 2 needs to compile the bodies and finalize the
+    /// [`ObjDefInfo`].
+    ///
+    /// On entry, this installs a temporary self-registration into
+    /// `obj_table` so that method signature resolution can see the
+    /// enclosing type. The entry is removed again in
+    /// [`Self::compile_obj_def_bodies`] via the saved `parent_obj_table`.
+    pub(super) fn prepare_obj_def(
         &mut self,
         name: String,
         fields: Vec<ObjField>,
@@ -37,7 +74,7 @@ impl Compiler {
         uses: Vec<Vec<String>>,
         stmt_span: &Span,
         is_pub: bool,
-    ) {
+    ) -> PreparedObjDef {
         // Pre-scan own declarations so the use loop knows which inherited
         // collisions are explicitly resolved by the using type. Methods and
         // statics can be resolved (replaced) this way; fields cannot,
@@ -86,10 +123,26 @@ impl Compiler {
             // cloned ObjDefInfo that the inheritance logic can consume
             // uniformly — imported defs carry absolute function indices
             // already, so no remapping is needed.
+            //
+            // For single-segment local paths, the obj_table may already
+            // contain a Phase A placeholder for the parent — an empty
+            // entry seeded before any obj def was prepared. Flattening
+            // from a placeholder would silently inherit zero fields and
+            // zero methods, so we only treat the parent as resolved
+            // when it has been fully prepared (tracked via
+            // `prepared_obj_names`). Forward references via `use` then
+            // fall through to the same "undefined type" error path as
+            // truly undefined names. The topological sort in commit 3
+            // lifts this restriction by preparing parents before
+            // children regardless of source order.
             let def: Option<ObjDefInfo> = if used_path.len() == 1 {
-                self.obj_table
-                    .resolve(&used_path[0])
-                    .map(|(_, d)| d.clone())
+                if self.prepared_obj_names.contains(&used_path[0]) {
+                    self.obj_table
+                        .resolve(&used_path[0])
+                        .map(|(_, d)| d.clone())
+                } else {
+                    None
+                }
             } else {
                 let (type_name, module_path) = used_path.split_last().unwrap();
                 let module_key = module_path.join(".");
@@ -241,27 +294,33 @@ impl Compiler {
             }
         }
 
-        // Build a temporary ObjTable that includes the current type
-        // so method bodies can resolve self.field accesses. At this
-        // point only inherited methods are populated; the pre-pass below
-        // will mutate this entry to add own-method signatures and
-        // indices before any bodies are compiled, so methods can call
-        // each other regardless of declaration order.
-        let parent_obj_table = self.obj_table.clone();
-        self.obj_table.register(
-            name.clone(),
-            field_names.clone(),
-            field_types.clone(),
-            field_is_pub.clone(),
-            method_indices.clone(),
-            static_method_indices.clone(),
-            method_is_pub.clone(),
-            static_method_is_pub.clone(),
-            method_signatures.clone(),
-            static_method_signatures.clone(),
-            all_required.clone(),
-            is_pub,
-        );
+        // The obj_table already contains a placeholder for this type
+        // from the Phase A seeding pass. Look up its local index and
+        // update the entry in place with the flattened fields and
+        // (currently inherited-only) method tables. Own methods will
+        // be spliced in by the method pre-pass below before any body
+        // is compiled, so intra-obj `self.method()` calls resolve
+        // regardless of declaration order. Panics if the placeholder
+        // is missing — which would indicate the caller bypassed
+        // Phase A without using the `compile_obj_def` safety net.
+        let local_idx = self
+            .obj_table
+            .resolve(&name)
+            .map(|(absolute, _)| absolute - self.obj_table.base_offset)
+            .expect("obj def placeholder missing; seed it before calling prepare_obj_def");
+        {
+            let def = &mut self.obj_table.defs[local_idx];
+            def.fields = field_names.clone();
+            def.field_types = field_types.clone();
+            def.field_is_pub = field_is_pub.clone();
+            def.methods = method_indices.clone();
+            def.static_methods = static_method_indices.clone();
+            def.method_is_pub = method_is_pub.clone();
+            def.static_method_is_pub = static_method_is_pub.clone();
+            def.method_signatures = method_signatures.clone();
+            def.static_method_signatures = static_method_signatures.clone();
+            def.signatures = all_required.clone();
+        }
 
         // Collect this type's own required methods (bodyless declarations)
         // with their full signatures.
@@ -321,16 +380,6 @@ impl Compiler {
         // snapshot so pass 2 can resolve intra-obj `self.method()` calls
         // regardless of declaration order.
         // -----------------------------------------------------------------
-
-        // Resolved per-method metadata produced by the pre-pass and
-        // consumed by the body compile pass. The local index points at
-        // the placeholder slot pushed during the pre-pass.
-        struct PreparedMethod {
-            local_idx: usize,
-            param_types: Vec<ResolvedType>,
-            return_type: ResolvedType,
-            resolved_params: HashMap<String, ResolvedType>,
-        }
 
         let mut prepared: HashMap<String, PreparedMethod> = HashMap::new();
         // Track signatures per body method for the required-method shape
@@ -528,11 +577,12 @@ impl Compiler {
             );
         }
 
-        // Mutate the obj_table snapshot so pass 2 sees the full method
-        // tables (own + inherited, after override resolution). Without
-        // this, an own method `a` calling `self.b()` for a sibling own
-        // method `b` would fail to resolve.
-        if let Some(def) = self.obj_table.defs.last_mut() {
+        // Splice own methods into the obj_table entry so intra-obj
+        // `self.method()` calls resolve during body compilation —
+        // sibling own methods can call each other regardless of
+        // declaration order.
+        {
+            let def = &mut self.obj_table.defs[local_idx];
             def.methods = method_indices.clone();
             def.static_methods = static_method_indices.clone();
             def.method_is_pub = method_is_pub.clone();
@@ -541,86 +591,15 @@ impl Compiler {
             def.static_method_signatures = static_method_signatures.clone();
         }
 
-        // -----------------------------------------------------------------
-        // Pass 2: compile each method body into its pre-allocated slot.
-        // -----------------------------------------------------------------
-        for method in methods {
-            // Compute the method's mutability before destructuring
-            // its body — `is_mut()` borrows from `params`, which is
-            // partially moved by the body destructure below.
-            let method_is_mut = method.is_mut();
-            let Some(body) = method.body else {
-                continue;
-            };
-            let Some(prep) = prepared.remove(&method.name) else {
-                continue;
-            };
-            let PreparedMethod {
-                local_idx,
-                param_types,
-                return_type,
-                resolved_params,
-            } = prep;
-
-            let obj_name_for_closure = name.clone();
-            let module_for_closure = self.current_module_path.clone();
-            // `self` and non-self params share the same binding rule
-            // now: `mut x` (or `mut self`) makes it mutable, plain
-            // `x` (or plain `self`) makes it immutable. The two cases
-            // collapse cleanly because `mut self` is encoded the same
-            // way as any other `mut`-prefixed parameter. The only
-            // difference is that `self`'s type is the enclosing obj.
-            let param_fn = move |p: &crate::parser::Param| {
-                let kind = match (p.name == "self", p.is_mut) {
-                    // `mut self` — bound mutably so the body can
-                    // write self's fields, call mutating methods on
-                    // self's list fields, and call other `mut self`
-                    // methods on self.
-                    (true, true) => BindingKind::SelfRef,
-                    // Plain `self` — read-only. Modeled as `Param`
-                    // so the immutability check rejects writes
-                    // through self with the same error machinery as
-                    // any other immutable binding.
-                    (true, false) => BindingKind::Param,
-                    // `mut x: T` (non-self) — opt-in mutable param.
-                    (false, true) => BindingKind::MutParam,
-                    // Plain `x: T` — immutable, no opt-out.
-                    (false, false) => BindingKind::Param,
-                };
-                let ty = if p.name == "self" {
-                    ResolvedType::Object {
-                        name: obj_name_for_closure.clone(),
-                        module: module_for_closure.clone(),
-                    }
-                } else {
-                    resolved_params
-                        .get(&p.name)
-                        .cloned()
-                        .unwrap_or(ResolvedType::Unknown)
-                };
-                (kind, ty)
-            };
-
-            self.compile_function_body(FunctionBodyConfig {
-                name: &method.name,
-                params: &method.params,
-                param_types,
-                param_local_fn: &param_fn,
-                self_name: None,
-                body,
-                span: stmt_span,
-                is_pub: method.is_pub,
-                is_mut: method_is_mut,
-                return_type: Some(return_type),
-                pre_allocated_local_idx: Some(local_idx),
-            });
-        }
-
-        // Restore the obj_table (remove the temporary self-registration).
-        self.obj_table = parent_obj_table;
-
-        // Check: every required method from used types must be satisfied
-        // with matching shape (param types + return type).
+        // Required-method shape + mutability check. Every required
+        // method inherited via `use` must be satisfied by an own or
+        // inherited implementation with matching shape. Runs here (in
+        // Phase A) so that any children that `use` this type in a
+        // later prepare pass see the current type's own required
+        // methods in the finalized `signatures` field — the old linear
+        // architecture relied on `sync_tables` to re-register obj
+        // defs with final signatures after bodies were compiled, which
+        // doesn't happen under Phase A/B.
         for req in &all_required {
             let has_impl = if req.is_static {
                 static_method_indices.contains_key(&req.name)
@@ -737,21 +716,30 @@ impl Compiler {
             }
         }
 
+        // Compute the required-method list this type propagates to
+        // children that `use` it: every requirement (own or inherited)
+        // that this type does not itself implement. Children flattening
+        // over this type read the list from `ObjDefInfo.signatures`.
         let mut final_required: Vec<MethodSignature> = Vec::new();
-        for req in own_required {
+        for req in all_required.iter().chain(own_required.iter()) {
             let has_impl = if req.is_static {
                 static_method_indices.contains_key(&req.name)
             } else {
                 method_indices.contains_key(&req.name)
             };
-
-            if !has_impl {
-                final_required.push(req);
+            if !has_impl && !final_required.iter().any(|r| r.name == req.name) {
+                final_required.push(req.clone());
             }
         }
 
-        self.output.obj_defs.push(ObjDefInfo {
-            name,
+        // Finalize the obj def in place. Under Phase A placeholder
+        // seeding, `obj_table.defs[local_idx]` and
+        // `output.obj_defs[local_idx]` grow in lockstep, so a single
+        // local index covers both vectors. Children that run
+        // `prepare_obj_def` after this type will read the finalized
+        // entry via `obj_table.resolve`.
+        let finalized = ObjDefInfo {
+            name: name.clone(),
             fields: field_names,
             field_types,
             field_is_pub,
@@ -763,7 +751,116 @@ impl Compiler {
             static_method_signatures,
             signatures: final_required,
             is_pub,
-        });
+        };
+        self.obj_table.defs[local_idx] = finalized.clone();
+        self.output.obj_defs[local_idx] = finalized;
+
+        // Mark this obj as fully prepared so later siblings may
+        // forward-reference it via `use` without hitting the
+        // "undefined type" error path. Self-referential `use` (a
+        // cycle) still errors because `name` is added to the set
+        // after the flattening loop above has already completed.
+        self.prepared_obj_names.insert(name.clone());
+
+        PreparedObjDef {
+            name,
+            stmt_span: stmt_span.clone(),
+            methods,
+            prepared,
+        }
+    }
+
+    /// Pass 2 of obj def compilation: compile each method body into
+    /// its pre-allocated slot. All signature-level work (flattening,
+    /// override checks, required-method shape checks, and
+    /// `output.obj_defs` / `obj_table.defs` finalization) already
+    /// happened in [`Self::prepare_obj_def`] during Phase A, so this
+    /// pass does nothing except walk the method AST and emit body
+    /// bytecode into pre-allocated slots.
+    pub(super) fn compile_obj_def_bodies(&mut self, prepared_obj: PreparedObjDef) {
+        let PreparedObjDef {
+            name,
+            stmt_span,
+            methods,
+            mut prepared,
+        } = prepared_obj;
+
+        for method in methods {
+            // Compute the method's mutability before destructuring
+            // its body — `is_mut()` borrows from `params`, which is
+            // partially moved by the body destructure below.
+            let method_is_mut = method.is_mut();
+            let Some(body) = method.body else {
+                continue;
+            };
+            let Some(prep) = prepared.remove(&method.name) else {
+                continue;
+            };
+            let PreparedMethod {
+                local_idx,
+                param_types,
+                return_type,
+                resolved_params,
+            } = prep;
+
+            let obj_name_for_closure = name.clone();
+            let module_for_closure = self.current_module_path.clone();
+            // `self` and non-self params share the same binding rule
+            // now: `mut x` (or `mut self`) makes it mutable, plain
+            // `x` (or plain `self`) makes it immutable. The two cases
+            // collapse cleanly because `mut self` is encoded the same
+            // way as any other `mut`-prefixed parameter. The only
+            // difference is that `self`'s type is the enclosing obj.
+            let param_fn = move |p: &crate::parser::Param| {
+                let kind = match (p.name == "self", p.is_mut) {
+                    // `mut self` — bound mutably so the body can
+                    // write self's fields, call mutating methods on
+                    // self's list fields, and call other `mut self`
+                    // methods on self.
+                    (true, true) => BindingKind::SelfRef,
+                    // Plain `self` — read-only. Modeled as `Param`
+                    // so the immutability check rejects writes
+                    // through self with the same error machinery as
+                    // any other immutable binding.
+                    (true, false) => BindingKind::Param,
+                    // `mut x: T` (non-self) — opt-in mutable param.
+                    (false, true) => BindingKind::MutParam,
+                    // Plain `x: T` — immutable, no opt-out.
+                    (false, false) => BindingKind::Param,
+                };
+                let ty = if p.name == "self" {
+                    ResolvedType::Object {
+                        name: obj_name_for_closure.clone(),
+                        module: module_for_closure.clone(),
+                    }
+                } else {
+                    resolved_params
+                        .get(&p.name)
+                        .cloned()
+                        .unwrap_or(ResolvedType::Unknown)
+                };
+                (kind, ty)
+            };
+
+            self.compile_function_body(FunctionBodyConfig {
+                name: &method.name,
+                params: &method.params,
+                param_types,
+                param_local_fn: &param_fn,
+                self_name: None,
+                body,
+                span: &stmt_span,
+                is_pub: method.is_pub,
+                is_mut: method_is_mut,
+                return_type: Some(return_type),
+                pre_allocated_local_idx: Some(local_idx),
+            });
+        }
+
+        // Suppress unused warning — `name` is only referenced by the
+        // destructure above to keep the field visible to any future
+        // body-time diagnostics that might want it.
+        let _ = name;
     }
 
     /// Verify that an own method signature matches the inherited

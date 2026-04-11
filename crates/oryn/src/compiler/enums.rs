@@ -17,26 +17,24 @@ use crate::parser::{EnumVariant, MatchArm, Pattern, Span, Spanned};
 use super::compile::Compiler;
 use super::types::{EnumDefInfo, EnumVariantInfo, Instruction};
 
-// Note: `compile_enum_def` registers the enum in BOTH
-// `self.enum_table` (compile-time lookup) and
-// `self.output.enum_defs` (runtime metadata accessible from the VM
-// via `Chunk.enum_defs`). The `EnumTable` stores compile-time
-// indexed lookups; the `output.enum_defs` vector stores the same
-// metadata in declaration order so VM print/equality paths can
-// reach it via the integer `def_idx`.
+// Note: `finalize_enum_def` populates BOTH `self.enum_table`
+// (compile-time lookup) and `self.output.enum_defs` (runtime metadata
+// accessible from the VM via `Chunk.enum_defs`). The `EnumTable`
+// stores compile-time indexed lookups; the `output.enum_defs` vector
+// stores the same metadata in declaration order so VM print/equality
+// paths can reach it via the integer `def_idx`. Under the Phase A /
+// Phase B compile pipeline (`compile.rs`), every enum is seeded with
+// an empty placeholder via [`Compiler::seed_enum_placeholder`] before
+// any enum's variants are resolved, and `finalize_enum_def` fills
+// the placeholder in place.
 
 impl Compiler {
-    /// Compile an `enum Name { ... }` declaration: resolve every
-    /// variant's payload field types, register the enum in the
-    /// compiler's enum table, and emit no bytecode (the declaration
-    /// is purely a type-system thing).
-    ///
-    /// `is_error` is `true` when the declaration is prefixed with
-    /// `error` (`error enum Foo { ... }`). Error enums' values promote
-    /// into the error side of any `error T` union and are recognized
-    /// by the VM's `JumpIfError` / `UnwrapErrorOrTrap` handlers via
-    /// the flag on [`EnumDefInfo`].
-    pub(super) fn compile_enum_def(
+    /// Resolve an enum's variant payload types and write the result
+    /// into the seeded placeholder entry in both `enum_table` and
+    /// `output.enum_defs`. Called from Phase A2 in `compile.rs` after
+    /// every enum placeholder has been seeded, so payload type
+    /// annotations can forward-reference any enum or obj in the module.
+    pub(super) fn finalize_enum_def(
         &mut self,
         name: String,
         variants: Vec<EnumVariant>,
@@ -114,24 +112,24 @@ impl Compiler {
             });
         }
 
-        // Register the enum in the compile-time table for lookup
-        // by name during constructor / pattern compilation.
-        let abs_idx =
-            self.enum_table
-                .register(name.clone(), variant_infos.clone(), is_pub, is_error);
-
-        // Mirror the registration into output.enum_defs so the VM
-        // can reach the metadata at runtime via the integer def_idx
-        // baked into Value::Enum and Instruction::MakeEnum. The
-        // EnumTable currently uses base_offset=0, so the absolute
-        // index lines up with output.enum_defs.len() exactly.
-        debug_assert_eq!(abs_idx, self.output.enum_defs.len());
-        self.output.enum_defs.push(EnumDefInfo {
+        // Update both the enum_table and the output.enum_defs entry
+        // in place at the placeholder's local index. Phase A seeding
+        // grows the two vectors in lockstep, so the same index covers
+        // both. EnumTable uses base_offset=0 currently, so the
+        // absolute index returned by `resolve` is also the local one.
+        let local_idx = self
+            .enum_table
+            .resolve(&name)
+            .map(|(absolute, _)| absolute - self.enum_table.base_offset)
+            .expect("enum placeholder missing; seed it before calling finalize_enum_def");
+        let finalized = EnumDefInfo {
             name,
             variants: variant_infos,
             is_pub,
             is_error,
-        });
+        };
+        self.enum_table.defs[local_idx] = finalized.clone();
+        self.output.enum_defs[local_idx] = finalized;
     }
 
     /// Compile a constructor expression like `FsResult.NotFound` or

@@ -6,12 +6,16 @@
 // composing type carry those fields inline and dispatch those methods
 // on themselves.
 //
-// This example shows two things you can do with composition:
+// This example shows three things you can do with composition:
 //
 //   1. Pull in a reusable chunk of behaviour (Health → Guard).
-//   2. Override an inherited instance method on the using type, with
-//      the override extending the inherited behaviour by calling the
-//      inherited helpers (`damage`, `is_alive`) on `self`.
+//   2. Override an inherited instance method on the using type.
+//   3. Call the inherited version from inside the override using a
+//      qualified call: `Health.take_hit(self, amount)`. This is how
+//      Oryn does "super-calls" — no new keyword, just the existing
+//      `Type.method(...)` form with `self` as the first argument.
+//      Under multi-use the parent type name naturally disambiguates
+//      which inherited version you mean.
 //
 // Run with:
 //   cargo run --bin oryn -- examples/05_composition.on
@@ -76,13 +80,20 @@ struct Guard {
     }
 
     // Override of Health.take_hit. The parameter list (including the
-    // `mut self` opt-in) must match the inherited method exactly. The
-    // override calls `self.damage(...)` — that's the inherited
-    // helper, still available because we replaced `take_hit`, not
-    // `damage`. Both calls are allowed because this method itself
-    // takes `mut self`.
+    // `mut self` opt-in) must match the inherited method exactly.
+    //
+    // The override delegates to the inherited implementation via
+    // `Health.take_hit(self, amount)` — a qualified call on the
+    // parent type with `self` passed explicitly. This plays the same
+    // role as `super.take_hit(...)` in other languages, but without a
+    // new keyword. The compiler verifies that `self`'s type (Guard)
+    // composes Health, and the runtime dispatches to Health's
+    // original method body.
+    //
+    // After the inherited damage lands, this override adds its own
+    // Guard-specific logging using the now-updated state.
     fn take_hit(mut self, amount: int) {
-        self.damage(amount)
+        Health.take_hit(self, amount)
         if not self.is_alive() {
             print("{self.name} falls.")
         } else {
@@ -129,6 +140,16 @@ g.take_hit(70)
 //   if Guard overrode `damage` (it doesn't), Health.take_hit would
 //   still call Health.damage internally, not Guard's. Override the
 //   entry point method, not its helpers.
+//
+// • Super-calls: inside an override, call the inherited version via
+//   `ParentType.method(self, ...)`. This reuses the existing
+//   `Type.method(...)` form; the compiler recognizes a call to an
+//   instance method on a named type and treats the first positional
+//   argument as an explicit `self`. The first-arg type must be the
+//   named parent or a type that transitively uses it — calling
+//   `Health.tick(enemy, ...)` where `enemy` is unrelated to Health
+//   is a compile-time error. Multi-use composition is disambiguated
+//   naturally: `Health.tick(self, ...)` vs `Mana.tick(self, ...)`.
 //
 // • Multi-use: a struct can `use A, use B` from two types at once. If A
 //   and B happen to define the same name, that's a compile error —
