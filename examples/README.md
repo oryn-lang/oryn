@@ -28,6 +28,7 @@ from the `oryn/` directory (where `Cargo.toml` lives).
 | [`09_lists.on`](09_lists.on)                   | `[T]` list types, list literals, indexing, assignment, methods, and iteration. |
 | [`10_maps.on`](10_maps.on)                     | `{K: V}` map types, map literals, empty maps, indexing, and index assignment. |
 | [`11_enums.on`](11_enums.on)                   | `enum` declarations with nullary and payload variants, constructors, structural equality, and `match` as an expression with wildcard arms. |
+| [`12_methods.on`](12_methods.on)               | The core method set on `string`, `range`, `[T]`, and `{K: V}`, including the higher-order list methods (`map`, `filter`, `fold`, `each`, `find`, `any`, `all`). |
 
 ## Multi-file example
 

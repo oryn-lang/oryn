@@ -8,96 +8,6 @@ use crate::compiler::tables::FunctionSignature;
 // Bytecode instructions
 // ---------------------------------------------------------------------------
 
-/// Flat bytecode that the VM executes. The compiler's job is to walk the
-/// tree-shaped AST and flatten it into this linear sequence. The VM uses
-/// a stack, so operand order matters - left before right.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuiltinFunction {
-    Print,
-}
-
-impl BuiltinFunction {
-    pub fn name(self) -> &'static str {
-        match self {
-            BuiltinFunction::Print => "print",
-        }
-    }
-}
-
-/// Table of builtin methods that dispatch on a list receiver.
-///
-/// Adding a new list method is a one-place change: add a variant here,
-/// add matching arms to [`ListMethod::name`], [`ListMethod::from_name`],
-/// [`ListMethod::from_id`], [`ListMethod::param_types`], and
-/// [`ListMethod::return_type`], plus a handler in the VM's
-/// `CallListMethod` dispatch. No new bytecode instructions are needed.
-///
-/// The discriminant is stable — it's used as the wire-format `id` byte
-/// inside [`Instruction::CallListMethod`], so new variants must be
-/// appended rather than inserted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListMethod {
-    Len = 0,
-    Push = 1,
-    Pop = 2,
-}
-
-impl ListMethod {
-    /// The source-level method name used by users (`xs.len()`, etc.).
-    pub fn name(self) -> &'static str {
-        match self {
-            ListMethod::Len => "len",
-            ListMethod::Push => "push",
-            ListMethod::Pop => "pop",
-        }
-    }
-
-    /// Look up a list method by its source-level name. Returns `None`
-    /// for unknown methods so the compiler can report a precise error.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "len" => Some(ListMethod::Len),
-            "push" => Some(ListMethod::Push),
-            "pop" => Some(ListMethod::Pop),
-            _ => None,
-        }
-    }
-
-    /// Look up a list method by its stable numeric id. Used by the VM
-    /// to decode [`Instruction::CallListMethod`] at runtime.
-    pub fn from_id(id: u8) -> Option<Self> {
-        match id {
-            0 => Some(ListMethod::Len),
-            1 => Some(ListMethod::Push),
-            2 => Some(ListMethod::Pop),
-            _ => None,
-        }
-    }
-
-    /// Parameter types for this method, concretized against the list's
-    /// element type. The compiler uses this to type-check each argument.
-    pub(crate) fn param_types(self, elem_ty: &ResolvedType) -> Vec<ResolvedType> {
-        match self {
-            ListMethod::Len => vec![],
-            ListMethod::Push => vec![elem_ty.clone()],
-            ListMethod::Pop => vec![],
-        }
-    }
-
-    /// Return type for this method, concretized against the list's
-    /// element type. Every method leaves exactly one value on the
-    /// stack — methods that don't logically return anything push an
-    /// `Int` sentinel that the surrounding expression-statement pop
-    /// discards.
-    pub(crate) fn return_type(self, elem_ty: &ResolvedType) -> ResolvedType {
-        match self {
-            ListMethod::Len => ResolvedType::Int,
-            ListMethod::Push => ResolvedType::Int,
-            ListMethod::Pop => ResolvedType::Nillable(Box::new(elem_ty.clone())),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     PushBool(bool),
@@ -129,8 +39,17 @@ pub enum Instruction {
     Call(usize, usize),
     /// Call a method by name on an object.
     CallMethod(String, usize),
-    /// Call a builtin function identified at compile time.
-    CallBuiltin(BuiltinFunction, usize),
+    /// Call a registered native function or method by its index in
+    /// the [`crate::native::NativeRegistry`]. The receiver (for
+    /// methods) is on the stack below `arity` arguments, matching the
+    /// standard method-call stack layout. Globals (`receiver: None`)
+    /// have no receiver to pop. Every native body pushes exactly one
+    /// value (an `Int(0)` sentinel for void-returning natives) so the
+    /// surrounding expression-statement pop machinery stays uniform.
+    ///
+    /// First operand is the registry index; second operand is the
+    /// call site's arity (used by variadic natives like `print`).
+    CallNative(u32, u8),
     /// Push a top-level function reference as a `Value::Function(idx)`.
     /// Emitted when a bare identifier resolves to a top-level function
     /// in a value position (e.g., `let f = double` or `xs.map(double)`).
@@ -184,13 +103,6 @@ pub enum Instruction {
     /// Raises [`crate::errors::RuntimeError::IndexOutOfBounds`] when
     /// the index is out of range.
     ListSet,
-    /// Call a builtin list method identified by its [`ListMethod`] id.
-    /// The receiver (`self`) is on the stack below `arity` arguments,
-    /// matching the standard method-call stack layout. Every method
-    /// leaves exactly one value on the stack (an `Int(0)` sentinel for
-    /// methods that don't logically return anything) so expression
-    /// statement discipline stays uniform.
-    CallListMethod(u8, u8),
     /// Pop `2 * n` values as key/value pairs and push a new map.
     MakeMap(u32),
     /// Pop key and map; push `value` when present or `nil` when absent.

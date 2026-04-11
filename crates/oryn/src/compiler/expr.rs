@@ -8,7 +8,7 @@ use crate::parser::{
 
 use super::block::BlockMode;
 use super::compile::Compiler;
-use super::types::{BuiltinFunction, ConstValue, Instruction, ListMethod};
+use super::types::{ConstValue, Instruction};
 
 /// Walk a chain of `FieldAccess` nodes rooted in an `Ident` and collect
 /// the path segments. Returns `Some(["math", "nested", "lib"])` for an
@@ -81,13 +81,6 @@ impl FoldedValue {
 }
 
 impl Compiler {
-    fn builtin_from_name(name: &str) -> Option<BuiltinFunction> {
-        match name {
-            "print" => Some(BuiltinFunction::Print),
-            _ => None,
-        }
-    }
-
     fn module_const_from_path(
         &self,
         expr: &Expression,
@@ -386,6 +379,23 @@ impl Compiler {
                 ResolvedType::Map(_, value) => ResolvedType::Nillable(value),
                 _ => ResolvedType::Unknown,
             },
+            // Literal forms — used so method calls on inline literals
+            // (`"hi".len()`, `(1..5).contains(3)`, etc.) dispatch
+            // through the native registry. We don't try to refine the
+            // element/key/value type for compound literals since the
+            // native dispatch only checks the outer shape (`List(_)`,
+            // `Map(_, _)`).
+            Expression::String(_) | Expression::StringInterp(_) => ResolvedType::Str,
+            Expression::Int(_) => ResolvedType::Int,
+            Expression::Float(_) => ResolvedType::Float,
+            Expression::True | Expression::False => ResolvedType::Bool,
+            Expression::Nil => ResolvedType::Nil,
+            Expression::Range { .. } => ResolvedType::Range,
+            Expression::ListLiteral { .. } => ResolvedType::List(Box::new(ResolvedType::Unknown)),
+            Expression::MapLiteral { .. } => ResolvedType::Map(
+                Box::new(ResolvedType::Unknown),
+                Box::new(ResolvedType::Unknown),
+            ),
             _ => ResolvedType::Unknown,
         }
     }
@@ -608,98 +618,530 @@ impl Compiler {
         }
     }
 
-    /// Compile a method call on a list receiver. Dispatches against the
-    /// [`ListMethod`] table: look up the method by name, compile the
-    /// receiver and arguments, type-check each argument against the
-    /// method's parameter types (with `SelfElement` replaced by the
-    /// receiver's element type), emit a single
-    /// [`Instruction::CallListMethod`], and return the method's
-    /// declared return type.
+    /// Compile a method call on a `string`, `range`, list, or map
+    /// receiver against the unified native registry. Two-step:
     ///
-    /// Adding a new list method is a one-place change in the table —
-    /// no changes needed here.
-    pub(super) fn compile_list_method(
+    /// 1. Check the higher-order intrinsic table first
+    ///    ([`crate::native::intrinsics`]). If the method is one of
+    ///    `map`/`filter`/`fold`/`each`/`find`/`any`/`all`/`sort_by`
+    ///    on a list receiver, the compiler emits bytecode for it
+    ///    inline (a desugared `for` loop with `CallValue` per iter)
+    ///    rather than a `CallNative` instruction.
+    ///
+    /// 2. Fall through to the native registry. Compile the receiver
+    ///    and arguments, then call the method's signature closure
+    ///    with the resolved receiver type and the resolved arg types
+    ///    (the bidirectional check). Type-check each arg against the
+    ///    returned param list and emit `CallNative(idx, arity)`.
+    ///
+    /// Adding a new method is a one-file change in `native/<type>.rs`
+    /// — no changes needed here.
+    pub(super) fn compile_native_method(
         &mut self,
         object: Spanned<Expression>,
         method: &str,
         args: Vec<Spanned<Expression>>,
-        elem_ty: &ResolvedType,
+        receiver_type: ResolvedType,
         span: &crate::parser::Span,
     ) -> ResolvedType {
-        let list_method = match ListMethod::from_name(method) {
-            Some(m) => m,
-            None => {
-                self.output.errors.push(OrynError::compiler(
-                    span.clone(),
-                    format!("unknown list method `{method}` (expected `len`, `push`, or `pop`)"),
-                ));
-                self.compile_expr(object);
-                for arg in args {
-                    self.compile_expr(arg);
-                }
-                self.emit(Instruction::PushInt(0), span);
-                return ResolvedType::Unknown;
-            }
-        };
+        // ----- Higher-order intrinsics on list receivers -----
+        if let Some(intrinsic) = crate::native::intrinsics::lookup(&receiver_type, method) {
+            return self.compile_list_intrinsic(object, intrinsic, args, &receiver_type, span);
+        }
 
-        let expected_params = list_method.param_types(elem_ty);
+        // ----- Native registry lookup -----
         let arity = args.len();
 
-        if matches!(list_method, ListMethod::Push | ListMethod::Pop)
+        // Mutating-receiver check before compiling: a few methods
+        // mutate their receiver and need a `mut`-rooted local. We
+        // only know which ones by querying the registry — but the
+        // registry doesn't track this flag yet, so we hard-code
+        // the names. Cheap and explicit.
+        let is_mutating_method = matches!(
+            (NativeReceiverKind::from(&receiver_type), method),
+            (
+                Some(_kind),
+                "push" | "pop" | "insert" | "remove" | "clear" | "reverse" | "sort" | "sort_by"
+            )
+        );
+        if is_mutating_method
             && let Some(name) = expression_root_name(&object.node)
             && let Some(entry) = self.locals.resolve(name)
             && !entry.is_mutable()
         {
-            let op = format!("call mutating method `{}` on", list_method.name());
+            let op = format!("call mutating method `{}` on", method);
             self.output.errors.push(OrynError::compiler(
                 span.clone(),
                 super::stmt::immutability_error(name, &entry.kind, &op),
             ));
         }
 
-        if arity != expected_params.len() {
+        // Compile the receiver first (method-call stack convention).
+        self.compile_expr(object);
+
+        // Compile all arguments and capture their resolved types.
+        let mut arg_types: Vec<ResolvedType> = Vec::with_capacity(arity);
+        let mut arg_spans: Vec<Span> = Vec::with_capacity(arity);
+        for arg in args {
+            arg_spans.push(arg.span.clone());
+            arg_types.push(self.compile_expr(arg));
+        }
+
+        // Look up the method in the native registry, AFTER args are
+        // resolved so the signature closure has full type info.
+        let lookup = self.native.lookup_method(&receiver_type, method);
+        let (native_idx, params, return_type) = match lookup {
+            Some((idx, native)) => match (native.signature)(&receiver_type, &arg_types) {
+                Ok(sig) => (idx, sig.params, sig.return_type),
+                Err(msg) => {
+                    self.output
+                        .errors
+                        .push(OrynError::compiler(span.clone(), msg));
+                    self.emit(Instruction::PushInt(0), span);
+                    return ResolvedType::Unknown;
+                }
+            },
+            None => {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!(
+                        "unknown method `{method}` on `{}`",
+                        receiver_type.display_name()
+                    ),
+                ));
+                self.emit(Instruction::PushInt(0), span);
+                return ResolvedType::Unknown;
+            }
+        };
+
+        // Arity check.
+        if arity != params.len() {
             self.output.errors.push(OrynError::compiler(
                 span.clone(),
                 format!(
-                    "list `{}` takes {} argument(s), got {arity}",
-                    list_method.name(),
-                    expected_params.len()
+                    "method `{method}` takes {} argument(s), got {arity}",
+                    params.len()
                 ),
             ));
-            // Compile the receiver and args anyway so any nested errors
-            // still surface, then push a sentinel to keep stack discipline.
-            self.compile_expr(object);
-            for arg in args {
-                self.compile_expr(arg);
-            }
-            self.emit(Instruction::PushInt(0), span);
-            return ResolvedType::Unknown;
         }
 
-        // Receiver first (method-call stack convention).
-        self.compile_expr(object);
-
-        for (i, (arg, expected_ty)) in args.into_iter().zip(expected_params.iter()).enumerate() {
-            let arg_span = arg.span.clone();
-            let arg_ty = self.compile_expr(arg);
+        // Type-check each argument against the resolved param type.
+        for (i, (arg_ty, expected)) in arg_types.iter().zip(params.iter()).enumerate() {
             self.check_types(
-                expected_ty,
-                &arg_ty,
-                &arg_span,
-                &format!(
-                    "list `{}` argument {} type mismatch",
-                    list_method.name(),
-                    i + 1
-                ),
+                expected,
+                arg_ty,
+                arg_spans.get(i).unwrap_or(span),
+                &format!("method `{method}` argument {} type mismatch", i + 1),
             );
         }
 
-        self.emit(
-            Instruction::CallListMethod(list_method as u8, arity as u8),
-            span,
+        self.emit(Instruction::CallNative(native_idx, arity as u8), span);
+        return_type
+    }
+
+    /// Compile a higher-order list intrinsic by emitting bytecode
+    /// inline. The compiler effectively desugars `xs.map(f)` into the
+    /// same bytecode that the user could have written by hand using
+    /// `for x in xs { result.push(f(x)) }`.
+    ///
+    /// Each emitter follows the same loop skeleton:
+    ///
+    /// ```text
+    ///   <push receiver list>           SetLocal @list
+    ///   <push callback fn value>       SetLocal @fn
+    ///   PushInt 0                      SetLocal @i
+    ///   GetLocal @list, CallNative len, SetLocal @len
+    ///   <init result if needed>        SetLocal @result
+    ///
+    /// loop_start:
+    ///   GetLocal @i, GetLocal @len, LessThan
+    ///   JumpIfFalse -> loop_end
+    ///   GetLocal @list, GetLocal @i, ListGet  ; element on stack
+    ///   <method-specific work>
+    ///   GetLocal @i, PushInt 1, Add, SetLocal @i
+    ///   Jump -> loop_start
+    /// loop_end:
+    ///   <push final result>
+    /// ```
+    ///
+    /// Method-specific work fills in the body and the
+    /// "<push final result>" tail. See the per-kind branches below.
+    pub(super) fn compile_list_intrinsic(
+        &mut self,
+        receiver: Spanned<Expression>,
+        intrinsic: crate::native::intrinsics::Intrinsic,
+        args: Vec<Spanned<Expression>>,
+        receiver_type: &ResolvedType,
+        span: &Span,
+    ) -> ResolvedType {
+        use super::tables::BindingKind;
+        use crate::native::intrinsics::{IntrinsicKind, signature};
+
+        let arity = args.len();
+        let arg_count_expected = match intrinsic.kind {
+            IntrinsicKind::Fold => 2,
+            _ => 1,
+        };
+        if arity != arg_count_expected {
+            self.output.errors.push(OrynError::compiler(
+                span.clone(),
+                format!(
+                    "method `{}` takes {arg_count_expected} argument(s), got {arity}",
+                    intrinsic.name
+                ),
+            ));
+        }
+
+        // Compile the receiver into a fresh internal local so we can
+        // re-read it inside the loop body without re-evaluating the
+        // expression (which would have side effects).
+        let receiver_span = receiver.span.clone();
+        let _ = self.compile_expr(receiver);
+        let list_slot = self.locals.define(
+            "@hof_list".to_string(),
+            BindingKind::Internal,
+            receiver_type.clone(),
+        );
+        self.emit(Instruction::SetLocal(list_slot), span);
+
+        // For `fold`, the first argument is the accumulator init
+        // value (any type), and the second is the callback. For
+        // every other intrinsic, the only argument is the callback.
+        let mut args_iter = args.into_iter();
+        let mut acc_slot: Option<usize> = None;
+        let mut acc_type = ResolvedType::Unknown;
+        if matches!(intrinsic.kind, IntrinsicKind::Fold) {
+            let init = args_iter.next().expect("fold init checked above");
+            acc_type = self.compile_expr(init);
+            let slot = self.locals.define(
+                "@hof_acc".to_string(),
+                BindingKind::Internal,
+                acc_type.clone(),
+            );
+            self.emit(Instruction::SetLocal(slot), span);
+            acc_slot = Some(slot);
+        }
+
+        let cb = args_iter.next();
+        let cb_type = match cb {
+            Some(cb) => {
+                let span = cb.span.clone();
+                let t = self.compile_expr(cb);
+                let _ = span;
+                t
+            }
+            None => {
+                self.emit(Instruction::PushInt(0), span);
+                ResolvedType::Unknown
+            }
+        };
+        let cb_slot = self.locals.define(
+            "@hof_cb".to_string(),
+            BindingKind::Internal,
+            cb_type.clone(),
+        );
+        self.emit(Instruction::SetLocal(cb_slot), span);
+
+        // Resolve the full signature now that we know the arg types,
+        // so the return type and any compile-time errors are produced
+        // before we emit the loop body.
+        let mut effective_args: Vec<ResolvedType> = Vec::new();
+        if matches!(intrinsic.kind, IntrinsicKind::Fold) {
+            effective_args.push(acc_type.clone());
+        }
+        effective_args.push(cb_type.clone());
+        let (params, return_type) = match signature(intrinsic.kind, receiver_type, &effective_args)
+        {
+            Ok(pair) => pair,
+            Err(msg) => {
+                self.output
+                    .errors
+                    .push(OrynError::compiler(span.clone(), msg));
+                self.emit(Instruction::PushInt(0), span);
+                return ResolvedType::Unknown;
+            }
+        };
+        // Type-check the callback against the expected function type.
+        let expected_cb = if matches!(intrinsic.kind, IntrinsicKind::Fold) {
+            params.get(1).cloned().unwrap_or(ResolvedType::Unknown)
+        } else {
+            params.first().cloned().unwrap_or(ResolvedType::Unknown)
+        };
+        self.check_types(
+            &expected_cb,
+            &cb_type,
+            &receiver_span,
+            &format!("`{}` callback type mismatch", intrinsic.name),
         );
 
-        list_method.return_type(elem_ty)
+        // Allocate index, length, and (for non-mutating non-aggregating
+        // methods) result-list slots.
+        let i_slot = self.locals.define(
+            "@hof_i".to_string(),
+            BindingKind::Internal,
+            ResolvedType::Int,
+        );
+        self.emit(Instruction::PushInt(0), span);
+        self.emit(Instruction::SetLocal(i_slot), span);
+
+        let len_slot = self.locals.define(
+            "@hof_len".to_string(),
+            BindingKind::Internal,
+            ResolvedType::Int,
+        );
+        let list_ty_unknown = ResolvedType::List(Box::new(ResolvedType::Unknown));
+        let len_idx = self
+            .native
+            .lookup_method(&list_ty_unknown, "len")
+            .expect("native list.len missing")
+            .0;
+        self.emit(Instruction::GetLocal(list_slot), span);
+        self.emit(Instruction::CallNative(len_idx, 0), span);
+        self.emit(Instruction::SetLocal(len_slot), span);
+
+        // For `map`, `filter`: result list slot.
+        let result_slot = match intrinsic.kind {
+            IntrinsicKind::Map | IntrinsicKind::Filter => {
+                let slot = self.locals.define(
+                    "@hof_result".to_string(),
+                    BindingKind::Internal,
+                    return_type.clone(),
+                );
+                self.emit(Instruction::MakeList(0), span);
+                self.emit(Instruction::SetLocal(slot), span);
+                Some(slot)
+            }
+            _ => None,
+        };
+
+        // For `find`: result-value slot, defaults to nil.
+        let find_slot = if matches!(intrinsic.kind, IntrinsicKind::Find) {
+            let slot = self.locals.define(
+                "@hof_found".to_string(),
+                BindingKind::Internal,
+                return_type.clone(),
+            );
+            self.emit(Instruction::PushNil, span);
+            self.emit(Instruction::SetLocal(slot), span);
+            Some(slot)
+        } else {
+            None
+        };
+
+        // For `any`/`all`: bool result slot, default depends on kind.
+        let bool_slot = match intrinsic.kind {
+            IntrinsicKind::Any => {
+                let slot = self.locals.define(
+                    "@hof_any".to_string(),
+                    BindingKind::Internal,
+                    ResolvedType::Bool,
+                );
+                self.emit(Instruction::PushBool(false), span);
+                self.emit(Instruction::SetLocal(slot), span);
+                Some(slot)
+            }
+            IntrinsicKind::All => {
+                let slot = self.locals.define(
+                    "@hof_all".to_string(),
+                    BindingKind::Internal,
+                    ResolvedType::Bool,
+                );
+                self.emit(Instruction::PushBool(true), span);
+                self.emit(Instruction::SetLocal(slot), span);
+                Some(slot)
+            }
+            _ => None,
+        };
+
+        // ----- Loop body -----
+        let push_idx = self
+            .native
+            .lookup_method(&list_ty_unknown, "push")
+            .expect("native list.push missing")
+            .0;
+
+        let loop_start = self.output.instructions.len();
+
+        // i < len test
+        self.emit(Instruction::GetLocal(i_slot), span);
+        self.emit(Instruction::GetLocal(len_slot), span);
+        self.emit(Instruction::LessThan, span);
+        let exit_jump_idx = self.output.instructions.len();
+        self.emit(Instruction::JumpIfFalse(0), span);
+
+        // load element x = list[i]
+        self.emit(Instruction::GetLocal(list_slot), span);
+        self.emit(Instruction::GetLocal(i_slot), span);
+        self.emit(Instruction::ListGet, span);
+        // Stash element in a slot for re-use across the body.
+        let elem_slot = self.locals.define(
+            "@hof_elem".to_string(),
+            BindingKind::Internal,
+            ResolvedType::Unknown,
+        );
+        self.emit(Instruction::SetLocal(elem_slot), span);
+
+        // Per-kind body — every branch leaves the result-related
+        // local-slot writes done before falling through to the
+        // increment + jump tail.
+        let mut early_exits: Vec<usize> = Vec::new();
+        match intrinsic.kind {
+            IntrinsicKind::Map => {
+                // result.push(cb(elem))
+                self.emit(Instruction::GetLocal(result_slot.unwrap()), span);
+                self.emit(Instruction::GetLocal(cb_slot), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::CallValue(1), span);
+                self.emit(Instruction::CallNative(push_idx, 1), span);
+                self.emit(Instruction::Pop, span); // discard sentinel
+            }
+            IntrinsicKind::Filter => {
+                // if cb(elem) { result.push(elem) }
+                self.emit(Instruction::GetLocal(cb_slot), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::CallValue(1), span);
+                let skip_idx = self.output.instructions.len();
+                self.emit(Instruction::JumpIfFalse(0), span);
+                self.emit(Instruction::GetLocal(result_slot.unwrap()), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::CallNative(push_idx, 1), span);
+                self.emit(Instruction::Pop, span);
+                let after_push = self.output.instructions.len();
+                self.output.instructions[skip_idx] = Instruction::JumpIfFalse(after_push);
+            }
+            IntrinsicKind::Fold => {
+                // acc = cb(acc, elem)
+                let slot = acc_slot.unwrap();
+                self.emit(Instruction::GetLocal(cb_slot), span);
+                self.emit(Instruction::GetLocal(slot), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::CallValue(2), span);
+                self.emit(Instruction::SetLocal(slot), span);
+            }
+            IntrinsicKind::Each => {
+                // cb(elem); discard result
+                self.emit(Instruction::GetLocal(cb_slot), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::CallValue(1), span);
+                self.emit(Instruction::Pop, span);
+            }
+            IntrinsicKind::Find => {
+                // if cb(elem) { found = elem; break }
+                self.emit(Instruction::GetLocal(cb_slot), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::CallValue(1), span);
+                let skip_idx = self.output.instructions.len();
+                self.emit(Instruction::JumpIfFalse(0), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::SetLocal(find_slot.unwrap()), span);
+                let exit_idx = self.output.instructions.len();
+                early_exits.push(exit_idx);
+                self.emit(Instruction::Jump(0), span);
+                let after = self.output.instructions.len();
+                self.output.instructions[skip_idx] = Instruction::JumpIfFalse(after);
+            }
+            IntrinsicKind::Any => {
+                // if cb(elem) { any = true; break }
+                self.emit(Instruction::GetLocal(cb_slot), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::CallValue(1), span);
+                let skip_idx = self.output.instructions.len();
+                self.emit(Instruction::JumpIfFalse(0), span);
+                self.emit(Instruction::PushBool(true), span);
+                self.emit(Instruction::SetLocal(bool_slot.unwrap()), span);
+                let exit_idx = self.output.instructions.len();
+                early_exits.push(exit_idx);
+                self.emit(Instruction::Jump(0), span);
+                let after = self.output.instructions.len();
+                self.output.instructions[skip_idx] = Instruction::JumpIfFalse(after);
+            }
+            IntrinsicKind::All => {
+                // if !cb(elem) { all = false; break }
+                self.emit(Instruction::GetLocal(cb_slot), span);
+                self.emit(Instruction::GetLocal(elem_slot), span);
+                self.emit(Instruction::CallValue(1), span);
+                self.emit(Instruction::Not, span);
+                let skip_idx = self.output.instructions.len();
+                self.emit(Instruction::JumpIfFalse(0), span);
+                self.emit(Instruction::PushBool(false), span);
+                self.emit(Instruction::SetLocal(bool_slot.unwrap()), span);
+                let exit_idx = self.output.instructions.len();
+                early_exits.push(exit_idx);
+                self.emit(Instruction::Jump(0), span);
+                let after = self.output.instructions.len();
+                self.output.instructions[skip_idx] = Instruction::JumpIfFalse(after);
+            }
+            IntrinsicKind::SortBy => {
+                // sort_by is the awkward case — it doesn't fit the
+                // simple per-element loop. We bail out and report
+                // an unimplemented error for now; a follow-up slice
+                // can land an insertion-sort emitter that builds an
+                // index array and swaps elements via list.insert /
+                // list.remove (or a dedicated swap instruction).
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    "`sort_by` is not yet implemented (use `sort` for naturally orderable types)"
+                        .to_string(),
+                ));
+            }
+        }
+
+        // i = i + 1; jump back
+        self.emit(Instruction::GetLocal(i_slot), span);
+        self.emit(Instruction::PushInt(1), span);
+        self.emit(Instruction::Add, span);
+        self.emit(Instruction::SetLocal(i_slot), span);
+        self.emit(Instruction::Jump(loop_start), span);
+
+        let loop_end = self.output.instructions.len();
+        self.output.instructions[exit_jump_idx] = Instruction::JumpIfFalse(loop_end);
+        for ei in early_exits {
+            self.output.instructions[ei] = Instruction::Jump(loop_end);
+        }
+
+        // Push the final result based on the intrinsic kind.
+        match intrinsic.kind {
+            IntrinsicKind::Map | IntrinsicKind::Filter => {
+                self.emit(Instruction::GetLocal(result_slot.unwrap()), span);
+            }
+            IntrinsicKind::Fold => {
+                self.emit(Instruction::GetLocal(acc_slot.unwrap()), span);
+            }
+            IntrinsicKind::Find => {
+                self.emit(Instruction::GetLocal(find_slot.unwrap()), span);
+            }
+            IntrinsicKind::Any | IntrinsicKind::All => {
+                self.emit(Instruction::GetLocal(bool_slot.unwrap()), span);
+            }
+            IntrinsicKind::Each | IntrinsicKind::SortBy => {
+                // Sentinel: void-returning natives push 0.
+                self.emit(Instruction::PushInt(0), span);
+            }
+        }
+
+        return_type
+    }
+}
+
+/// Local helper enum, used to make the mutating-method check above
+/// more readable. Mirrors `NativeReceiver` but without dragging the
+/// native module's types into expr.rs's signature surface.
+enum NativeReceiverKind {
+    String,
+    Range,
+    List,
+    Map,
+}
+
+impl NativeReceiverKind {
+    fn from(ty: &ResolvedType) -> Option<Self> {
+        match ty {
+            ResolvedType::Str => Some(NativeReceiverKind::String),
+            ResolvedType::Range => Some(NativeReceiverKind::Range),
+            ResolvedType::List(_) => Some(NativeReceiverKind::List),
+            ResolvedType::Map(_, _) => Some(NativeReceiverKind::Map),
+            _ => None,
+        }
     }
 }
 
@@ -1160,11 +1602,23 @@ impl Compiler {
                         _ => None,
                     };
 
-                    // List receiver: hard-coded builtin methods (`len`,
-                    // `push`, `pop`). Dispatched before the object-method
-                    // lookup so users can't accidentally shadow them.
-                    if let ResolvedType::List(elem_ty) = receiver_type.clone() {
-                        return self.compile_list_method(*object, &method, args, &elem_ty, &span);
+                    // Native methods on string/range/list/map. Dispatched
+                    // before the object-method lookup so users can't
+                    // accidentally shadow them.
+                    if matches!(
+                        receiver_type,
+                        ResolvedType::Str
+                            | ResolvedType::Range
+                            | ResolvedType::List(_)
+                            | ResolvedType::Map(_, _)
+                    ) {
+                        return self.compile_native_method(
+                            *object,
+                            &method,
+                            args,
+                            receiver_type,
+                            &span,
+                        );
                     }
 
                     if let Some((type_name, module, func_idx, is_pub, signature)) = direct_method {
@@ -1475,15 +1929,15 @@ impl Compiler {
                 if let Expression::Ident(name) = &target.node {
                     let name = name.clone();
 
-                    // Direct call to a top-level function or builtin.
-                    // Take this path even if a local with the same
-                    // name exists in scope — the existing semantics
-                    // shadow locals only for value reads, not for
-                    // calls.
+                    // Direct call to a top-level function or registered
+                    // native global. Take this path even if a local with
+                    // the same name exists in scope — the existing
+                    // semantics shadow locals only for value reads, not
+                    // for calls.
                     let is_top_level_fn = self.fn_table.resolve(&name).is_some();
-                    let is_builtin = Self::builtin_from_name(&name).is_some();
+                    let is_native_global = self.native.lookup_global(&name).is_some();
 
-                    if is_top_level_fn || is_builtin {
+                    if is_top_level_fn || is_native_global {
                         return self.compile_direct_named_call(name, args, &span);
                     }
 
@@ -2186,23 +2640,76 @@ impl Compiler {
 
         if let Some(idx) = self.fn_table.resolve(&name) {
             self.emit(Instruction::Call(idx, arity), span);
-        } else if let Some(builtin) = Self::builtin_from_name(&name) {
-            self.emit(Instruction::CallBuiltin(builtin, arity), span);
-        } else {
-            // Caller verified at least one of these resolves before
-            // calling this helper, so this branch is dead in practice.
-            self.output.errors.push(OrynError::compiler(
-                span.clone(),
-                format!("undefined function `{name}`"),
-            ));
-            self.emit(Instruction::PushInt(0), span);
+            return self
+                .fn_table
+                .signatures
+                .get(&name)
+                .map(|sig| sig.return_type.clone())
+                .unwrap_or(ResolvedType::Unknown);
         }
 
-        self.fn_table
-            .signatures
-            .get(&name)
-            .map(|sig| sig.return_type.clone())
-            .unwrap_or(ResolvedType::Unknown)
+        // Native global path. Type-check args against the registered
+        // signature (computed bidirectionally with the actual arg
+        // types in scope), then emit `CallNative(idx, arity)`.
+        if let Some((idx, native)) = self.native.lookup_global(&name) {
+            // Variadic globals like `print` register an empty `params`
+            // list and skip the per-arg type-check entirely. The
+            // signature closure is still called so the return type
+            // can be derived bidirectionally.
+            let is_variadic = name == "print";
+            let sig_result = (native.signature)(&ResolvedType::Nil, &arg_types);
+            let return_type = match sig_result {
+                Ok(sig) => {
+                    if !is_variadic {
+                        if arity != sig.params.len() {
+                            self.output.errors.push(OrynError::compiler(
+                                span.clone(),
+                                format!(
+                                    "arity mismatch: expected {} arguments, got {arity}",
+                                    sig.params.len()
+                                ),
+                            ));
+                        }
+                        for (i, (arg_type, expected)) in
+                            arg_types.iter().zip(sig.params.iter()).enumerate()
+                        {
+                            self.check_types(
+                                expected,
+                                arg_type,
+                                span,
+                                &format!("argument {} type mismatch", i + 1),
+                            );
+                        }
+                    }
+                    sig.return_type
+                }
+                Err(msg) => {
+                    self.output
+                        .errors
+                        .push(OrynError::compiler(span.clone(), msg));
+                    ResolvedType::Unknown
+                }
+            };
+            // Cap arity at u8::MAX (255). Practical user code never
+            // hits this; the check protects the bytecode operand.
+            if arity > u8::MAX as usize {
+                self.output.errors.push(OrynError::compiler(
+                    span.clone(),
+                    format!("call has too many arguments ({arity}); maximum is 255"),
+                ));
+            }
+            self.emit(Instruction::CallNative(idx, arity as u8), span);
+            return return_type;
+        }
+
+        // Caller verified at least one of these resolves before
+        // calling this helper, so this branch is dead in practice.
+        self.output.errors.push(OrynError::compiler(
+            span.clone(),
+            format!("undefined function `{name}`"),
+        ));
+        self.emit(Instruction::PushInt(0), span);
+        ResolvedType::Unknown
     }
 
     /// Compile an indirect call through a function value. The

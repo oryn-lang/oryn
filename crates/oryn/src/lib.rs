@@ -54,11 +54,12 @@ mod docs;
 mod errors;
 mod lexer;
 mod modules;
+mod native;
 mod parser;
 mod visitor;
 mod vm;
 
-pub use compiler::{ListMethod, TypeMap};
+pub use compiler::TypeMap;
 pub use docs::DocTable;
 pub use errors::{FileDiagnostics, OrynError, RuntimeError};
 pub use lexer::{Token, lex, lex_all};

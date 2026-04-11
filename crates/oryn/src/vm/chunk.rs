@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::Statement;
 use crate::compiler::{
@@ -10,6 +11,7 @@ use crate::compiler::{
 use crate::errors::{FileDiagnostics, OrynError};
 use crate::lexer;
 use crate::modules::{find_project_root, load_module, resolve_import};
+use crate::native::NativeRegistry;
 use crate::parser;
 
 /// Compiled bytecode ready to be run by a [`super::VM`].
@@ -36,6 +38,12 @@ pub struct Chunk {
     /// modules). The `oryn test` runner reads this vec and invokes each
     /// entry by `function_idx`.
     pub(crate) tests: Vec<TestInfo>,
+    /// The native registry that the compiler resolved this chunk's
+    /// `CallNative` instructions against. The VM uses this at dispatch
+    /// time to look up each native by index. Wrapped in `Arc` so the
+    /// compiler and VM can share a single instance cheaply across
+    /// many chunks (it's read-only after construction).
+    pub(crate) native_registry: Arc<NativeRegistry>,
 }
 
 impl Chunk {
@@ -71,7 +79,15 @@ impl Chunk {
             return Err(errors);
         }
 
-        let output = compiler::compile(statements, ModuleTable::default(), 0, 0, vec![]);
+        let native = Arc::new(NativeRegistry::build());
+        let output = compiler::compile(
+            statements,
+            ModuleTable::default(),
+            0,
+            0,
+            vec![],
+            native.clone(),
+        );
         if !output.errors.is_empty() {
             return Err(output.errors);
         }
@@ -83,6 +99,7 @@ impl Chunk {
             obj_defs: output.obj_defs,
             enum_defs: output.enum_defs,
             tests: output.tests,
+            native_registry: native,
         })
     }
 
@@ -172,6 +189,11 @@ impl Chunk {
         let mut compiling: HashSet<PathBuf> = HashSet::new();
         compiling.insert(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
 
+        // Build the native registry once and share it across every
+        // compilation unit (entry + modules) so the indices baked into
+        // bytecode are stable workspace-wide.
+        let native = Arc::new(NativeRegistry::build());
+
         // Accumulated output from all compiled modules.
         let mut merged = CompilerOutput::default();
         // Cache of already-compiled modules keyed by canonical file path.
@@ -190,6 +212,7 @@ impl Chunk {
                 &mut compiling,
                 &mut merged,
                 &mut compiled_modules,
+                &native,
             ) {
                 Ok(exports) => {
                     // Dot-joined full path: "math" for flat, "math.nested.lib"
@@ -211,8 +234,14 @@ impl Chunk {
         let obj_offset = merged.obj_defs.len();
 
         // Entry file: current_module_path is empty.
-        let entry_output =
-            compiler::compile(statements, module_table, fn_offset, obj_offset, vec![]);
+        let entry_output = compiler::compile(
+            statements,
+            module_table,
+            fn_offset,
+            obj_offset,
+            vec![],
+            native.clone(),
+        );
         if !entry_output.errors.is_empty() {
             return Err(vec![FileDiagnostics {
                 file: path.to_path_buf(),
@@ -244,6 +273,7 @@ impl Chunk {
             obj_defs: merged.obj_defs,
             enum_defs: merged.enum_defs,
             tests: entry_tests,
+            native_registry: native,
         })
     }
 
@@ -270,7 +300,8 @@ impl Chunk {
 
         // Run the compiler even if there are lex/parse errors so that
         // compile-time checks (e.g. val reassignment) are reported too.
-        let output = compiler::compile(statements, ModuleTable::default(), 0, 0, vec![]);
+        let native = Arc::new(NativeRegistry::build());
+        let output = compiler::compile(statements, ModuleTable::default(), 0, 0, vec![], native);
         errors.extend(output.errors);
 
         (errors, output.type_map)
@@ -324,6 +355,7 @@ impl Chunk {
             let mut merged = CompilerOutput::default();
             let mut compiled_modules: HashMap<PathBuf, ModuleExports> = HashMap::new();
             let mut module_table = ModuleTable::default();
+            let native = Arc::new(NativeRegistry::build());
 
             for import in &imports {
                 match compile_module(
@@ -332,6 +364,7 @@ impl Chunk {
                     &mut compiling,
                     &mut merged,
                     &mut compiled_modules,
+                    &native,
                 ) {
                     Ok(exports) => {
                         module_table.modules.insert(import.join("."), exports);
@@ -358,7 +391,8 @@ impl Chunk {
         // Compile the in-memory source with the populated (or empty)
         // module table. Offsets don't matter for checking — we only
         // care about the errors and type map collected on the way.
-        let output = compiler::compile(statements, module_table, 0, 0, vec![]);
+        let native = Arc::new(NativeRegistry::build());
+        let output = compiler::compile(statements, module_table, 0, 0, vec![], native);
         errors.extend(output.errors);
 
         (errors, output.type_map)
@@ -371,7 +405,7 @@ impl Chunk {
     /// let output = chunk.disassemble();
     ///
     /// assert!(output.contains("SetLocal"));
-    /// assert!(output.contains("CallBuiltin print"));
+    /// assert!(output.contains("CallNative"));
     /// ```
     pub fn disassemble(&self) -> String {
         use std::fmt::Write;
@@ -420,6 +454,7 @@ fn compile_module(
     compiling: &mut HashSet<PathBuf>,
     merged: &mut CompilerOutput,
     compiled_modules: &mut HashMap<PathBuf, ModuleExports>,
+    native: &Arc<NativeRegistry>,
 ) -> Result<ModuleExports, Vec<FileDiagnostics>> {
     let file_path = resolve_import(project_root, import_path);
     let canonical = file_path
@@ -522,6 +557,7 @@ fn compile_module(
             compiling,
             merged,
             compiled_modules,
+            native,
         ) {
             Ok(sub_exports) => {
                 let sub_name = sub_import.join(".");
@@ -547,6 +583,7 @@ fn compile_module(
         fn_offset,
         obj_offset,
         import_path.to_vec(),
+        native.clone(),
     );
     if !module_output.errors.is_empty() {
         compiling.remove(&canonical);
@@ -619,9 +656,13 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
                 let s = if *arity == 1 { "arg" } else { "args" };
                 format!("CallMethod \"{name}\" ({arity} {s} + self)")
             }
-            Instruction::CallBuiltin(builtin, arity) => {
+            Instruction::CallNative(idx, arity) => {
                 let s = if *arity == 1 { "arg" } else { "args" };
-                format!("CallBuiltin {} ({arity} {s})", builtin.name())
+                // Disassembly is just for humans — the registry is
+                // unavailable here, so we print the raw index. The
+                // VM-side disassembly path that has the chunk in
+                // scope augments this with the registered name.
+                format!("CallNative #{idx} ({arity} {s})")
             }
             Instruction::MakeFunction(idx) => format!("MakeFunction fn#{idx}"),
             Instruction::MakeClosure(idx, n_captures) => {
@@ -644,13 +685,6 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::MakeList(n) => format!("MakeList {n}"),
             Instruction::ListGet => "ListGet".to_string(),
             Instruction::ListSet => "ListSet".to_string(),
-            Instruction::CallListMethod(id, arity) => {
-                let name = crate::compiler::ListMethod::from_id(*id)
-                    .map(|m| m.name())
-                    .unwrap_or("?");
-                let s = if *arity == 1 { "arg" } else { "args" };
-                format!("CallListMethod {name} ({arity} {s} + self)")
-            }
             Instruction::MakeMap(n) => format!("MakeMap {n}"),
             Instruction::MapGet => "MapGet".to_string(),
             Instruction::MapSet => "MapSet".to_string(),

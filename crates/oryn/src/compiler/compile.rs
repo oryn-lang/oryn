@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use crate::OrynError;
 use crate::compiler::types::{ModuleTable, ObjDefInfo, ResolvedType};
+use crate::native::NativeRegistry;
 use crate::parser::{Span, Spanned, Statement, TypeAnnotation};
 
 use super::tables::{EnumTable, FunctionSignature, FunctionTable, Locals, ObjTable};
@@ -51,6 +54,13 @@ pub(super) struct Compiler {
     /// reachable state). Saved and restored at function-body
     /// boundaries by `compile_function_body`.
     pub(super) current_fn_is_mut: bool,
+    /// Shared registry of native functions and methods. The compiler
+    /// resolves source-level method calls and global function calls
+    /// against this registry, baking the resulting indices into
+    /// `CallNative` instructions. The same `Arc` is then handed to
+    /// the `Chunk` so the VM can dispatch by index without needing
+    /// to rebuild it.
+    pub(super) native: Arc<NativeRegistry>,
 }
 
 impl Compiler {
@@ -58,6 +68,7 @@ impl Compiler {
         fn_base_offset: usize,
         obj_base_offset: usize,
         current_module_path: Vec<String>,
+        native: Arc<NativeRegistry>,
     ) -> Self {
         Self {
             output: CompilerOutput::default(),
@@ -71,6 +82,7 @@ impl Compiler {
             obj_base_offset,
             current_module_path,
             current_fn_is_mut: false,
+            native,
         }
     }
 
@@ -109,8 +121,9 @@ pub(crate) fn compile(
     fn_base_offset: usize,
     obj_base_offset: usize,
     current_module_path: Vec<String>,
+    native: Arc<NativeRegistry>,
 ) -> CompilerOutput {
-    let mut c = Compiler::new(fn_base_offset, obj_base_offset, current_module_path);
+    let mut c = Compiler::new(fn_base_offset, obj_base_offset, current_module_path, native);
     c.modules = modules;
 
     for stmt in statements {

@@ -4,7 +4,7 @@ use std::ops::Range;
 use gc_arena::lock::RefLock;
 use gc_arena::{Arena, Gc, Rootable};
 
-use crate::compiler::{BuiltinFunction, Instruction, ListMethod};
+use crate::compiler::Instruction;
 use crate::errors::{RuntimeError, ValueType};
 use crate::vm::value::{ClosureData, EnumData, ListData, MapData, MapKey, ObjData, RangeValue};
 
@@ -153,6 +153,7 @@ impl VM {
                 stack: Vec::with_capacity(256),
                 locals: Vec::with_capacity(128),
                 frames: Vec::with_capacity(64),
+                last_native_arity: 0,
             }),
         }
     }
@@ -693,112 +694,23 @@ impl VM {
                             }
                         };
                     }
-                    Instruction::CallBuiltin(builtin, arity) => {
-                        let arity = *arity;
-
-                        match builtin {
-                            BuiltinFunction::Print => {
-                                let args: Vec<Value> =
-                                    state.stack.split_off(state.stack.len() - arity);
-
-                                let output: Vec<String> = args
-                                    .iter()
-                                    .map(|a| match a {
-                                        Value::Uninitialized => "<uninitialized>".to_string(),
-                                        Value::Float(f) => {
-                                            let s = f.to_string();
-
-                                            if s.contains('.') { s } else { format!("{s}.0") }
-                                        }
-                                        Value::Int(n) => n.to_string(),
-                                        Value::Bool(b) => b.to_string(),
-                                        Value::Object(obj_ref) => {
-                                            let data = obj_ref.borrow();
-                                            let type_name = &chunk.obj_defs[data.type_idx].name;
-
-                                            format!("<{type_name} instance>")
-                                        }
-                                        Value::Enum(enum_ref) => {
-                                            // Source-equivalent format:
-                                            // `EnumName.VariantName` for
-                                            // nullary, plus `{ field: value, ... }`
-                                            // for payload variants. The
-                                            // print path uses the same
-                                            // shape as `format_value`
-                                            // because enum values are
-                                            // their own readable form.
-                                            let data = enum_ref.borrow();
-                                            let def = &chunk.enum_defs[data.def_idx];
-                                            let variant = &def.variants[data.variant_idx];
-                                            if variant.field_names.is_empty() {
-                                                format!("{}.{}", def.name, variant.name)
-                                            } else {
-                                                let mut s =
-                                                    format!("{}.{} {{ ", def.name, variant.name);
-                                                for (i, (field_name, field_value)) in variant
-                                                    .field_names
-                                                    .iter()
-                                                    .zip(data.payload.iter())
-                                                    .enumerate()
-                                                {
-                                                    if i > 0 {
-                                                        s.push_str(", ");
-                                                    }
-                                                    s.push_str(field_name);
-                                                    s.push_str(": ");
-                                                    s.push_str(&Self::format_value(
-                                                        field_value,
-                                                        chunk,
-                                                    ));
-                                                }
-                                                s.push_str(" }");
-                                                s
-                                            }
-                                        }
-                                        Value::Range(range_ref) => {
-                                            let range = range_ref.borrow();
-                                            let op = if range.inclusive { "..=" } else { ".." };
-
-                                            format!("{}{}{}", range.current, op, range.end)
-                                        }
-                                        Value::List(list_ref) => {
-                                            let data = list_ref.borrow();
-                                            format!("<list of {}>", data.elements.len())
-                                        }
-                                        Value::Map(map_ref) => {
-                                            let data = map_ref.borrow();
-                                            format!("<map of {}>", data.entries.len())
-                                        }
-                                        Value::String(s) => s.as_str().to_string(),
-                                        Value::Nil => "nil".to_string(),
-                                        Value::Function(idx) => {
-                                            let name = chunk
-                                                .functions
-                                                .get(*idx)
-                                                .map(|f| f.name.as_str())
-                                                .unwrap_or("?");
-                                            format!("<fn {name}>")
-                                        }
-                                        Value::Closure(c) => {
-                                            let name = chunk
-                                                .functions
-                                                .get(c.fn_idx)
-                                                .map(|f| f.name.as_str())
-                                                .unwrap_or("?");
-                                            format!("<closure {name}>")
-                                        }
-                                    })
-                                    .collect();
-
-                                let output_str = output.join(", ");
-                                writer
-                                    .write_all(output_str.as_bytes())
-                                    .map_err(RuntimeError::IoError)?;
-                                writer.write_all(b"\n").map_err(RuntimeError::IoError)?;
-
-                                state.stack.push(Value::Int(0));
-                            }
-                        }
+                    Instruction::CallNative(idx, arity) => {
+                        // Capture the current span before invoking the
+                        // body — the body may need it to construct
+                        // RuntimeError values pointing back at source.
+                        let span =
+                            Self::current_span_from_state(&state.frames, chunk).unwrap_or(0..0);
+                        // Stash the call site's arity so variadic
+                        // natives like `print` can read it.
+                        state.last_native_arity = *arity;
+                        // Look up and dispatch.
+                        let native = chunk.native_registry.get(*idx);
+                        // Advance the caller's ip BEFORE invoking the body
+                        // so any error span resolves against the right
+                        // instruction.
+                        state.frames[frame_idx].ip += 1;
+                        (native.body)(state, mc, chunk, writer, &span)?;
+                        continue;
                     }
                     Instruction::Call(func_idx, arity) => {
                         let func_idx = *func_idx;
@@ -1175,80 +1087,6 @@ impl VM {
                                     actual: ValueType::from(&map),
                                     span,
                                 });
-                            }
-                        }
-                    }
-                    Instruction::CallListMethod(id, _arity) => {
-                        // Decode the method id. An unknown id is a
-                        // compiler bug — the compiler only ever emits
-                        // ids that round-trip through `ListMethod::from_id`.
-                        let method = ListMethod::from_id(*id).ok_or_else(|| {
-                            RuntimeError::UndefinedFunction {
-                                name: format!("<list method #{id}>"),
-                                span: Self::current_span_from_state(&state.frames, chunk),
-                            }
-                        })?;
-
-                        match method {
-                            ListMethod::Len => {
-                                let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                                match list {
-                                    Value::List(list_ref) => {
-                                        let len = list_ref.borrow().elements.len();
-                                        state.stack.push(Value::Int(len as i32));
-                                    }
-                                    _ => {
-                                        let span =
-                                            Self::current_span_from_state(&state.frames, chunk);
-                                        return Err(RuntimeError::TypeError {
-                                            expected: ValueType::List,
-                                            actual: ValueType::from(&list),
-                                            span,
-                                        });
-                                    }
-                                }
-                            }
-                            ListMethod::Push => {
-                                // Stack order: list, value. Pop value first.
-                                let value =
-                                    state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                                let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                                match list {
-                                    Value::List(list_ref) => {
-                                        list_ref.borrow_mut(mc).elements.push(value);
-                                        // Sentinel return — keeps stack
-                                        // discipline uniform across all
-                                        // method calls.
-                                        state.stack.push(Value::Int(0));
-                                    }
-                                    _ => {
-                                        let span =
-                                            Self::current_span_from_state(&state.frames, chunk);
-                                        return Err(RuntimeError::TypeError {
-                                            expected: ValueType::List,
-                                            actual: ValueType::from(&list),
-                                            span,
-                                        });
-                                    }
-                                }
-                            }
-                            ListMethod::Pop => {
-                                let list = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                                match list {
-                                    Value::List(list_ref) => {
-                                        let popped = list_ref.borrow_mut(mc).elements.pop();
-                                        state.stack.push(popped.unwrap_or(Value::Nil));
-                                    }
-                                    _ => {
-                                        let span =
-                                            Self::current_span_from_state(&state.frames, chunk);
-                                        return Err(RuntimeError::TypeError {
-                                            expected: ValueType::List,
-                                            actual: ValueType::from(&list),
-                                            span,
-                                        });
-                                    }
-                                }
                             }
                         }
                     }
@@ -1632,6 +1470,7 @@ mod tests {
             obj_defs: vec![],
             enum_defs: vec![],
             tests: vec![],
+            native_registry: std::sync::Arc::new(crate::native::NativeRegistry::build()),
         }
     }
 
@@ -1652,9 +1491,14 @@ mod tests {
 
     #[test]
     fn builtin_print_executes() {
+        let registry = crate::native::NativeRegistry::build();
+        let print_idx = registry
+            .lookup_global("print")
+            .expect("print global registered")
+            .0;
         let c = chunk(vec![
             Instruction::PushInt(1),
-            Instruction::CallBuiltin(BuiltinFunction::Print, 1),
+            Instruction::CallNative(print_idx, 1),
             Instruction::Pop,
         ]);
 

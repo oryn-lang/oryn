@@ -1,10 +1,17 @@
-use super::types::{BuiltinFunction, ListMethod, ModuleTable};
+use std::sync::Arc;
+
+use super::types::ModuleTable;
 use super::*;
 
+use crate::native::NativeRegistry;
 use crate::parser::{BinOp, Expression, Spanned, Statement};
 
 fn spanned<T>(node: T) -> Spanned<T> {
     Spanned { node, span: 0..0 }
+}
+
+fn registry() -> Arc<NativeRegistry> {
+    Arc::new(NativeRegistry::build())
 }
 
 #[test]
@@ -17,7 +24,7 @@ fn flattens_ast_to_instructions() {
         },
     )))];
 
-    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![]);
+    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![], registry());
 
     assert_eq!(
         output.instructions,
@@ -29,25 +36,27 @@ fn flattens_ast_to_instructions() {
 #[test]
 fn expression_statements_are_popped() {
     let stmts = vec![spanned(Statement::Expression(spanned(Expression::Int(1))))];
-    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![]);
+    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![], registry());
 
     assert_eq!(output.instructions.last(), Some(&Instruction::Pop));
 }
 
 #[test]
-fn builtin_calls_are_lowered_to_typed_builtins() {
+fn builtin_calls_are_lowered_to_call_native() {
     let stmts = vec![spanned(Statement::Expression(spanned(Expression::Call {
         target: Box::new(spanned(Expression::Ident("print".to_string()))),
         args: vec![spanned(Expression::Int(1))],
     })))];
 
-    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![]);
+    let reg = registry();
+    let print_idx = reg.lookup_global("print").unwrap().0;
+    let output = compile(stmts, ModuleTable::default(), 0, 0, vec![], reg);
 
     assert_eq!(
         output.instructions,
         vec![
             Instruction::PushInt(1),
-            Instruction::CallBuiltin(BuiltinFunction::Print, 1),
+            Instruction::CallNative(print_idx, 1),
             Instruction::Pop,
         ]
     );
@@ -148,38 +157,35 @@ fn list_index_assignment_emits_list_set() {
 }
 
 #[test]
-fn list_len_method_emits_call_list_method() {
+fn list_len_method_emits_call_native() {
     let chunk = crate::Chunk::compile("let xs: [int] = [1, 2, 3]\nlet n = xs.len()").unwrap();
-    let expected = ListMethod::Len as u8;
     assert!(
         chunk
             .instructions
             .iter()
-            .any(|i| matches!(i, Instruction::CallListMethod(id, 0) if *id == expected))
+            .any(|i| matches!(i, Instruction::CallNative(_, 0)))
     );
 }
 
 #[test]
-fn list_push_method_emits_call_list_method() {
+fn list_push_method_emits_call_native() {
     let chunk = crate::Chunk::compile("let xs: [int] = [1]\nxs.push(2)").unwrap();
-    let expected = ListMethod::Push as u8;
     assert!(
         chunk
             .instructions
             .iter()
-            .any(|i| matches!(i, Instruction::CallListMethod(id, 1) if *id == expected))
+            .any(|i| matches!(i, Instruction::CallNative(_, 1)))
     );
 }
 
 #[test]
-fn list_pop_method_emits_call_list_method() {
+fn list_pop_method_emits_call_native() {
     let chunk = crate::Chunk::compile("let xs: [int] = [1, 2]\nlet last = xs.pop()").unwrap();
-    let expected = ListMethod::Pop as u8;
     assert!(
         chunk
             .instructions
             .iter()
-            .any(|i| matches!(i, Instruction::CallListMethod(id, 0) if *id == expected))
+            .any(|i| matches!(i, Instruction::CallNative(_, 0)))
     );
 }
 
@@ -189,7 +195,7 @@ fn unknown_list_method_is_compile_error() {
     assert!(
         errors
             .iter()
-            .any(|e| format!("{e}").contains("unknown list method `frobnicate`")),
+            .any(|e| format!("{e}").contains("unknown method `frobnicate`")),
         "expected unknown-method error, got {errors:?}"
     );
 }
@@ -200,7 +206,7 @@ fn list_method_wrong_arity_is_error() {
     assert!(
         errors
             .iter()
-            .any(|e| format!("{e}").contains("list `len` takes 0 argument(s)")),
+            .any(|e| format!("{e}").contains("method `len` takes 0 argument(s)")),
         "expected arity error, got {errors:?}"
     );
 }
@@ -267,7 +273,7 @@ fn push_argument_type_checked_against_element_type() {
     assert!(
         errors
             .iter()
-            .any(|e| format!("{e}").contains("list `push` argument 1 type mismatch")),
+            .any(|e| format!("{e}").contains("method `push` argument 1 type mismatch")),
         "expected push type mismatch, got {errors:?}"
     );
 }
@@ -371,12 +377,6 @@ fn list_type_round_trips_through_display_name() {
 // Exercises `obj Foo { use Bar; ... }`. Every test here is named
 // `composition_<category><num>_<what>` so the matrix can be filtered with
 // `cargo test --package oryn composition_`.
-//
-// The categories correspond to the test plan at
-// ~/.claude/plans/shiny-hopping-dragon.md:
-//   A = sanity, B = conflicts, C = multi-use, D = diamond,
-//   E = transitivity, Ep = inherited method bodies, F = self typing,
-//   G = override attempts, H = edge cases, I = runtime-observable.
 // ---------------------------------------------------------------------------
 
 // ----- A. Sanity: single `use`, no conflicts -----

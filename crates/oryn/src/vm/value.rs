@@ -164,7 +164,7 @@ pub(crate) struct ClosureData<'gc> {
 /// new window at the end of VmState.locals and Return truncates it.
 #[derive(Debug, Collect)]
 #[collect(no_drop)]
-pub(super) struct CallFrame {
+pub(crate) struct CallFrame {
     pub function_idx: Option<usize>,
     pub ip: usize,
     // Base offset into VmState.locals for this frame's local slots.
@@ -176,10 +176,20 @@ pub(super) struct CallFrame {
 /// `stack` is the operand/value stack used by bytecode execution.
 /// `locals` is a shared storage area for all active call frames.
 /// `frames` tracks the current call stack and each frame's locals window.
+///
+/// `last_native_arity` is a scratch slot the dispatch loop writes
+/// before invoking a native body. Variadic natives like `print` need
+/// the call site's arity (which is encoded in the `CallNative`
+/// instruction's second operand) but receive the body parameters as
+/// a fixed signature. The dispatch loop sets this field to the
+/// instruction's arity and the body reads it; everything else can
+/// ignore it.
 #[derive(Collect)]
 #[collect(no_drop)]
-pub(super) struct VmState<'gc> {
+pub(crate) struct VmState<'gc> {
     pub stack: Vec<Value<'gc>>,
     pub locals: Vec<Value<'gc>>,
     pub frames: Vec<CallFrame>,
+    #[collect(require_static)]
+    pub last_native_arity: u8,
 }

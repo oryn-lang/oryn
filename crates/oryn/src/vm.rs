@@ -1,4 +1,4 @@
-mod chunk;
+pub(crate) mod chunk;
 mod exec;
 pub(crate) mod value;
 

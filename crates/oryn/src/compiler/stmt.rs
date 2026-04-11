@@ -7,7 +7,7 @@ use crate::parser::{Expression, Span, Spanned, Statement, TypeAnnotation};
 use super::compile::{Compiler, LoopContext};
 use super::func::FunctionBodyConfig;
 use super::tables::BindingKind;
-use super::types::{Instruction, ListMethod};
+use super::types::Instruction;
 
 // ---------------------------------------------------------------------------
 // Binding compilation
@@ -666,10 +666,16 @@ impl Compiler {
             ResolvedType::Int,
         );
         self.emit(Instruction::GetLocal(list_slot), stmt_span);
-        self.emit(
-            Instruction::CallListMethod(ListMethod::Len as u8, 0),
-            stmt_span,
-        );
+        // Resolve the list `len` native once at compile time. The
+        // registry guarantees `[T].len` is registered, so the
+        // unwrap is sound.
+        let list_ty = ResolvedType::List(Box::new(ResolvedType::Unknown));
+        let len_idx = self
+            .native
+            .lookup_method(&list_ty, "len")
+            .expect("native list.len missing")
+            .0;
+        self.emit(Instruction::CallNative(len_idx, 0), stmt_span);
         self.emit(Instruction::SetLocal(len_slot), stmt_span);
 
         let item_slot = self.locals.define(name, BindingKind::ForIndex, elem_ty);
