@@ -143,11 +143,13 @@ pub enum ValueType {
     Float,
     Int,
     Nil,
-    Error,
     Object,
     /// A tagged-union (enum) value. Distinct from `Object` so the
     /// type-error machinery can produce accurate diagnostics
-    /// (`expected enum, got obj`).
+    /// (`expected enum, got obj`). Error enums (declared with the
+    /// `error` modifier) also show up as this type — the
+    /// is-error-enum flag lives on the compile-time def, not on
+    /// the runtime value type.
     Enum,
     Range,
     String,
@@ -160,7 +162,6 @@ impl From<&Value<'_>> for ValueType {
     fn from(value: &Value<'_>) -> Self {
         match value {
             Value::Nil => ValueType::Nil,
-            Value::Error(_) => ValueType::Error,
             Value::Uninitialized => {
                 unreachable!("compiler bug: uninitialized value reached type conversion")
             }
@@ -184,7 +185,6 @@ impl fmt::Display for ValueType {
             ValueType::Float => write!(f, "float"),
             ValueType::Int => write!(f, "int"),
             ValueType::Nil => write!(f, "nil"),
-            ValueType::Error => write!(f, "error"),
             ValueType::Object => write!(f, "object"),
             ValueType::Enum => write!(f, "enum"),
             ValueType::Range => write!(f, "range"),

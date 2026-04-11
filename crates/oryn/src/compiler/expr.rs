@@ -1430,33 +1430,6 @@ impl Compiler {
 
             // -- Calls --
             Expression::Call { name, args } => {
-                // `Error("message")` — builtin error constructor.
-                if name == "Error" {
-                    if args.len() != 1 {
-                        self.output.errors.push(crate::OrynError::compiler(
-                            span.clone(),
-                            format!("`Error` expects exactly 1 argument, got {}", args.len()),
-                        ));
-
-                        self.emit(Instruction::PushInt(0), &span);
-
-                        return ResolvedType::Error;
-                    }
-
-                    let arg_type = self.compile_expr(args.into_iter().next().unwrap());
-
-                    self.check_types(
-                        &ResolvedType::Str,
-                        &arg_type,
-                        &span,
-                        "`Error` argument must be a String",
-                    );
-
-                    self.emit(Instruction::MakeError, &span);
-
-                    return ResolvedType::Error;
-                }
-
                 let arity = args.len();
 
                 // Capture each argument's root name (if any) BEFORE

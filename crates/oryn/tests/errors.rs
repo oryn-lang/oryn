@@ -241,6 +241,136 @@ fn error_union_type_display_in_error_message() {
     }));
 }
 
+// -- error enum declarations --
+
+#[test]
+fn bare_error_enum_parses_and_type_checks() {
+    let errors =
+        oryn::Chunk::check("error enum MathError {\nDivByZero\nOverflow { value: int }\n}");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn pub_error_enum_parses() {
+    let errors = oryn::Chunk::check("pub error enum Fault {\nOops\n}");
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn error_enum_variant_promotes_to_error_union_return() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero }\n\
+         fn divide(a: int, b: int) -> error int {\n\
+            if b == 0 {\nreturn MathError.DivByZero\n}\n\
+            return a / b\n\
+         }",
+    );
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn regular_enum_does_not_promote_to_error_union() {
+    // A plain (non-error) enum cannot substitute on the error
+    // side of `error T`. The return type check should reject it.
+    let errors = oryn::Chunk::check(
+        "enum Color { Red, Blue }\n\
+         fn foo() -> error int {\n\
+            return Color.Red\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("return type mismatch")
+        )),
+        "expected return type mismatch, got: {errors:?}"
+    );
+}
+
+// -- runtime behavior of error enums --
+
+fn run_source(source: &str) -> (Result<(), oryn::RuntimeError>, String) {
+    let chunk = oryn::Chunk::compile(source).expect("compile error");
+    let mut vm = oryn::VM::new();
+    let mut out: Vec<u8> = Vec::new();
+    let result = vm.run_with_writer(&chunk, &mut out);
+    (result, String::from_utf8(out).unwrap())
+}
+
+#[test]
+fn error_enum_must_unwrap_succeeds_on_ok_value() {
+    let (result, out) = run_source(
+        "error enum E { Bad }\n\
+         fn ok() -> error int { return 42 }\n\
+         let x = must ok()\n\
+         print(x)",
+    );
+    assert!(result.is_ok(), "run failed: {result:?}");
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn error_enum_must_traps_on_error_variant() {
+    let (result, _out) = run_source(
+        "error enum E { Bad }\n\
+         fn fail() -> error int { return E.Bad }\n\
+         let x = must fail()",
+    );
+    assert!(
+        matches!(result, Err(oryn::RuntimeError::ErrorUnwrapTrap { .. })),
+        "expected error unwrap trap, got: {result:?}"
+    );
+}
+
+#[test]
+fn error_enum_try_propagates_through_calling_function() {
+    let (result, out) = run_source(
+        "error enum E { Bad }\n\
+         fn inner() -> error int { return E.Bad }\n\
+         fn outer() -> error int { return try inner() }\n\
+         let x = outer()\n\
+         print(x)",
+    );
+    assert!(result.is_ok(), "run failed: {result:?}");
+    assert_eq!(out, "E.Bad\n");
+}
+
+#[test]
+fn error_enum_payload_survives_try_propagation() {
+    let (result, out) = run_source(
+        "error enum E { Overflow { value: int } }\n\
+         fn inner() -> error int {\n\
+           return E.Overflow { value: 99 }\n\
+         }\n\
+         fn outer() -> error int { return try inner() }\n\
+         print(outer())",
+    );
+    assert!(result.is_ok(), "run failed: {result:?}");
+    assert_eq!(out, "E.Overflow { value: 99 }\n");
+}
+
 #[test]
 fn undefined_variable_is_compile_error() {
     let result = oryn::Chunk::compile("print(typo)");

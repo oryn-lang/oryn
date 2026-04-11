@@ -300,34 +300,16 @@ impl VM {
                         }
                     }
                     Instruction::JumpIfError(target) => {
-                        if state.stack.is_empty() {
-                            return Err(RuntimeError::StackUnderflow);
-                        }
-                        if matches!(state.stack.last(), Some(Value::Error(_))) {
+                        let top = state.stack.last().ok_or(RuntimeError::StackUnderflow)?;
+                        if Self::value_is_error_enum(top, chunk) {
                             state.frames.last_mut().unwrap().ip = *target;
                             continue;
                         }
                     }
-                    Instruction::MakeError => {
-                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
-                        match value {
-                            Value::String(s) => {
-                                state.stack.push(Value::Error(s));
-                            }
-                            _ => {
-                                let span = Self::current_span_from_state(&state.frames, chunk);
-                                return Err(RuntimeError::TypeError {
-                                    expected: ValueType::String,
-                                    actual: ValueType::from(&value),
-                                    span,
-                                });
-                            }
-                        }
-                    }
                     Instruction::UnwrapErrorOrTrap => {
                         let top = state.stack.last().ok_or(RuntimeError::StackUnderflow)?;
-                        if let Value::Error(msg) = top {
-                            let message = msg.as_str().to_string();
+                        if Self::value_is_error_enum(top, chunk) {
+                            let message = Self::format_value(top, chunk);
                             return Err(RuntimeError::ErrorUnwrapTrap {
                                 message,
                                 span: Self::current_span_from_state(&state.frames, chunk),
@@ -397,7 +379,6 @@ impl VM {
                                 format!("<map of {}>", data.entries.len())
                             }
                             Value::Nil => "nil".to_string(),
-                            Value::Error(msg) => format!("error: {}", msg.as_str()),
                             Value::Uninitialized => {
                                 return Err(RuntimeError::TypeError {
                                     expected: ValueType::String,
@@ -774,7 +755,6 @@ impl VM {
                                         }
                                         Value::String(s) => s.as_str().to_string(),
                                         Value::Nil => "nil".to_string(),
-                                        Value::Error(msg) => format!("error: {}", msg.as_str()),
                                     })
                                     .collect();
 
@@ -1355,6 +1335,24 @@ impl VM {
         }
     }
 
+    /// Returns `true` when `value` is a `Value::Enum` whose
+    /// declaration was marked with the `error` modifier
+    /// (`error enum Foo { ... }`). Used by `JumpIfError` and
+    /// `UnwrapErrorOrTrap` to recognize error-side values in an
+    /// `error T` union without a dedicated wrapper Value variant.
+    fn value_is_error_enum(value: &Value<'_>, chunk: &Chunk) -> bool {
+        if let Value::Enum(enum_ref) = value {
+            let data = enum_ref.borrow();
+            chunk
+                .enum_defs
+                .get(data.def_idx)
+                .map(|def| def.is_error)
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    }
+
     /// Format a value for display in print output and string
     /// interpolation. Recursive — compound values format their
     /// children using this same function. The output is intended to
@@ -1370,7 +1368,6 @@ impl VM {
             Value::Int(i) => i.to_string(),
             Value::String(s) => format!("\"{}\"", s.as_str()),
             Value::Nil => "nil".to_string(),
-            Value::Error(msg) => format!("error: {}", msg.as_str()),
             Value::Object(obj_ref) => {
                 let data = obj_ref.borrow();
                 let type_name = &chunk.obj_defs[data.type_idx].name;

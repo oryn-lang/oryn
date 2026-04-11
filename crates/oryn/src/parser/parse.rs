@@ -1135,9 +1135,16 @@ fn program<'src>() -> impl Parser<
             })
             .labelled("enum variant");
 
+        // `[pub] [error] enum Name { ... }` — optional `pub` visibility
+        // modifier followed by optional `error` marker. The canonical
+        // order is `pub error enum`; `error pub enum` is not accepted.
+        // An `error enum` declaration's values are valid on the error
+        // side of any `error T` union (replaces the old string-backed
+        // `Error("msg")` builtin).
         let enum_stmt = just(Token::Pub)
             .or_not()
             .map(|t| t.is_some())
+            .then(just(Token::Error).or_not().map(|t| t.is_some()))
             .then_ignore(just(Token::Enum))
             .then(select! { Token::Ident(name) => name })
             .then(
@@ -1150,12 +1157,13 @@ fn program<'src>() -> impl Parser<
                         newlines.clone().or_not().then(just(Token::RightCurly)),
                     ),
             )
-            .map_with(|((is_pub, name), variants), extra| {
+            .map_with(|(((is_pub, is_error), name), variants), extra| {
                 Spanned::new(
                     Statement::EnumDef {
                         name,
                         variants,
                         is_pub,
+                        is_error,
                     },
                     extra.span(),
                 )

@@ -140,13 +140,15 @@ pub enum Instruction {
     PushNil,
     /// Peek at TOS: if Nil, pop it and jump to target; if not Nil, leave it on the stack.
     JumpIfNil(usize),
-    /// Peek at TOS: if Error, leave it on stack and jump to target; if not Error, leave it and fall through.
+    /// Peek at TOS: if the value is an enum whose def has `is_error == true`,
+    /// leave it on stack and jump to target; otherwise leave it and fall through.
+    /// Used by `try` to propagate error-enum values out of the enclosing function.
     JumpIfError(usize),
-    /// Peek at TOS: if Error, produce a fatal runtime trap with the error message.
-    /// If not Error, leave the value on the stack (it's the success value).
+    /// Peek at TOS: if the value is an enum whose def has `is_error == true`,
+    /// produce a fatal runtime trap using the enum's name + variant + payload
+    /// for the trap message. Otherwise leave the value on the stack (it's
+    /// the success value). Used by `must` to unwrap-or-trap.
     UnwrapErrorOrTrap,
-    /// Pop a String from the stack and push a `Value::Error(...)`.
-    MakeError,
     /// Pop a boolean off the stack. Continue if true; raise
     /// [`crate::errors::RuntimeError::AssertionFailed`] if false. A
     /// non-boolean operand raises a type error. The span recorded for
@@ -376,6 +378,11 @@ pub struct EnumDefInfo {
     /// for arm dispatch.
     pub variants: Vec<EnumVariantInfo>,
     pub is_pub: bool,
+    /// `true` when the enum was declared with the `error` modifier
+    /// (`error enum Foo { ... }`). Values of an error enum promote
+    /// into the error side of any `error T` union and are recognized
+    /// by the VM's `JumpIfError` / `UnwrapErrorOrTrap` handlers.
+    pub is_error: bool,
 }
 
 /// Compile-time information about a single enum variant. Nullary
@@ -476,9 +483,18 @@ pub(crate) enum ResolvedType {
     /// An enum (tagged-union / sum) type. Same `name` + `module`
     /// shape as `Object`. The variants and their payload types live
     /// in the compiler's `EnumTable`, looked up by `name`.
+    ///
+    /// `is_error` mirrors the flag on [`EnumDefInfo`]: it's `true`
+    /// when the enum was declared as `error enum Foo { ... }`.
+    /// The type checker uses it to promote error enum values into
+    /// the error side of an `error T` union. The pair (name, module)
+    /// still uniquely identifies the type — `is_error` is always
+    /// consistent for a given pair because it comes from the one
+    /// declaration that defines it.
     Enum {
         name: String,
         module: Vec<String>,
+        is_error: bool,
     },
     /// `T?` — a nillable type wrapping an inner type.
     Nillable(Box<ResolvedType>),
@@ -493,9 +509,6 @@ pub(crate) enum ResolvedType {
     /// Internal-only nil type. Used for contextual typing of the `nil`
     /// literal. Not user-declarable.
     Nil,
-    /// Internal-only error type. Used for contextual typing of the
-    /// `Error(...)` constructor expression. Not user-declarable.
-    Error,
     Unknown,
 }
 
@@ -570,7 +583,7 @@ impl ResolvedType {
                     format!("{}.{}", module.join("."), name).into()
                 }
             }
-            ResolvedType::Enum { name, module } => {
+            ResolvedType::Enum { name, module, .. } => {
                 if module.is_empty() {
                     name.as_str().into()
                 } else {
@@ -584,7 +597,6 @@ impl ResolvedType {
                 format!("{{{}: {}}}", key.display_name(), value.display_name()).into()
             }
             ResolvedType::Nil => "nil".into(),
-            ResolvedType::Error => "error".into(),
             ResolvedType::Unknown => "unknown".into(),
         }
     }
@@ -628,7 +640,10 @@ impl ResolvedType {
     /// - `Unknown` is compatible with anything (inference gap).
     /// - `Nil` is compatible with any `Nillable(_)`.
     /// - `T` is compatible with `Nillable(T)` (value promotion).
-    /// - `Error` is compatible with any `ErrorUnion(_)`.
+    /// - Any `Enum { is_error: true }` is compatible with any
+    ///   `ErrorUnion(_)` (error enum values promote into the error
+    ///   side of an error union — replaces the old string-backed
+    ///   `Error("msg")` constructor).
     /// - `T` is compatible with `ErrorUnion(T)` (success value promotion).
     /// - Otherwise, structural equality is required.
     pub(crate) fn is_compatible_with(&self, actual: &ResolvedType) -> bool {
@@ -654,8 +669,10 @@ impl ResolvedType {
             return true;
         }
 
-        // Error → !T (error constructor assigned to error union).
-        if matches!(actual, ResolvedType::Error) && self.is_error_union() {
+        // error enum → error T (any error enum value promotes into
+        // the error side of an error union, regardless of the
+        // success type T).
+        if matches!(actual, ResolvedType::Enum { is_error: true, .. }) && self.is_error_union() {
             return true;
         }
 

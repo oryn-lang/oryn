@@ -30,12 +30,19 @@ impl Compiler {
     /// variant's payload field types, register the enum in the
     /// compiler's enum table, and emit no bytecode (the declaration
     /// is purely a type-system thing).
+    ///
+    /// `is_error` is `true` when the declaration is prefixed with
+    /// `error` (`error enum Foo { ... }`). Error enums' values promote
+    /// into the error side of any `error T` union and are recognized
+    /// by the VM's `JumpIfError` / `UnwrapErrorOrTrap` handlers via
+    /// the flag on [`EnumDefInfo`].
     pub(super) fn compile_enum_def(
         &mut self,
         name: String,
         variants: Vec<EnumVariant>,
         stmt_span: &Span,
         is_pub: bool,
+        is_error: bool,
     ) {
         // Reject empty enums at the compiler level. The parser
         // also rejects them, but defensive double-check.
@@ -109,9 +116,9 @@ impl Compiler {
 
         // Register the enum in the compile-time table for lookup
         // by name during constructor / pattern compilation.
-        let abs_idx = self
-            .enum_table
-            .register(name.clone(), variant_infos.clone(), is_pub);
+        let abs_idx =
+            self.enum_table
+                .register(name.clone(), variant_infos.clone(), is_pub, is_error);
 
         // Mirror the registration into output.enum_defs so the VM
         // can reach the metadata at runtime via the integer def_idx
@@ -123,6 +130,7 @@ impl Compiler {
             name,
             variants: variant_infos,
             is_pub,
+            is_error,
         });
     }
 
@@ -250,9 +258,20 @@ impl Compiler {
             span,
         );
 
+        // Look up the is_error flag from the enum table we already
+        // resolved via `resolve_variant` above. The result type
+        // mirrors the flag so downstream type checks (return-type
+        // coercion into `error T`) can see it without a second lookup.
+        let is_error = self
+            .enum_table
+            .resolve(enum_name)
+            .map(|(_, def)| def.is_error)
+            .unwrap_or(false);
+
         ResolvedType::Enum {
             name: enum_name.to_string(),
             module: self.current_module_path.clone(),
+            is_error,
         }
     }
 

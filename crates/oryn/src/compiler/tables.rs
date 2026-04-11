@@ -293,6 +293,7 @@ impl EnumTable {
         name: String,
         variants: Vec<EnumVariantInfo>,
         is_pub: bool,
+        is_error: bool,
     ) -> usize {
         let local = self.defs.len();
         let absolute = self.base_offset + local;
@@ -301,6 +302,7 @@ impl EnumTable {
             name,
             variants,
             is_pub,
+            is_error,
         });
         absolute
     }

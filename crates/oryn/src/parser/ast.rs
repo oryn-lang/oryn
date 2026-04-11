@@ -62,10 +62,18 @@ pub enum Statement {
     /// shape as obj fields. Top-level only; cannot be nested in
     /// functions or methods. See WARTS.md (enums section) and
     /// `examples/11_enums.on` for the user-facing form.
+    ///
+    /// The `is_error` flag is set when the declaration is prefixed
+    /// with the `error` keyword (`error enum Foo { ... }` or
+    /// `pub error enum Foo { ... }`). Values of an error enum are
+    /// valid on the error side of any `error T` union — this is
+    /// the mechanism that replaces the old string-backed
+    /// `Error("msg")` builtin.
     EnumDef {
         name: String,
         variants: Vec<EnumVariant>,
         is_pub: bool,
+        is_error: bool,
     },
     FieldAssignment {
         object: Spanned<Expression>,

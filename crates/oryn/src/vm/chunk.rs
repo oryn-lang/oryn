@@ -632,7 +632,6 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::JumpIfNil(target) => format!("JumpIfNil -> {target:04}"),
             Instruction::JumpIfError(target) => format!("JumpIfError -> {target:04}"),
             Instruction::UnwrapErrorOrTrap => "UnwrapErrorOrTrap".to_string(),
-            Instruction::MakeError => "MakeError".to_string(),
             Instruction::Assert => "Assert".to_string(),
             Instruction::MakeList(n) => format!("MakeList {n}"),
             Instruction::ListGet => "ListGet".to_string(),

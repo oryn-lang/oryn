@@ -173,31 +173,41 @@ print("add_maybe(nil, nil) = {add_maybe(nil, nil)}")  // → nil
 let total = add_maybe(nil, 5) orelse 0
 print("total = {total}")  // → 0
 
-// ── 6. Error unions (must T) ────────────────────────────────────────────
-// A function that might fail can return `!T` — an error union.
-// On success it returns a normal value; on failure it returns
-// `Error("message")` with a description of what went wrong.
+// ── 6. Error unions (error T) ───────────────────────────────────────────
+// A function that might fail can return `error T` — an error union.
+// On success it returns a normal value; on failure it returns a
+// variant of an `error enum` declared for that failure mode.
+//
+// `error enum` declares an enum whose values are valid on the
+// error side of any `error T` union. Variants can carry named-field
+// payloads, same as regular enums — so errors can ship contextual
+// data along with the tag.
+
+error enum MathError {
+    DivByZero
+    Overflow { value: int }
+}
 
 fn divide(a: int, b: int) -> error int {
     if b == 0 {
-        return Error("division by zero")
+        return MathError.DivByZero
     }
     return a / b
 }
 
-// The result carries either the value or the error.
+// The result carries either the value or the error variant.
 let ok_result = divide(10, 2)
 let bad_result = divide(10, 0)
 print("divide(10, 2) = {ok_result}")  // → 5
-print("divide(10, 0) = {bad_result}")  // → error: division by zero
+print("divide(10, 0) = {bad_result}")  // → MathError.DivByZero
 
-// `!expr` unwraps the success value, or traps if it's an error.
+// `must expr` unwraps the success value, or traps if it's an error.
 // Use it when you're confident the call will succeed.
 let five = must divide(10, 2)
 print("unwrapped = {five}")  // → 5
 
 // `try` propagates an error out of the enclosing function.
-// The enclosing function must itself return `!T`.
+// The enclosing function must itself return `error T`.
 fn compute(a: int, b: int, c: int) -> error int {
     let ab = try divide(a, b)
     let result = try divide(ab, c)
@@ -208,9 +218,9 @@ let c1 = compute(100, 5, 2)
 print("compute(100, 5, 2) = {c1}")  // → 10
 
 let c2 = compute(100, 0, 2)
-print("compute(100, 0, 2) = {c2}")  // → error: division by zero
+print("compute(100, 0, 2) = {c2}")  // → MathError.DivByZero
 
 let c3 = compute(100, 5, 0)
-print("compute(100, 5, 0) = {c3}")  // → error: division by zero
+print("compute(100, 5, 0) = {c3}")  // → MathError.DivByZero
 
 print("--- done ---")

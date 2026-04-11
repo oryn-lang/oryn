@@ -405,8 +405,9 @@ impl Compiler {
                 name,
                 variants,
                 is_pub,
+                is_error,
             } => {
-                self.compile_enum_def(name, variants, &stmt_span, is_pub);
+                self.compile_enum_def(name, variants, &stmt_span, is_pub, is_error);
             }
 
             // -- Control flow --

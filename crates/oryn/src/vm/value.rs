@@ -21,9 +21,6 @@ pub(crate) enum Value<'gc> {
     // the Gc pointer (alias), not the underlying data.
     Object(Gc<'gc, RefLock<ObjData<'gc>>>),
     String(Gc<'gc, String>),
-    /// A language-level error value carrying a message payload.
-    /// Only produced by explicit error-union language behavior.
-    Error(Gc<'gc, String>),
     /// A homogeneous list. Element typing is enforced statically at
     /// compile time and erased at runtime; storage is just a
     /// `Vec<Value<'gc>>` wrapped in `RefLock` for in-place mutation.

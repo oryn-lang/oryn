@@ -260,9 +260,13 @@ impl<'a> Formatter<'a> {
                 name,
                 variants,
                 is_pub,
+                is_error,
             } => {
                 if *is_pub {
                     self.out.push_str("pub ");
+                }
+                if *is_error {
+                    self.out.push_str("error ");
                 }
                 self.out.push_str("enum ");
                 self.out.push_str(name);

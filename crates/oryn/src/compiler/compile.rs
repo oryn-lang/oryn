@@ -160,10 +160,11 @@ pub(super) fn resolve_type(
                                 name: other.to_string(),
                                 module: vec![],
                             })
-                        } else if enum_table.resolve(other).is_some() {
+                        } else if let Some((_, def)) = enum_table.resolve(other) {
                             Ok(ResolvedType::Enum {
                                 name: other.to_string(),
                                 module: vec![],
+                                is_error: def.is_error,
                             })
                         } else {
                             Err(format!("undefined type `{other}`"))
@@ -181,10 +182,11 @@ pub(super) fn resolve_type(
                                 name: type_name.clone(),
                                 module: module_path.to_vec(),
                             })
-                        } else if exports.enum_defs.contains_key(type_name) {
+                        } else if let Some(def) = exports.enum_defs.get(type_name) {
                             Ok(ResolvedType::Enum {
                                 name: type_name.clone(),
                                 module: module_path.to_vec(),
+                                is_error: def.is_error,
                             })
                         } else {
                             Err(format!("undefined type `{module_key}.{type_name}`"))
@@ -340,13 +342,18 @@ impl Compiler {
                 module: self.current_module_path.clone(),
             };
         }
-        if let ResolvedType::Enum { name, module } = &ty
+        if let ResolvedType::Enum {
+            name,
+            module,
+            is_error,
+        } = &ty
             && module.is_empty()
             && !self.current_module_path.is_empty()
         {
             return ResolvedType::Enum {
                 name: name.clone(),
                 module: self.current_module_path.clone(),
+                is_error: *is_error,
             };
         }
         if let ResolvedType::List(inner) = ty {
