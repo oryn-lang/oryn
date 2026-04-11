@@ -319,7 +319,7 @@ impl Compiler {
             Expression::Ident(name) => self
                 .locals
                 .resolve(name)
-                .map(|(_, _, t)| t)
+                .map(|entry| entry.obj_type)
                 .unwrap_or(ResolvedType::Unknown),
             Expression::FieldAccess { object, field } => {
                 let parent_type = self.infer_object_type(&object.node);
@@ -624,14 +624,13 @@ impl Compiler {
 
         if matches!(list_method, ListMethod::Push | ListMethod::Pop)
             && let Some(name) = expression_root_name(&object.node)
-            && let Some((_, false, _)) = self.locals.resolve(name)
+            && let Some(entry) = self.locals.resolve(name)
+            && !entry.is_mutable()
         {
+            let op = format!("call mutating method `{}` on", list_method.name());
             self.output.errors.push(OrynError::compiler(
                 span.clone(),
-                format!(
-                    "cannot mutate list through val binding `{name}` with `{}`",
-                    list_method.name()
-                ),
+                super::stmt::immutability_error(name, &entry.kind, &op),
             ));
         }
 
@@ -750,10 +749,10 @@ impl Compiler {
 
             // -- Variables --
             Expression::Ident(name) => {
-                if let Some((slot, _, resolved_type)) = self.locals.resolve(&name) {
-                    self.emit(Instruction::GetLocal(slot), &span);
+                if let Some(entry) = self.locals.resolve(&name) {
+                    self.emit(Instruction::GetLocal(entry.slot), &span);
 
-                    resolved_type
+                    entry.obj_type
                 } else if let Some(const_value) = self
                     .output
                     .module_constants
@@ -1118,11 +1117,57 @@ impl Compiler {
                             ));
                         }
 
+                        // -- Mutability checks for `mut fn` calls --
+                        // Done before compiling the receiver/args so the
+                        // errors point at the right span.
+                        let callee_is_mut = signature.as_ref().map(|s| s.is_mut).unwrap_or(false);
+                        if callee_is_mut {
+                            // Rule 1: a `mut fn` cannot be called on a
+                            // `val`-rooted receiver. Walks the receiver
+                            // expression back to its root binding and
+                            // consults its kind.
+                            if let Some(root_name) = expression_root_name(&object.node)
+                                && let Some(entry) = self.locals.resolve(root_name)
+                                && !entry.is_mutable()
+                            {
+                                let op = format!("call mutating method `{method}` on");
+                                self.output.errors.push(OrynError::compiler(
+                                    span.clone(),
+                                    super::stmt::immutability_error(root_name, &entry.kind, &op),
+                                ));
+                            }
+                            // Rule 2: a plain `fn` method cannot call a
+                            // `mut fn` method on `self`. The current
+                            // function's mutability is tracked on the
+                            // Compiler. If the receiver is `self` and
+                            // the current function isn't a `mut fn`, the
+                            // call would let mutation flow through a
+                            // method whose contract said it wouldn't.
+                            if let Some(root_name) = expression_root_name(&object.node)
+                                && root_name == "self"
+                                && !self.current_fn_is_mut
+                            {
+                                self.output.errors.push(OrynError::compiler(
+                                    span.clone(),
+                                    format!(
+                                        "cannot call mutating method `{method}` from a non-mutating method; declare the enclosing method's receiver as `mut self` to allow mutation"
+                                    ),
+                                ));
+                            }
+                        }
+
                         if let Some(func_idx) = func_idx {
                             self.compile_expr(*object);
 
                             let mut arg_types = Vec::new();
+                            let mut arg_root_names: Vec<Option<String>> = Vec::new();
                             for arg in args {
+                                // Capture each argument's root name (if
+                                // any) so the val-into-mut-param check
+                                // can consult the locals table after
+                                // the type check.
+                                arg_root_names
+                                    .push(expression_root_name(&arg.node).map(|s| s.to_string()));
                                 arg_types.push(self.compile_expr(arg));
                             }
 
@@ -1146,6 +1191,29 @@ impl Compiler {
                                         &span,
                                         &format!("argument {} type mismatch", i + 1),
                                     );
+                                }
+                                // Rule 3: a `mut` parameter cannot
+                                // accept a `val`-rooted argument. The
+                                // argument's mutation rights would
+                                // exceed the caller's, breaking val's
+                                // promise.
+                                for (i, root) in arg_root_names.iter().enumerate() {
+                                    let param_wants_mut =
+                                        sig.param_is_mut.get(i).copied().unwrap_or(false);
+                                    if param_wants_mut
+                                        && let Some(name) = root
+                                        && let Some(entry) = self.locals.resolve(name)
+                                        && !entry.is_mutable()
+                                    {
+                                        let op = format!(
+                                            "pass to mut parameter {} of `{method}`",
+                                            i + 1
+                                        );
+                                        self.output.errors.push(OrynError::compiler(
+                                            span.clone(),
+                                            super::stmt::immutability_error(name, &entry.kind, &op),
+                                        ));
+                                    }
                                 }
                             }
 
@@ -1348,6 +1416,14 @@ impl Compiler {
 
                 let arity = args.len();
 
+                // Capture each argument's root name (if any) BEFORE
+                // compiling, so the val-into-mut-param check can
+                // consult the locals table after the type check.
+                let arg_root_names: Vec<Option<String>> = args
+                    .iter()
+                    .map(|a| expression_root_name(&a.node).map(|s| s.to_string()))
+                    .collect();
+
                 let mut arg_types = Vec::new();
                 for arg in args {
                     let arg_type = self.compile_expr(arg);
@@ -1366,6 +1442,7 @@ impl Compiler {
                         ));
                     }
                     let sig_params = sig.param_types.clone();
+                    let sig_param_is_mut = sig.param_is_mut.clone();
                     for (i, (arg_type, param_type)) in arg_types.iter().zip(&sig_params).enumerate()
                     {
                         self.check_types(
@@ -1374,6 +1451,24 @@ impl Compiler {
                             &span,
                             &format!("argument {} type mismatch", i + 1),
                         );
+                    }
+                    // Val-into-mut-param check: if a parameter is
+                    // declared `mut`, the argument cannot be
+                    // val-rooted (would let the function mutate a
+                    // value the caller declared can't change).
+                    for (i, root) in arg_root_names.iter().enumerate() {
+                        let param_wants_mut = sig_param_is_mut.get(i).copied().unwrap_or(false);
+                        if param_wants_mut
+                            && let Some(arg_name) = root
+                            && let Some(entry) = self.locals.resolve(arg_name)
+                            && !entry.is_mutable()
+                        {
+                            let op = format!("pass to mut parameter {} of `{name}`", i + 1);
+                            self.output.errors.push(OrynError::compiler(
+                                span.clone(),
+                                super::stmt::immutability_error(arg_name, &entry.kind, &op),
+                            ));
+                        }
                     }
                 }
 

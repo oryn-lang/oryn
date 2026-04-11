@@ -38,7 +38,7 @@ pub enum Statement {
     },
     Function {
         name: String,
-        params: Vec<(String, Option<TypeAnnotation>)>,
+        params: Vec<Param>,
         body: Spanned<Expression>,
         return_type: Option<TypeAnnotation>,
         is_pub: bool,
@@ -246,10 +246,16 @@ pub struct ObjField {
 /// signatures (declarations without a body) used by `use` composition.
 /// `is_pub` controls cross-module visibility independent of the parent
 /// object's `is_pub` flag.
+///
+/// Whether the method *mutates* `self` is determined by the `self`
+/// parameter's `is_mut` flag, accessed via [`ObjMethod::is_mut`]. A
+/// method declared `fn bump(mut self)` mutates self; a method declared
+/// `fn read(self)` does not. Static methods (no `self` param) are never
+/// mutating.
 #[derive(Debug)]
 pub struct ObjMethod {
     pub name: String,
-    pub params: Vec<(String, Option<TypeAnnotation>)>,
+    pub params: Vec<Param>,
     pub body: Option<Spanned<Expression>>,
     pub return_type: Option<TypeAnnotation>,
     pub is_pub: bool,
@@ -257,6 +263,46 @@ pub struct ObjMethod {
     /// through the end of the body or signature). Used by the LSP to
     /// look up doc comments directly above the method.
     pub span: Span,
+}
+
+impl ObjMethod {
+    /// `true` if this method declares its `self` parameter as
+    /// `mut self`. Reads the `self` parameter's `is_mut` flag if
+    /// present; static methods (no `self` param) always return
+    /// `false`. This is the canonical "is this method mutating"
+    /// check used by the compiler and the override sig comparison.
+    pub fn is_mut(&self) -> bool {
+        self.params
+            .iter()
+            .find(|p| p.name == "self")
+            .is_some_and(|p| p.is_mut)
+    }
+}
+
+/// A parameter in a function or method declaration. `is_mut` is true
+/// when the parameter was declared `mut x: T` — it permits the function
+/// body to mutate the parameter's fields, indexed elements, and call
+/// mutating methods on it. Without `mut`, parameters are immutable in
+/// Oryn (no opt-out at the call site). `self` parameters never carry
+/// `is_mut` directly; whether `self` is mutable is decided by the
+/// enclosing method's `is_mut` flag.
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub type_ann: Option<TypeAnnotation>,
+    pub is_mut: bool,
+}
+
+impl Param {
+    /// Convenience constructor for the common case of a parameter
+    /// declared without `mut`. Used by the parser hot path.
+    pub fn new(name: String, type_ann: Option<TypeAnnotation>) -> Self {
+        Self {
+            name,
+            type_ann,
+            is_mut: false,
+        }
+    }
 }
 
 #[derive(Debug)]

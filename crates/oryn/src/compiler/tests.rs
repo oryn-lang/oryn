@@ -467,7 +467,7 @@ fn composition_a5_inherited_method_writes_inherited_field() {
     let src = r#"
 obj H {
     hp: int
-    fn heal(self, n: int) {
+    fn heal(mut self, n: int) {
         self.hp = self.hp + n
     }
 }
@@ -1015,7 +1015,7 @@ fn composition_i1_inherited_damage_mutates_guard_hp() {
     let src = r#"
 obj H {
     hp: int
-    fn damage(self, n: int) {
+    fn damage(mut self, n: int) {
         self.hp = self.hp - n
     }
 }
@@ -1035,11 +1035,13 @@ assert(g.hp == 70)
 #[test]
 fn composition_i2_guard_method_calls_inherited_method_on_self() {
     // Mirrors examples/05_composition.on — Guard's own method calls an
-    // inherited method via self.
+    // inherited method via self. Both `damage` and `take_hit` mutate
+    // (or call something that mutates) self, so they're declared
+    // `mut self`. `is_alive` only reads, so it stays plain `fn`.
     let src = r#"
 obj H {
     hp: int
-    fn damage(self, n: int) {
+    fn damage(mut self, n: int) {
         self.hp = self.hp - n
     }
     fn is_alive(self) -> bool {
@@ -1049,7 +1051,7 @@ obj H {
 obj G {
     use H
     name: String
-    fn take_hit(self, n: int) -> bool {
+    fn take_hit(mut self, n: int) -> bool {
         self.damage(n)
         rn self.is_alive()
     }
@@ -1069,7 +1071,7 @@ fn composition_i3_two_guards_do_not_share_state() {
     let src = r#"
 obj H {
     hp: int
-    fn damage(self, n: int) { self.hp = self.hp - n }
+    fn damage(mut self, n: int) { self.hp = self.hp - n }
 }
 obj G {
     use H
@@ -1084,4 +1086,493 @@ assert(b.hp == 100)
     let chunk = crate::Chunk::compile(src).unwrap();
     let mut vm = crate::VM::new();
     vm.run(&chunk).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Mutability — pin the current behaviour of `let`/`val`, parameters, and
+// `self` so the design discussion (WARTS W1, W11, W12, W24) has accurate
+// ground truth. Cross-checked against `BUGS.md` items 2 and 6.
+//
+// Each test is named `mut_<category><num>_<what>` so the matrix can be
+// filtered with `cargo test --package oryn mut_`.
+//
+// Category map:
+//   A = val sanity (binding-level reassignment)
+//   B = val + lists (index assignment, push/pop, len)
+//   C = val + maps (gap candidate)
+//   D = val rooted through nested fields and indexes
+//   E = parameter immutability + W12/W24 error message
+//   F = self mutability inside methods
+// ---------------------------------------------------------------------------
+
+// ----- A. val sanity -----
+
+#[test]
+fn mut_a1_val_binding_cannot_be_reassigned() {
+    let errors = crate::Chunk::compile("val x: int = 1\nx = 2").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("cannot reassign val binding")),
+        "expected reassign error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_a2_let_binding_can_be_reassigned() {
+    let chunk = crate::Chunk::compile("let x: int = 1\nx = 2").unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn mut_a3_val_field_assignment_rejected() {
+    let errors =
+        crate::Chunk::compile("obj C { count: int }\nval c: C = C { count: 1 }\nc.count = 2")
+            .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding")),
+        "expected val-field error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_a4_let_field_assignment_allowed() {
+    let chunk =
+        crate::Chunk::compile("obj C { count: int }\nlet c: C = C { count: 1 }\nc.count = 2")
+            .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+// ----- B. val + lists -----
+
+#[test]
+fn mut_b1_val_list_index_assignment_rejected() {
+    let errors = crate::Chunk::compile("val xs: [int] = [1, 2, 3]\nxs[0] = 99").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding")),
+        "expected val list index error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_b2_val_list_push_rejected() {
+    let errors = crate::Chunk::compile("val xs: [int] = [1]\nxs.push(2)").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding") && format!("{e}").contains("push")),
+        "expected val list push error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_b3_val_list_pop_rejected() {
+    let errors = crate::Chunk::compile("val xs: [int] = [1, 2]\nlet y = xs.pop()").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding") && format!("{e}").contains("pop")),
+        "expected val list pop error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_b4_val_list_len_allowed() {
+    // `len` is read-only, so val should not block it.
+    let chunk = crate::Chunk::compile("val xs: [int] = [1, 2, 3]\nlet n = xs.len()").unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn mut_b5_val_list_read_via_index_allowed() {
+    let chunk = crate::Chunk::compile("val xs: [int] = [1, 2, 3]\nlet y = xs[0]").unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+// ----- C. val + maps (gap candidate) -----
+
+#[test]
+fn mut_c1_val_map_index_assignment_rejected() {
+    // The IndexAssignment check at compiler/stmt.rs:242 fires regardless
+    // of the receiver type, so this should error today. Pin it to be sure.
+    let errors =
+        crate::Chunk::compile("val m: {String: int} = {\"a\": 1}\nm[\"a\"] = 2").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding")),
+        "expected val map index error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_c2_val_map_read_via_index_allowed() {
+    let chunk =
+        crate::Chunk::compile("val m: {String: int} = {\"a\": 1}\nlet v = m[\"a\"]").unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+// ----- D. val rooted through nested fields and indexes -----
+
+#[test]
+fn mut_d1_val_nested_field_assignment_rejected() {
+    let errors = crate::Chunk::compile(
+        "obj Inner { x: int }\nobj Outer { inner: Inner }\nval o: Outer = Outer { inner: Inner { x: 1 } }\no.inner.x = 5",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding")),
+        "expected val nested field error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_d2_val_field_then_list_push_rejected() {
+    // BUGS.md item 6: bag.xs.push(2) on a val bag.
+    let errors = crate::Chunk::compile(
+        "obj Bag { xs: [int] }\nval bag: Bag = Bag { xs: [1] }\nbag.xs.push(2)",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding") && format!("{e}").contains("push")),
+        "expected val nested list push error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_d3_val_list_index_field_assignment_rejected() {
+    // val xs[0].field = ... — index then field on a val root.
+    let errors = crate::Chunk::compile(
+        "obj C { count: int }\nval xs: [C] = [C { count: 1 }]\nxs[0].count = 2",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding")),
+        "expected val list-then-field error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_d4_val_field_then_index_assignment_rejected() {
+    // val o.xs[0] = ... — field then index on a val root.
+    let errors = crate::Chunk::compile(
+        "obj Bag { xs: [int] }\nval bag: Bag = Bag { xs: [1] }\nbag.xs[0] = 9",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("val binding")),
+        "expected val field-then-index error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_d5_val_user_method_mutation_rejected() {
+    // The mutability cluster closed this gap: a `mut self` method
+    // cannot be called on a val-rooted receiver. The val-root walker
+    // at the user-method call site rejects it before any code is
+    // emitted. (When the method is plain `fn`, writing self.count
+    // is rejected at the method's own definition site, not the call
+    // site — different error path, same end result.)
+    let errors = crate::Chunk::compile(
+        "obj C { count: int\n    fn bump(mut self) { self.count = self.count + 1 } }\nval c: C = C { count: 1 }\nc.bump()",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("call mutating method `bump`")
+                && format!("{e}").contains("val binding")),
+        "expected val-rooted mut self rejection, got {errors:?}"
+    );
+}
+
+// ----- E. parameter immutability (W12) and error message (W24) -----
+
+#[test]
+fn mut_e1_function_param_field_assignment_rejected() {
+    let errors = crate::Chunk::compile(
+        "obj C { count: int }\nfn bump(c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)",
+    )
+    .unwrap_err();
+    // After W24 fix: the error names the binding kind (parameter)
+    // accurately, instead of lying about "val binding".
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("parameter `c`")
+                && format!("{e}").contains("immutable")),
+        "expected source-accurate parameter error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_e2_function_param_list_push_rejected() {
+    let errors =
+        crate::Chunk::compile("fn add(xs: [int]) { xs.push(1) }\nlet ys: [int] = [0]\nadd(ys)")
+            .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("parameter `xs`") && format!("{e}").contains("push")),
+        "expected source-accurate parameter-list-push error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_e3_method_param_field_assignment_rejected() {
+    // Same rule applies inside methods to non-self params.
+    let errors = crate::Chunk::compile(
+        "obj C { count: int }\nobj Hub {\n    fn bump(self, c: C) { c.count = c.count + 1 }\n}",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("parameter `c`")
+                && format!("{e}").contains("immutable")),
+        "expected source-accurate method-parameter error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_e4_function_param_reassignment_rejected() {
+    // What about reassigning the parameter binding itself?
+    let errors = crate::Chunk::compile("fn f(n: int) { n = 5 }").unwrap_err();
+    assert!(
+        !errors.is_empty(),
+        "expected error reassigning a parameter, got no errors"
+    );
+}
+
+// ----- F. self mutability inside methods -----
+
+#[test]
+fn mut_f1_self_field_assignment_allowed_in_mut_fn() {
+    // `mut self` is the opt-in for self mutation. Plain `fn` rejects.
+    let chunk = crate::Chunk::compile(
+        "obj C { count: int\n    fn bump(mut self) { self.count = self.count + 1 } }\nlet c: C = C { count: 1 }\nc.bump()",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn mut_f1b_self_field_assignment_rejected_in_plain_fn() {
+    let errors = crate::Chunk::compile(
+        "obj C { count: int\n    fn bump(self) { self.count = self.count + 1 } }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("non-mutating method")
+                && format!("{e}").contains("`mut self`")),
+        "expected non-mut self-mutation rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_f2_self_field_read_allowed() {
+    let chunk = crate::Chunk::compile(
+        "obj C { count: int\n    fn get(self) -> int { rn self.count } }\nlet c: C = C { count: 5 }\nlet n = c.get()",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn mut_f3_self_list_field_push_allowed_in_mut_fn() {
+    // mut self permits mutating methods on list fields of self.
+    let chunk = crate::Chunk::compile(
+        "obj Bag { xs: [int]\n    fn add(mut self, n: int) { self.xs.push(n) } }\nlet b: Bag = Bag { xs: [1] }\nb.add(2)",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn mut_f3b_self_list_field_push_rejected_in_plain_fn() {
+    let errors = crate::Chunk::compile(
+        "obj Bag { xs: [int]\n    fn add(self, n: int) { self.xs.push(n) } }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("`push`") && format!("{e}").contains("`mut self`")),
+        "expected non-mut list-push rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_f4_self_reassignment_rejected() {
+    // The mutability cluster Step 1 closed this gap: `self = ...` is
+    // now always a compile error, even inside what will eventually be
+    // a `mut self` method. The local for self is conceptually a
+    // receiver borrow; rebinding it would silently no-op for the
+    // caller.
+    let errors = crate::Chunk::compile(
+        "obj C { count: int\n    fn replace(self) { self = C { count: 99 } } }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("cannot reassign `self`")),
+        "expected self-reassignment error, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_f5_plain_fn_cannot_call_mut_fn_on_self() {
+    // The fn-from-mut-fn rule: a plain `fn` method cannot call a
+    // `mut self` method on `self`. The plain method's contract says
+    // "I don't mutate"; calling out to a mutating sibling would
+    // break it for any val caller relying on the contract.
+    let errors = crate::Chunk::compile(
+        "obj C {\n    count: int\n    fn bump(mut self) { self.count = self.count + 1 }\n    fn outer(self) { self.bump() }\n}",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("call mutating method `bump`")
+                && format!("{e}").contains("non-mutating method")),
+        "expected fn-from-mut-fn rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_f6_mut_fn_can_call_mut_fn_on_self() {
+    // The positive case: a `mut self` method can call other `mut self`
+    // methods on `self`. This is what makes the override-extends-
+    // inherited-behavior pattern work in examples/05_composition.on.
+    let chunk = crate::Chunk::compile(
+        "obj C {\n    count: int\n    fn bump(mut self) { self.count = self.count + 1 }\n    fn outer(mut self) { self.bump() }\n}\nlet c: C = C { count: 1 }\nc.outer()\nassert(c.count == 2)",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+// ----- G. mut parameters and override asymmetry -----
+
+#[test]
+fn mut_g1_mut_param_allows_field_assignment() {
+    // A function declared with `mut x: T` can mutate the parameter's
+    // fields. The caller may pass a `let` binding (rejected for `val`
+    // bindings, see g3).
+    let chunk = crate::Chunk::compile(
+        "obj C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)\nassert(x.count == 2)",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn mut_g2_mut_param_allows_list_push() {
+    let chunk = crate::Chunk::compile(
+        "fn add(mut xs: [int], n: int) { xs.push(n) }\nlet ys: [int] = [1]\nadd(ys, 2)\nassert(ys.len() == 2)",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn mut_g3_val_arg_to_mut_param_rejected() {
+    let errors = crate::Chunk::compile(
+        "obj C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nval x: C = C { count: 1 }\nbump(x)",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("pass to mut parameter")
+                && format!("{e}").contains("val binding")),
+        "expected val-into-mut-param rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_g4_let_arg_to_mut_param_allowed() {
+    // The positive complement of g3.
+    let chunk = crate::Chunk::compile(
+        "obj C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+// ----- H. mut self override asymmetry -----
+
+#[test]
+fn mut_h1_override_mut_fn_with_plain_fn_allowed() {
+    // Stricter override: the inherited method allows mutation; the
+    // override doesn't. Val callers benefit — they couldn't call the
+    // inherited mut self, but they CAN call the plain override.
+    let chunk = crate::Chunk::compile(
+        "obj Parent {\n    n: int\n    fn touch(mut self) { self.n = self.n + 1 }\n}\nobj Child {\n    use Parent\n    fn touch(self) {}\n}\nval c: Child = Child { n: 0 }\nc.touch()",
+    )
+    .unwrap();
+    let mut vm = crate::VM::new();
+    vm.run(&chunk).unwrap();
+}
+
+#[test]
+fn mut_h2_override_plain_fn_with_mut_fn_rejected() {
+    // Looser override: the inherited contract said "no mutation", the
+    // override would let it happen. Val callers relying on the parent
+    // contract would be silently lied to.
+    let errors = crate::Chunk::compile(
+        "obj Parent {\n    n: int\n    fn touch(self) {}\n}\nobj Child {\n    use Parent\n    fn touch(mut self) { self.n = self.n + 1 }\n}",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("cannot widen mutation contract")),
+        "expected mut-widening rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn mut_h3_signature_mut_must_match_implementation() {
+    // A `mut self` signature requires a `mut self` implementation.
+    // A plain `self` impl that satisfies the shape of a `mut self`
+    // signature is rejected — the mutability contract is part of
+    // the type.
+    let errors = crate::Chunk::compile(
+        "obj Healable {\n    fn heal(mut self, n: int)\n}\nobj Health {\n    hp: int\n    fn heal(self, n: int) {}\n}\nobj Player {\n    use Healable\n    use Health\n}",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("mutability mismatch")
+                && format!("{e}").contains("`mut self`")),
+        "expected sig mutability mismatch, got {errors:?}"
+    );
 }

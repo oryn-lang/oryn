@@ -6,6 +6,7 @@ use crate::parser::{Expression, Span, Spanned, Statement, TypeAnnotation};
 
 use super::compile::{Compiler, LoopContext};
 use super::func::FunctionBodyConfig;
+use super::tables::BindingKind;
 use super::types::{Instruction, ListMethod};
 
 // ---------------------------------------------------------------------------
@@ -19,7 +20,7 @@ impl Compiler {
         name: String,
         value: Spanned<Expression>,
         type_ann: Option<TypeAnnotation>,
-        mutable: bool,
+        kind: BindingKind,
         span: &Span,
     ) {
         let declared_type = type_ann
@@ -65,7 +66,7 @@ impl Compiler {
 
         let resolved = declared_type.unwrap_or(inferred_type);
         self.output.type_map.insert(span.clone(), &resolved);
-        let slot = self.locals.define(name, mutable, resolved);
+        let slot = self.locals.define(name, kind, resolved);
         self.emit(Instruction::SetLocal(slot), span);
     }
 
@@ -191,7 +192,7 @@ impl Compiler {
                 if self.is_module() {
                     self.extract_module_constant(name, value, is_pub, &stmt_span);
                 } else {
-                    self.compile_binding(name, value, type_ann, true, &stmt_span);
+                    self.compile_binding(name, value, type_ann, BindingKind::Let, &stmt_span);
                 }
             }
             Statement::Val {
@@ -203,30 +204,43 @@ impl Compiler {
                 if self.is_module() {
                     self.extract_module_constant(name, value, is_pub, &stmt_span);
                 } else {
-                    self.compile_binding(name, value, type_ann, false, &stmt_span);
+                    self.compile_binding(name, value, type_ann, BindingKind::Val, &stmt_span);
                 }
             }
 
             // -- Assignments --
             Statement::Assignment { name, value } => {
+                // Reject `self = ...` unconditionally — even inside a
+                // `mut fn`. The local for self is conceptually a
+                // receiver borrow; rebinding it would silently no-op
+                // for the caller. See WARTS.md mutability cluster.
+                if name == "self" {
+                    self.output.errors.push(OrynError::compiler(
+                        stmt_span.clone(),
+                        "cannot reassign `self`; assign to its fields instead",
+                    ));
+                    let _ = self.compile_expr(value);
+                    return;
+                }
+
                 let value_type = self.compile_expr(value);
 
-                if let Some((slot, mutable, stored_type)) = self.locals.resolve(&name) {
-                    if !mutable {
+                if let Some(entry) = self.locals.resolve(&name) {
+                    if !entry.is_mutable() {
                         self.output.errors.push(OrynError::compiler(
                             stmt_span.clone(),
-                            format!("cannot reassign val binding `{name}`"),
+                            immutability_error(&name, &entry.kind, "reassign"),
                         ));
                     }
 
                     self.check_types(
-                        &stored_type,
+                        &entry.obj_type,
                         &value_type,
                         &stmt_span,
                         "assignment type mismatch",
                     );
 
-                    self.emit(Instruction::SetLocal(slot), &stmt_span);
+                    self.emit(Instruction::SetLocal(entry.slot), &stmt_span);
                 } else {
                     self.output.errors.push(OrynError::compiler(
                         stmt_span.clone(),
@@ -240,11 +254,12 @@ impl Compiler {
                 value,
             } => {
                 if let Some(name) = field_assignment_root_name(&object.node)
-                    && let Some((_, false, _)) = self.locals.resolve(name)
+                    && let Some(entry) = self.locals.resolve(name)
+                    && !entry.is_mutable()
                 {
                     self.output.errors.push(OrynError::compiler(
                         stmt_span.clone(),
-                        format!("cannot mutate indexed value through val binding `{name}`"),
+                        immutability_error(name, &entry.kind, "mutate indexed value of"),
                     ));
                 }
 
@@ -307,21 +322,24 @@ impl Compiler {
                 field,
                 value,
             } => {
-                let mutable = match field_assignment_root_name(&object.node) {
-                    Some(name) => match self.locals.resolve(name) {
-                        Some((_, m, _)) => m,
-                        None => true,
-                    },
-                    None => true,
-                };
-                let obj_type = self.infer_object_type(&object.node);
-
-                if !mutable {
+                // Source-accurate immutability check: walk the lvalue
+                // back to its root binding and consult its kind. The
+                // parser only produces FieldAccess/Index chains rooted
+                // at an Ident, so the root must be in `locals`. If
+                // we can't find it (compiler bug or future parser
+                // change), default to permissive — the type checker
+                // will catch undefined variables anyway.
+                if let Some(name) = field_assignment_root_name(&object.node)
+                    && let Some(entry) = self.locals.resolve(name)
+                    && !entry.is_mutable()
+                {
                     self.output.errors.push(OrynError::compiler(
                         stmt_span.clone(),
-                        "cannot mutate field on val binding",
+                        immutability_error(name, &entry.kind, "mutate field of"),
                     ));
                 }
+
+                let obj_type = self.infer_object_type(&object.node);
 
                 self.compile_expr(object);
                 self.compile_expr(value);
@@ -343,41 +361,51 @@ impl Compiler {
                 // (for the closure) and the Vec (for FunctionBodyConfig).
                 let resolved_params: HashMap<String, ResolvedType> = params
                     .iter()
-                    .map(|(name, ann)| {
-                        let t = ann
+                    .map(|p| {
+                        let t = p
+                            .type_ann
                             .as_ref()
                             .map(|a| {
                                 self.resolve_type_annotation(a)
                                     .unwrap_or(ResolvedType::Unknown)
                             })
                             .unwrap_or(ResolvedType::Unknown);
-                        (name.clone(), t)
+                        (p.name.clone(), t)
                     })
                     .collect();
 
                 let param_types: Vec<ResolvedType> = params
                     .iter()
-                    .map(|(name, _)| {
+                    .map(|p| {
                         resolved_params
-                            .get(name)
+                            .get(&p.name)
                             .cloned()
                             .unwrap_or(ResolvedType::Unknown)
                     })
                     .collect();
 
-                let param_fn = move |pname: &str, _ann: &Option<TypeAnnotation>| {
+                let param_fn = move |p: &crate::parser::Param| {
                     let resolved = resolved_params
-                        .get(pname)
+                        .get(&p.name)
                         .cloned()
                         .unwrap_or(ResolvedType::Unknown);
-                    (false, resolved)
+                    // `mut x: T` opts the parameter into mutability.
+                    // Without `mut`, top-level function params are
+                    // always immutable in Oryn (no opt-out at the
+                    // call site).
+                    let kind = if p.is_mut {
+                        BindingKind::MutParam
+                    } else {
+                        BindingKind::Param
+                    };
+                    (kind, resolved)
                 };
 
-                for (param_name, ann) in &params {
-                    if ann.is_none() {
+                for param in &params {
+                    if param.type_ann.is_none() {
                         self.output.errors.push(OrynError::compiler(
                             stmt_span.clone(),
-                            format!("parameter `{param_name}` requires a type annotation"),
+                            format!("parameter `{}` requires a type annotation", param.name),
                         ));
                     }
                 }
@@ -403,6 +431,7 @@ impl Compiler {
                     span: &stmt_span,
                     return_type: Some(return_resolved),
                     is_pub,
+                    is_mut: false,
                     pre_allocated_local_idx: None,
                 });
             }
@@ -538,7 +567,8 @@ impl Compiler {
                 let synthetic_name = format!("__test_{}", self.output.tests.len());
                 let fn_span = stmt_span.clone();
 
-                let param_fn = |_: &str, _: &Option<TypeAnnotation>| (false, ResolvedType::Unknown);
+                let param_fn =
+                    |_: &crate::parser::Param| (BindingKind::Param, ResolvedType::Unknown);
 
                 let function_idx = self.compile_function_body(FunctionBodyConfig {
                     name: &synthetic_name,
@@ -550,6 +580,7 @@ impl Compiler {
                     span: &fn_span,
                     return_type: None,
                     is_pub: false,
+                    is_mut: false,
                     pre_allocated_local_idx: None,
                 });
 
@@ -606,8 +637,11 @@ impl Compiler {
                 self.emit(Instruction::JumpIfNil(0), &stmt_span);
 
                 // Then-branch: introduce `name: T` in a new scope.
+                // Pattern bindings from `if let` are immutable like
+                // for-loop variables (you can't reassign the unwrapped
+                // value, only read it).
                 self.with_scope(|this| {
-                    let slot = this.locals.define(name, false, inner_type);
+                    let slot = this.locals.define(name, BindingKind::Val, inner_type);
                     this.emit(Instruction::SetLocal(slot), &stmt_span);
                     this.compile_body_expr(body);
                 });
@@ -643,12 +677,16 @@ impl Compiler {
     /// Emit bytecode for `for name in <range> { body }`. The range
     /// value is on the stack when this is called.
     fn compile_for_range(&mut self, name: String, body: Spanned<Expression>, stmt_span: &Span) {
-        let range_slot = self
-            .locals
-            .define("@for_range".to_string(), false, ResolvedType::Range);
+        let range_slot = self.locals.define(
+            "@for_range".to_string(),
+            BindingKind::Internal,
+            ResolvedType::Range,
+        );
         self.emit(Instruction::SetLocal(range_slot), stmt_span);
 
-        let item_slot = self.locals.define(name, false, ResolvedType::Int);
+        let item_slot = self
+            .locals
+            .define(name, BindingKind::ForIndex, ResolvedType::Int);
 
         let loop_start = self.output.instructions.len();
         self.emit(Instruction::GetLocal(range_slot), stmt_span);
@@ -707,20 +745,26 @@ impl Compiler {
         stmt_span: &Span,
     ) {
         let list_ty = ResolvedType::List(Box::new(elem_ty.clone()));
-        let list_slot = self.locals.define("@for_list".to_string(), false, list_ty);
+        let list_slot = self
+            .locals
+            .define("@for_list".to_string(), BindingKind::Internal, list_ty);
         self.emit(Instruction::SetLocal(list_slot), stmt_span);
 
         // @for_idx = -1 so the first iteration increments to 0 cleanly.
-        let idx_slot = self
-            .locals
-            .define("@for_idx".to_string(), false, ResolvedType::Int);
+        let idx_slot = self.locals.define(
+            "@for_idx".to_string(),
+            BindingKind::Internal,
+            ResolvedType::Int,
+        );
         self.emit(Instruction::PushInt(-1), stmt_span);
         self.emit(Instruction::SetLocal(idx_slot), stmt_span);
 
         // @for_len = @for_list.len() — cached once, not per iteration.
-        let len_slot = self
-            .locals
-            .define("@for_len".to_string(), false, ResolvedType::Int);
+        let len_slot = self.locals.define(
+            "@for_len".to_string(),
+            BindingKind::Internal,
+            ResolvedType::Int,
+        );
         self.emit(Instruction::GetLocal(list_slot), stmt_span);
         self.emit(
             Instruction::CallListMethod(ListMethod::Len as u8, 0),
@@ -728,7 +772,7 @@ impl Compiler {
         );
         self.emit(Instruction::SetLocal(len_slot), stmt_span);
 
-        let item_slot = self.locals.define(name, false, elem_ty);
+        let item_slot = self.locals.define(name, BindingKind::ForIndex, elem_ty);
 
         let loop_start = self.output.instructions.len();
 
@@ -777,5 +821,50 @@ fn field_assignment_root_name(expr: &Expression) -> Option<&str> {
             field_assignment_root_name(&object.node)
         }
         _ => None,
+    }
+}
+
+/// Source-accurate phrasing for an immutability rejection. Used by
+/// every assignment / mutating-method site so the error message
+/// reflects *why* the binding is immutable, not just the catch-all
+/// "val binding". W24 fix.
+///
+/// `op` describes what the user tried to do, in a phrase that fits
+/// after "cannot " — e.g. "reassign", "mutate field of",
+/// "call mutating method `push` on".
+pub(super) fn immutability_error(name: &str, kind: &BindingKind, op: &str) -> String {
+    // `self` inside a non-`mut fn` method is bound with kind `Param`
+    // for enforcement purposes, but the user-facing message should
+    // explain the actual rule (the method is not declared `mut fn`)
+    // rather than calling `self` a parameter.
+    if name == "self" {
+        return format!(
+            "cannot {op} `self` in a non-mutating method; declare the method's receiver as `mut self` to allow mutation"
+        );
+    }
+    match kind {
+        BindingKind::Val => {
+            format!("cannot {op} val binding `{name}`")
+        }
+        BindingKind::Param => {
+            format!(
+                "cannot {op} parameter `{name}`; parameters are immutable (mark with `mut` to allow mutation)"
+            )
+        }
+        BindingKind::ForIndex => {
+            format!("cannot {op} for-loop variable `{name}`")
+        }
+        BindingKind::SelfRef => {
+            // Reaching here for `self` would mean SelfRef is mutable
+            // (it is) and yet an immutability check fired — i.e. a
+            // compiler bug. Phrase generically.
+            format!("cannot {op} `{name}`")
+        }
+        BindingKind::Let | BindingKind::MutParam | BindingKind::Internal => {
+            // Mutable kinds shouldn't reach this function, but if they
+            // do (compiler bug) we still emit something coherent
+            // rather than panicking.
+            format!("cannot {op} `{name}` (compiler bug: mutable kind reached immutability_error)")
+        }
     }
 }

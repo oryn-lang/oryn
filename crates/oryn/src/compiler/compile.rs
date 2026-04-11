@@ -39,6 +39,12 @@ pub(super) struct Compiler {
     /// detect module-level context (for pub let/val extraction) and to
     /// determine privacy-boundary crossings.
     pub(super) current_module_path: Vec<String>,
+    /// `true` while compiling the body of a `mut fn` method, `false`
+    /// otherwise. Drives the rule that a plain `fn` method cannot
+    /// call a `mut fn` method on `self` (or otherwise mutate `self`'s
+    /// reachable state). Saved and restored at function-body
+    /// boundaries by `compile_function_body`.
+    pub(super) current_fn_is_mut: bool,
 }
 
 impl Compiler {
@@ -57,6 +63,7 @@ impl Compiler {
             fn_base_offset,
             obj_base_offset,
             current_module_path,
+            current_fn_is_mut: false,
         }
     }
 
@@ -360,6 +367,8 @@ impl Compiler {
                     FunctionSignature {
                         param_types: func.param_types.clone(),
                         return_type: rt.clone(),
+                        param_is_mut: func.param_is_mut.clone(),
+                        is_mut: func.is_mut,
                     },
                 );
             }

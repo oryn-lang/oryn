@@ -83,8 +83,8 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
             visitor.on_define(name, &stmt.span, &stmt.span);
 
             visitor.enter_scope();
-            for (param_name, _) in params {
-                visitor.on_define(param_name, &stmt.span, &stmt.span);
+            for param in params {
+                visitor.on_define(&param.name, &stmt.span, &stmt.span);
             }
             visitor.visit_expr(body);
             visitor.exit_scope();
@@ -198,8 +198,8 @@ fn walk_obj_method<V: AstVisitor + ?Sized>(visitor: &mut V, method: &ObjMethod, 
 
     if let Some(body) = &method.body {
         visitor.enter_scope();
-        for (param_name, _) in &method.params {
-            visitor.on_define(param_name, obj_span, obj_span);
+        for param in &method.params {
+            visitor.on_define(&param.name, obj_span, obj_span);
         }
         visitor.visit_expr(body);
         visitor.exit_scope();

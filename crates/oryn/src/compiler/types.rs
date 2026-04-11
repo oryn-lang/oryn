@@ -255,11 +255,22 @@ pub struct CompiledFunction {
     pub arity: usize,
     pub params: Vec<String>,
     pub param_types: Vec<ResolvedType>,
+    /// Whether each parameter was declared `mut` in source. Parallel
+    /// to `params` and `param_types`. For methods this includes the
+    /// `self` slot, and `is_mut[self_index]` reflects the method's
+    /// `mut fn` status.
+    pub param_is_mut: Vec<bool>,
     pub return_type: Option<ResolvedType>,
     pub num_locals: usize,
     pub instructions: Vec<Instruction>,
     pub spans: Vec<Range<usize>>,
     pub is_pub: bool,
+    /// `true` for `mut fn` methods. Always `false` for top-level
+    /// functions and plain `fn` methods. Used by callers to enforce
+    /// the val-receiver and non-mut-context rules. Must equal
+    /// `param_is_mut[self_index]` for methods that have a `self`
+    /// parameter.
+    pub is_mut: bool,
 }
 
 /// Metadata for a single `test "name" { ... }` block discovered during
@@ -320,6 +331,10 @@ pub struct MethodSignature {
     /// Parameter types in order, excluding `self`.
     pub param_types: Vec<ResolvedType>,
     pub return_type: ResolvedType,
+    /// `true` for `mut fn` signatures. Implementations must match —
+    /// a `mut fn` signature requires a `mut fn` implementation, and
+    /// a plain `fn` signature must be implemented as plain `fn`.
+    pub is_mut: bool,
 }
 
 /// A module-level constant value, used for `pub let` / `pub val` bindings
@@ -440,6 +455,8 @@ impl CompilerOutput {
                         FunctionSignature {
                             param_types: func.param_types.clone(),
                             return_type: rt.clone(),
+                            param_is_mut: func.param_is_mut.clone(),
+                            is_mut: func.is_mut,
                         },
                     );
                 }

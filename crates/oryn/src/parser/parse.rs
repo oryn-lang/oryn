@@ -748,8 +748,20 @@ fn program<'src>() -> impl Parser<
                 }
             });
 
-        let param_list = select! { Token::Ident(name) => name }
+        // A parameter is `mut? ident type_annotation?`. The leading
+        // `mut` opts the parameter into mutability per the W12
+        // mutability cluster — without it, parameters are immutable
+        // in Oryn (no opt-out at the call site).
+        let param_list = just(Token::Mut)
+            .or_not()
+            .map(|t| t.is_some())
+            .then(select! { Token::Ident(name) => name })
             .then(type_annotation.clone().or_not())
+            .map(|((is_mut, name), type_ann)| Param {
+                name,
+                type_ann,
+                is_mut,
+            })
             .separated_by(just(Token::Comma))
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LeftParen), just(Token::RightParen));
@@ -765,6 +777,13 @@ fn program<'src>() -> impl Parser<
             .then(param_list.clone())
             .then(return_type_ann.clone());
 
+        // Methods are mutating iff their `self` parameter is declared
+        // `mut self`. The `mut` keyword lives in the parameter list,
+        // alongside the `mut` opt-in for non-self parameters — same
+        // word, same meaning, same position. Plain `self` methods can
+        // read `self` but cannot mutate it. There's no separate
+        // method-level mut keyword; `is_mut` on the method is
+        // *derived* from the `self` parameter at compile time.
         let obj_method = pub_prefix
             .clone()
             .then(fn_header.clone())

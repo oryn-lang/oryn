@@ -32,6 +32,8 @@ pub enum Token {
     In,
     #[token("pub")]
     Pub,
+    #[token("mut")]
+    Mut,
     #[token("import")]
     Import,
     #[token("try")]
@@ -166,6 +168,7 @@ impl Display for Token {
             Token::For => write!(f, "for"),
             Token::In => write!(f, "in"),
             Token::Pub => write!(f, "pub"),
+            Token::Mut => write!(f, "mut"),
             Token::Import => write!(f, "import"),
             Token::Try => write!(f, "try"),
             Token::Nil => write!(f, "nil"),

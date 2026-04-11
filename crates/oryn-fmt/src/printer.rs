@@ -1,6 +1,8 @@
 use std::fmt::Write as _;
 
-use oryn::{BinOp, Expression, ObjMethod, Spanned, Statement, StringPart, TypeAnnotation, UnaryOp};
+use oryn::{
+    BinOp, Expression, ObjMethod, Param, Spanned, Statement, StringPart, TypeAnnotation, UnaryOp,
+};
 
 use crate::comments::CommentAttachments;
 use crate::session::{ParsedSource, has_blank_line_between};
@@ -289,6 +291,10 @@ impl<'a> Formatter<'a> {
         if method.is_pub {
             self.out.push_str("pub ");
         }
+        // `mut self` is printed by `write_function_header` via the
+        // per-parameter `mut` prefix, alongside any `mut x: T`
+        // non-self parameters. There's no method-level `mut`
+        // keyword to emit.
         self.write_function_header(&method.name, &method.params, &method.return_type);
         if let Some(body) = &method.body {
             self.out.push(' ');
@@ -299,18 +305,21 @@ impl<'a> Formatter<'a> {
     fn write_function_header(
         &mut self,
         name: &str,
-        params: &[(String, Option<TypeAnnotation>)],
+        params: &[Param],
         return_type: &Option<TypeAnnotation>,
     ) {
         self.out.push_str("fn ");
         self.out.push_str(name);
         self.out.push('(');
-        for (i, (param_name, ann)) in params.iter().enumerate() {
+        for (i, param) in params.iter().enumerate() {
             if i > 0 {
                 self.out.push_str(", ");
             }
-            self.out.push_str(param_name);
-            self.write_type_annotation(ann);
+            if param.is_mut {
+                self.out.push_str("mut ");
+            }
+            self.out.push_str(&param.name);
+            self.write_type_annotation(&param.type_ann);
         }
         self.out.push(')');
         if let Some(ann) = return_type {

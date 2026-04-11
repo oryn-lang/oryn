@@ -182,7 +182,7 @@ fn method_with_params() {
 fn method_mutates_field() {
     assert_eq!(
         run(
-            "obj Counter {\ncount: int\nfn inc(self) {\nself.count = self.count + 1\n}\n}\nlet c = Counter { count: 0 }\nc.inc()\nprint(c.count)"
+            "obj Counter {\ncount: int\nfn inc(mut self) {\nself.count = self.count + 1\n}\n}\nlet c = Counter { count: 0 }\nc.inc()\nprint(c.count)"
         ),
         "1\n",
     );
@@ -299,7 +299,7 @@ fn nested_field_assignment_through_val_root_is_compile_error() {
 fn composed_methods_are_visible_inside_composing_type_methods() {
     assert_eq!(
         run(
-            "obj Health {\nhp: int\nfn damage(self, amount: int) {\nself.hp = self.hp - amount\n}\nfn is_alive(self) -> bool {\nrn self.hp > 0\n}\n}\nobj Guard {\nuse Health\nfn take_hit(self, amount: int) {\nself.damage(amount)\nprint(self.is_alive())\n}\n}\nlet g = Guard { hp: 5 }\ng.take_hit(3)"
+            "obj Health {\nhp: int\nfn damage(mut self, amount: int) {\nself.hp = self.hp - amount\n}\nfn is_alive(self) -> bool {\nrn self.hp > 0\n}\n}\nobj Guard {\nuse Health\nfn take_hit(mut self, amount: int) {\nself.damage(amount)\nprint(self.is_alive())\n}\n}\nlet g = Guard { hp: 5 }\ng.take_hit(3)"
         ),
         "true\n",
     );
@@ -351,7 +351,7 @@ fn use_inherits_fields() {
 fn use_inherits_methods() {
     assert_eq!(
         run(
-            "obj Health {\nhp: int\nfn heal(self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 50, name: \"Bob\" }\np.heal(20)\nprint(p.hp)"
+            "obj Health {\nhp: int\nfn heal(mut self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Health\nname: String\n}\nlet p = Player { hp: 50, name: \"Bob\" }\np.heal(20)\nprint(p.hp)"
         ),
         "70\n",
     );
@@ -361,7 +361,7 @@ fn use_inherits_methods() {
 fn inherited_methods_resolve_fields_on_composed_receiver_layout() {
     assert_eq!(
         run(
-            "obj Named {\nname: String\nfn rename(self, name: String) {\nself.name = name\n}\n}\nobj Position {\nx: int\ny: int\nfn move_by(self, dx: int, dy: int) {\nself.x = self.x + dx\nself.y = self.y + dy\n}\n}\nobj Entity {\nuse Named\nuse Position\n}\nlet e = Entity { name: \"start\", x: 1, y: 2 }\ne.rename(\"moved\")\ne.move_by(3, 4)\nprint(e.name)\nprint(e.x)\nprint(e.y)"
+            "obj Named {\nname: String\nfn rename(mut self, name: String) {\nself.name = name\n}\n}\nobj Position {\nx: int\ny: int\nfn move_by(mut self, dx: int, dy: int) {\nself.x = self.x + dx\nself.y = self.y + dy\n}\n}\nobj Entity {\nuse Named\nuse Position\n}\nlet e = Entity { name: \"start\", x: 1, y: 2 }\ne.rename(\"moved\")\ne.move_by(3, 4)\nprint(e.name)\nprint(e.x)\nprint(e.y)"
         ),
         "moved\n4\n6\n",
     );
@@ -441,7 +441,7 @@ fn signature_satisfied_by_composed_method() {
     // Player uses both - heal() from Health satisfies Healable's requirement.
     assert_eq!(
         run(
-            "obj Healable {\nfn heal(self, amount: int)\n}\nobj Health {\nhp: int\nfn heal(self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
+            "obj Healable {\nfn heal(mut self, amount: int)\n}\nobj Health {\nhp: int\nfn heal(mut self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
         ),
         "70\n",
     );
@@ -548,7 +548,7 @@ fn signature_with_params_matching_shape_compiles() {
     // Signature with extra params - shape must match.
     assert_eq!(
         run(
-            "obj Healable {\nfn heal(self, amount: int)\n}\nobj Health {\nhp: int\nfn heal(self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
+            "obj Healable {\nfn heal(mut self, amount: int)\n}\nobj Health {\nhp: int\nfn heal(mut self, amount: int) {\nself.hp = self.hp + amount\n}\n}\nobj Player {\nuse Healable\nuse Health\n}\nlet p = Player { hp: 50 }\np.heal(20)\nprint(p.hp)"
         ),
         "70\n",
     );

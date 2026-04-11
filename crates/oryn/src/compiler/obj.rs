@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::OrynError;
 use crate::compiler::types::ResolvedType;
-use crate::parser::{ObjField, ObjMethod, Span, TypeAnnotation};
+use crate::parser::{ObjField, ObjMethod, Span};
 
 use super::compile::{Compiler, resolve_type};
 use super::func::FunctionBodyConfig;
-use super::tables::FunctionSignature;
+use super::tables::{BindingKind, FunctionSignature};
 use super::types::{CompiledFunction, MethodSignature, ObjDefInfo};
 
 /// Reason an inherited method signature is allowed to be replaced by an
@@ -44,12 +44,12 @@ impl Compiler {
         // because field layout has fixed offsets.
         let own_method_names: HashSet<String> = methods
             .iter()
-            .filter(|m| m.params.iter().any(|(p, _)| p == "self"))
+            .filter(|m| m.params.iter().any(|p| p.name == "self"))
             .map(|m| m.name.clone())
             .collect();
         let own_static_names: HashSet<String> = methods
             .iter()
-            .filter(|m| !m.params.iter().any(|(p, _)| p == "self"))
+            .filter(|m| !m.params.iter().any(|p| p.name == "self"))
             .map(|m| m.name.clone())
             .collect();
 
@@ -269,13 +269,14 @@ impl Compiler {
             .iter()
             .filter(|m| m.body.is_none())
             .map(|m| {
-                let is_static = !m.params.iter().any(|(pname, _)| pname == "self");
+                let is_static = !m.params.iter().any(|p| p.name == "self");
                 let param_types: Vec<ResolvedType> = m
                     .params
                     .iter()
-                    .filter(|(pname, _)| is_static || pname != "self")
-                    .map(|(_, ann)| {
-                        ann.as_ref()
+                    .filter(|p| is_static || p.name != "self")
+                    .map(|p| {
+                        p.type_ann
+                            .as_ref()
                             .map(|a| {
                                 self.attach_current_module(
                                     resolve_type(a, &self.obj_table, &self.modules)
@@ -299,6 +300,7 @@ impl Compiler {
                     is_static,
                     param_types,
                     return_type,
+                    is_mut: m.is_mut(),
                 }
             })
             .collect();
@@ -335,19 +337,20 @@ impl Compiler {
             if method.body.is_none() {
                 continue;
             }
-            let is_static = !method.params.iter().any(|(pname, _)| pname == "self");
+            let is_static = !method.params.iter().any(|p| p.name == "self");
 
             let resolved_params: HashMap<String, ResolvedType> = method
                 .params
                 .iter()
-                .map(|(pname, ann)| {
-                    let t = if pname == "self" {
+                .map(|p| {
+                    let t = if p.name == "self" {
                         ResolvedType::Object {
                             name: name.clone(),
                             module: self.current_module_path.clone(),
                         }
                     } else {
-                        ann.as_ref()
+                        p.type_ann
+                            .as_ref()
                             .map(|a| {
                                 self.attach_current_module(
                                     resolve_type(a, &self.obj_table, &self.modules)
@@ -356,16 +359,16 @@ impl Compiler {
                             })
                             .unwrap_or(ResolvedType::Unknown)
                     };
-                    (pname.clone(), t)
+                    (p.name.clone(), t)
                 })
                 .collect();
 
             let param_types: Vec<ResolvedType> = method
                 .params
                 .iter()
-                .map(|(pname, _)| {
+                .map(|p| {
                     resolved_params
-                        .get(pname)
+                        .get(&p.name)
                         .cloned()
                         .unwrap_or(ResolvedType::Unknown)
                 })
@@ -387,10 +390,10 @@ impl Compiler {
             let sig_params: Vec<ResolvedType> = method
                 .params
                 .iter()
-                .filter(|(pname, _)| is_static || pname != "self")
-                .map(|(pname, _)| {
+                .filter(|p| is_static || p.name != "self")
+                .map(|p| {
                     resolved_params
-                        .get(pname)
+                        .get(&p.name)
                         .cloned()
                         .unwrap_or(ResolvedType::Unknown)
                 })
@@ -400,9 +403,20 @@ impl Compiler {
                 (sig_params.clone(), return_resolved.clone()),
             );
 
+            // Per-parameter mut flags. The signature stores them
+            // alongside the type so callers can check val-into-mut
+            // arguments without re-resolving the AST.
+            let sig_param_is_mut: Vec<bool> = method
+                .params
+                .iter()
+                .filter(|p| is_static || p.name != "self")
+                .map(|p| p.is_mut)
+                .collect();
             let new_sig = FunctionSignature {
                 param_types: sig_params.clone(),
                 return_type: return_resolved.clone(),
+                param_is_mut: sig_param_is_mut,
+                is_mut: method.is_mut(),
             };
 
             // -- Override resolution -------------------------------------
@@ -460,17 +474,24 @@ impl Compiler {
             // overwritten in pass 2 by `compile_function_body`.
             let local_idx = self.output.functions.len();
             let absolute_idx = self.fn_base_offset + local_idx;
-            let param_names_vec: Vec<String> = method.params.iter().map(|p| p.0.clone()).collect();
+            let param_names_vec: Vec<String> =
+                method.params.iter().map(|p| p.name.clone()).collect();
+            // `mut self` lives in the param list, so per-param mut
+            // info reads directly from each Param's is_mut flag with
+            // no special case for self.
+            let param_is_mut_vec: Vec<bool> = method.params.iter().map(|p| p.is_mut).collect();
             self.output.functions.push(CompiledFunction {
                 name: method.name.clone(),
                 arity: method.params.len(),
                 params: param_names_vec,
                 param_types: param_types.clone(),
+                param_is_mut: param_is_mut_vec,
                 return_type: Some(return_resolved.clone()),
                 num_locals: 0,
                 instructions: Vec::new(),
                 spans: Vec::new(),
                 is_pub: method.is_pub,
+                is_mut: method.is_mut(),
             });
 
             // Update the per-obj tables with the (possibly overridden)
@@ -514,6 +535,10 @@ impl Compiler {
         // Pass 2: compile each method body into its pre-allocated slot.
         // -----------------------------------------------------------------
         for method in methods {
+            // Compute the method's mutability before destructuring
+            // its body — `is_mut()` borrows from `params`, which is
+            // partially moved by the body destructure below.
+            let method_is_mut = method.is_mut();
             let Some(body) = method.body else {
                 continue;
             };
@@ -529,22 +554,41 @@ impl Compiler {
 
             let obj_name_for_closure = name.clone();
             let module_for_closure = self.current_module_path.clone();
-            let param_fn = move |pname: &str, _ann: &Option<TypeAnnotation>| {
-                if pname == "self" {
-                    (
-                        true,
-                        ResolvedType::Object {
-                            name: obj_name_for_closure.clone(),
-                            module: module_for_closure.clone(),
-                        },
-                    )
+            // `self` and non-self params share the same binding rule
+            // now: `mut x` (or `mut self`) makes it mutable, plain
+            // `x` (or plain `self`) makes it immutable. The two cases
+            // collapse cleanly because `mut self` is encoded the same
+            // way as any other `mut`-prefixed parameter. The only
+            // difference is that `self`'s type is the enclosing obj.
+            let param_fn = move |p: &crate::parser::Param| {
+                let kind = match (p.name == "self", p.is_mut) {
+                    // `mut self` — bound mutably so the body can
+                    // write self's fields, call mutating methods on
+                    // self's list fields, and call other `mut self`
+                    // methods on self.
+                    (true, true) => BindingKind::SelfRef,
+                    // Plain `self` — read-only. Modeled as `Param`
+                    // so the immutability check rejects writes
+                    // through self with the same error machinery as
+                    // any other immutable binding.
+                    (true, false) => BindingKind::Param,
+                    // `mut x: T` (non-self) — opt-in mutable param.
+                    (false, true) => BindingKind::MutParam,
+                    // Plain `x: T` — immutable, no opt-out.
+                    (false, false) => BindingKind::Param,
+                };
+                let ty = if p.name == "self" {
+                    ResolvedType::Object {
+                        name: obj_name_for_closure.clone(),
+                        module: module_for_closure.clone(),
+                    }
                 } else {
-                    let resolved = resolved_params
-                        .get(pname)
+                    resolved_params
+                        .get(&p.name)
                         .cloned()
-                        .unwrap_or(ResolvedType::Unknown);
-                    (false, resolved)
-                }
+                        .unwrap_or(ResolvedType::Unknown)
+                };
+                (kind, ty)
             };
 
             self.compile_function_body(FunctionBodyConfig {
@@ -556,6 +600,7 @@ impl Compiler {
                 body,
                 span: stmt_span,
                 is_pub: method.is_pub,
+                is_mut: method_is_mut,
                 return_type: Some(return_type),
                 pre_allocated_local_idx: Some(local_idx),
             });
@@ -637,7 +682,49 @@ impl Compiler {
                 }
             }
             // If the method was inherited (not in compiled_signatures),
-            // it already matched when the parent type was compiled, so skip.
+            // its param/return shape already matched when the parent
+            // type was compiled, so skip the shape recheck. The mut
+            // agreement check below still runs, because the inherited
+            // method may have a different `mut fn` status from what
+            // the required signature wants.
+
+            // Check `mut fn` agreement. A `mut fn` signature must be
+            // implemented by a `mut fn` method, and a plain `fn`
+            // signature by a plain `fn`. The mutability contract is
+            // part of the type, not just the body, so we run this
+            // for both own-implemented and inherited methods.
+            if has_impl {
+                let impl_is_mut = if req.is_static {
+                    static_method_signatures
+                        .get(&req.name)
+                        .map(|s| s.is_mut)
+                        .unwrap_or(false)
+                } else {
+                    method_signatures
+                        .get(&req.name)
+                        .map(|s| s.is_mut)
+                        .unwrap_or(false)
+                };
+                if impl_is_mut != req.is_mut {
+                    let want = if req.is_mut {
+                        "`mut self`"
+                    } else {
+                        "plain `self`"
+                    };
+                    let got = if impl_is_mut {
+                        "`mut self`"
+                    } else {
+                        "plain `self`"
+                    };
+                    self.output.errors.push(OrynError::compiler(
+                        stmt_span.clone(),
+                        format!(
+                            "method `{}` mutability mismatch: signature requires {want}, implementation has {got}",
+                            req.name
+                        ),
+                    ));
+                }
+            }
         }
 
         let mut final_required: Vec<MethodSignature> = Vec::new();
@@ -676,6 +763,13 @@ impl Compiler {
     /// defining type (Self-return covariance). `Unknown` matches
     /// anything to keep the check permissive in the presence of
     /// type-resolution errors elsewhere.
+    ///
+    /// Mut interaction (W12): a `mut fn` may be overridden by a plain
+    /// `fn` (override is *more* restrictive — strictly safer for val
+    /// callers). A plain `fn` may NOT be overridden by a `mut fn`
+    /// (would let mutation flow where the inherited contract said it
+    /// couldn't, breaking val callers who relied on the parent
+    /// signature). Same direction Java/C# use for visibility narrowing.
     #[allow(clippy::too_many_arguments)]
     fn check_override_signature(
         &mut self,
@@ -688,6 +782,18 @@ impl Compiler {
         stmt_span: &Span,
     ) {
         let kind = if is_static { "static method" } else { "method" };
+
+        // Mut/non-mut asymmetry: stricter overrides allowed, looser
+        // ones forbidden. Static methods don't dispatch through self
+        // and so the rule doesn't apply to them.
+        if !is_static && own.is_mut && !inherited.is_mut {
+            self.output.errors.push(OrynError::compiler(
+                stmt_span.clone(),
+                format!(
+                    "{kind} `{method_name}` overrides `use {source_type_name}`'s `{method_name}` with `mut self`, but the inherited method takes plain `self`; cannot widen mutation contract"
+                ),
+            ));
+        }
 
         if inherited.param_types.len() != own.param_types.len() {
             self.output.errors.push(OrynError::compiler(

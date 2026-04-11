@@ -1,21 +1,26 @@
 use crate::compiler::types::ResolvedType;
-use crate::parser::{Expression, Span, Spanned, TypeAnnotation};
+use crate::parser::{Expression, Param, Span, Spanned};
 
 use super::compile::Compiler;
-use super::tables::Locals;
+use super::tables::{BindingKind, Locals};
 use super::types::{CompiledFunction, Instruction};
 
 // ---------------------------------------------------------------------------
 // Function body config
 // ---------------------------------------------------------------------------
 
-/// Callback that determines (mutable, obj_type) for each parameter.
-pub(super) type ParamLocalFn = dyn Fn(&str, &Option<TypeAnnotation>) -> (bool, ResolvedType);
+/// Callback that determines (BindingKind, obj_type) for each parameter.
+/// The kind tells the locals table whether the param is `Param` (default,
+/// immutable), `MutParam` (declared `mut`), or `SelfRef` (the `self`
+/// parameter on a `mut fn` method). Top-level functions never produce
+/// `SelfRef`. The full `&Param` is passed so the callback can consult
+/// the `is_mut` flag in addition to the name.
+pub(super) type ParamLocalFn = dyn Fn(&Param) -> (BindingKind, ResolvedType);
 
 /// Configuration for compiling a function or method body.
 pub(super) struct FunctionBodyConfig<'a> {
     pub name: &'a str,
-    pub params: &'a [(String, Option<TypeAnnotation>)],
+    pub params: &'a [Param],
     pub param_types: Vec<ResolvedType>,
     pub param_local_fn: &'a ParamLocalFn,
     /// If Some, registers the function under this name for recursion.
@@ -24,6 +29,11 @@ pub(super) struct FunctionBodyConfig<'a> {
     pub return_type: Option<ResolvedType>,
     pub span: &'a Span,
     pub is_pub: bool,
+    /// `true` for `mut fn` methods, `false` for plain `fn` methods
+    /// and all top-level functions. Stored on the resulting
+    /// `CompiledFunction` so callers can enforce val-receiver and
+    /// non-mut-context rules.
+    pub is_mut: bool,
     /// If Some, write the compiled function into the existing slot at
     /// this LOCAL index (position within `output.functions`) instead of
     /// pushing a new slot. The caller must have reserved the slot before
@@ -54,10 +64,19 @@ impl Compiler {
             span,
             return_type,
             is_pub,
+            is_mut,
             pre_allocated_local_idx,
         } = config;
 
-        let param_names: Vec<String> = params.iter().map(|p| p.0.clone()).collect();
+        let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        // Per-parameter mut flags. For methods, the `self` slot's
+        // entry is `is_mut` (matching the method's `mut fn` keyword);
+        // for non-self params and top-level functions, it's the
+        // parameter's own `mut` annotation.
+        let param_is_mut: Vec<bool> = params
+            .iter()
+            .map(|p| if p.name == "self" { is_mut } else { p.is_mut })
+            .collect();
         let local_idx = match pre_allocated_local_idx {
             Some(idx) => idx,
             None => {
@@ -68,11 +87,13 @@ impl Compiler {
                     arity: params.len(),
                     params: param_names.clone(),
                     param_types: param_types.clone(),
+                    param_is_mut: param_is_mut.clone(),
                     return_type: return_type.clone(),
                     num_locals: 0,
                     instructions: Vec::new(),
                     spans: Vec::new(),
                     is_pub,
+                    is_mut,
                 });
                 idx
             }
@@ -85,18 +106,20 @@ impl Compiler {
         let parent_instructions = std::mem::take(&mut self.output.instructions);
         let parent_spans = std::mem::take(&mut self.output.spans);
         let parent_fn_table = self.fn_table.clone();
+        let parent_fn_is_mut = self.current_fn_is_mut;
+        self.current_fn_is_mut = is_mut;
 
         // Set up function-scoped locals.
         self.locals.return_type = return_type.clone();
         for param in params {
-            let (mutable, obj_type) = param_local_fn(&param.0, &param.1);
-            self.locals.define(param.0.clone(), mutable, obj_type);
+            let (kind, obj_type) = param_local_fn(param);
+            self.locals.define(param.name.clone(), kind, obj_type);
         }
 
         // Pop params from the stack into locals in reverse order.
         for pname in param_names.iter().rev() {
-            let slot = self.locals.resolve(pname.as_str()).unwrap();
-            self.emit(Instruction::SetLocal(slot.0), span);
+            let entry = self.locals.resolve(pname.as_str()).unwrap();
+            self.emit(Instruction::SetLocal(entry.slot), span);
         }
 
         // Register the function for recursion if needed. The fn_table
@@ -122,6 +145,7 @@ impl Compiler {
         self.locals = parent_locals;
         self.loops = parent_loops;
         self.fn_table = parent_fn_table;
+        self.current_fn_is_mut = parent_fn_is_mut;
 
         // Write the compiled function.
         self.output.functions[local_idx] = CompiledFunction {
@@ -129,11 +153,13 @@ impl Compiler {
             arity: params.len(),
             params: param_names,
             param_types,
+            param_is_mut,
             return_type,
             num_locals: func_num_locals,
             instructions: func_instructions,
             spans: func_spans,
             is_pub,
+            is_mut,
         };
 
         absolute_idx

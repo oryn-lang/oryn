@@ -26,17 +26,26 @@ obj Health {
         rn Health { hp: max, max_hp: max }
     }
 
+    // Plain `self` — only reads. Callable on `val` bindings.
     fn is_alive(self) -> bool {
         rn self.hp > 0
     }
 
-    fn damage(self, amount: int) {
+    // `mut self` opts the method into mutating its receiver. Methods
+    // taking plain `self` cannot write to self's fields, call
+    // mutating list methods on self's fields, or call other
+    // `mut self` methods on `self`. Calling a `mut self` method on a
+    // `val`-rooted binding is a compile error — that's how `val`'s
+    // transitive immutability extends through method calls.
+    fn damage(mut self, amount: int) {
         self.hp = self.hp - amount
     }
 
     // The default take_hit is just `damage`. Using types can override
-    // this to layer their own behaviour on top — see Guard below.
-    fn take_hit(self, amount: int) {
+    // this to layer their own behaviour on top — see Guard below. It
+    // calls `damage` (a `mut self` method) on `self`, so it must
+    // itself take `mut self`.
+    fn take_hit(mut self, amount: int) {
         self.damage(amount)
     }
 }
@@ -60,16 +69,19 @@ obj Guard {
         rn Guard { hp: 100, max_hp: 100, name: name, alert: false }
     }
 
-    fn spot_player(self) {
+    // Writes self.alert, so it takes `mut self`.
+    fn spot_player(mut self) {
         self.alert = true
         print("{self.name}: Halt!")
     }
 
-    // Override of Health.take_hit. The override matches the inherited
-    // signature exactly: `(self, int) -> ()`. Inside the override we
-    // call `self.damage(...)` — that's the inherited helper, still
-    // available because we replaced `take_hit`, not `damage`.
-    fn take_hit(self, amount: int) {
+    // Override of Health.take_hit. The parameter list (including the
+    // `mut self` opt-in) must match the inherited method exactly. The
+    // override calls `self.damage(...)` — that's the inherited
+    // helper, still available because we replaced `take_hit`, not
+    // `damage`. Both calls are allowed because this method itself
+    // takes `mut self`.
+    fn take_hit(mut self, amount: int) {
         self.damage(amount)
         if not self.is_alive() {
             print("{self.name} falls.")
@@ -87,6 +99,14 @@ g.take_hit(70)
 // ---------------------------------------------------------------------
 // Notes on the rules `use` follows
 // ---------------------------------------------------------------------
+// • Mutability: methods that write `self`'s fields, call mutating
+//   list methods on `self`'s fields, or call other `mut self` methods
+//   must declare their receiver as `mut self`. Methods taking plain
+//   `self` are read-only views of `self`. Calling a `mut self`
+//   method on a `val`-rooted binding is a compile error — `val`
+//   means transitively immutable, and `mut self` is the only path
+//   through which method-mediated mutation can flow.
+//
 // • Method override: an own declaration with the same name as an
 //   inherited method replaces it. Parameter types must match exactly.
 //   Return type must also match, with one carve-out — a *static*
@@ -94,6 +114,11 @@ g.take_hit(70)
 //   using type (Self-return covariance). If you want a constructor
 //   with different parameters, give it a different name (see Guard's
 //   `spawn` above) instead of trying to override the parent's.
+//   A `mut self` method may be overridden by a plain `self` method
+//   (the override is *more* restrictive — strictly safer for val
+//   callers). The reverse — a plain `self` method overridden by a
+//   `mut self` method — is rejected because it would let mutation
+//   flow where the inherited contract said it couldn't.
 //
 // • Field override: not allowed. Fields live at fixed offsets, so
 //   redeclaring an inherited field name is a compile error. Pick a

@@ -216,7 +216,10 @@ fn parses_nillable_param_type() {
     let stmts = parse_ok("fn foo(x: int?) { x }");
     match &stmts[0].node {
         Statement::Function { params, .. } => {
-            assert!(matches!(&params[0].1, Some(TypeAnnotation::Nillable(_))));
+            assert!(matches!(
+                &params[0].type_ann,
+                Some(TypeAnnotation::Nillable(_))
+            ));
         }
         other => panic!("expected Function, got {other:?}"),
     }

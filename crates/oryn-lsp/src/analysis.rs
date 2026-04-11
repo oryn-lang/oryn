@@ -221,9 +221,14 @@ impl AstVisitor for LspVisitor<'_> {
             } => {
                 let param_strs: Vec<String> = params
                     .iter()
-                    .map(|(pname, ann)| match ann {
-                        Some(t) => format!("{pname}: {}", format_type_annotation(t)),
-                        None => pname.clone(),
+                    .map(|p| {
+                        let mut_prefix = if p.is_mut { "mut " } else { "" };
+                        match &p.type_ann {
+                            Some(t) => {
+                                format!("{mut_prefix}{}: {}", p.name, format_type_annotation(t))
+                            }
+                            None => format!("{mut_prefix}{}", p.name),
+                        }
                     })
                     .collect();
 
@@ -239,10 +244,10 @@ impl AstVisitor for LspVisitor<'_> {
                 );
 
                 self.enter_scope();
-                for (param_name, type_ann) in params {
-                    let type_name = type_ann.as_ref().map(format_type_annotation);
+                for param in params {
+                    let type_name = param.type_ann.as_ref().map(format_type_annotation);
                     self.register_definition(
-                        param_name,
+                        &param.name,
                         &stmt.span,
                         SymbolKind::Parameter,
                         None,
@@ -356,9 +361,14 @@ impl LspVisitor<'_> {
         let param_strs: Vec<String> = method
             .params
             .iter()
-            .map(|(pname, ann)| match ann {
-                Some(t) => format!("{pname}: {}", format_type_annotation(t)),
-                None => pname.clone(),
+            .map(|p| {
+                let mut_prefix = if p.is_mut { "mut " } else { "" };
+                match &p.type_ann {
+                    Some(t) => {
+                        format!("{mut_prefix}{}: {}", p.name, format_type_annotation(t))
+                    }
+                    None => format!("{mut_prefix}{}", p.name),
+                }
             })
             .collect();
 
@@ -375,10 +385,10 @@ impl LspVisitor<'_> {
 
         if let Some(body) = &method.body {
             self.enter_scope();
-            for (param_name, type_ann) in &method.params {
-                let type_name = type_ann.as_ref().map(format_type_annotation);
+            for param in &method.params {
+                let type_name = param.type_ann.as_ref().map(format_type_annotation);
                 self.register_definition(
-                    param_name,
+                    &param.name,
                     &method.span,
                     SymbolKind::Parameter,
                     None,
