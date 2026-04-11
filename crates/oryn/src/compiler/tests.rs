@@ -1640,3 +1640,596 @@ fn orelse_chain_four_elements() {
     let mut vm = crate::VM::new();
     vm.run(&chunk).unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Enums (Slice 1+2): declarations, constructors, value representation,
+// structural equality, and discriminant-based match dispatch. Payload
+// bindings (Slice 3) and full exhaustiveness over payload shapes
+// (Slice 4) are deliberately not exercised here — only what the
+// initial slice claims to support.
+//
+// Naming convention: `enum_<area>_<scenario>`.
+//   - `enum_decl_*`        — enum declaration shape and validation.
+//   - `enum_ctor_*`        — constructor expressions and field handling.
+//   - `enum_eq_*`          — structural equality semantics.
+//   - `enum_match_*`       — match expression dispatch and type rules.
+//   - `enum_type_*`        — enum types in annotations / function sigs.
+//   - `enum_print_*`       — Display output for nullary and payload values.
+// ---------------------------------------------------------------------------
+
+// ----- enum_decl: declaration shape and validation -----
+
+#[test]
+fn enum_decl_nullary_only_compiles() {
+    // Bare enum with three nullary variants is valid.
+    crate::Chunk::compile("enum Color { Red\n Green\n Blue }").unwrap();
+}
+
+#[test]
+fn enum_decl_payload_variants_compile() {
+    // Variants may carry named-field payloads with arbitrary types.
+    crate::Chunk::compile(
+        "enum Shape {\n\
+            Circle { radius: float }\n\
+            Rect { w: int, h: int }\n\
+            Point\n\
+         }",
+    )
+    .unwrap();
+}
+
+#[test]
+fn enum_decl_empty_body_rejected() {
+    // The parser rejects an empty `enum Foo { }` — there's no point
+    // declaring a sum type with no inhabitants.
+    let errors = crate::Chunk::compile("enum Empty { }").unwrap_err();
+    assert!(
+        !errors.is_empty(),
+        "expected an error for empty enum, got none"
+    );
+}
+
+#[test]
+fn enum_decl_duplicate_variant_rejected() {
+    // Two variants with the same name in the same enum is a hard error.
+    let errors = crate::Chunk::compile("enum Foo { A\n A }").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate variant")),
+        "expected duplicate variant error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_decl_duplicate_field_in_variant_rejected() {
+    // Duplicate field names within a single variant payload — same
+    // rule as obj fields.
+    let errors = crate::Chunk::compile("enum Foo { Bar { x: int, x: int } }").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate field")),
+        "expected duplicate field error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_decl_unknown_field_type_rejected() {
+    // A payload field referencing an undefined type produces a
+    // resolved-type error attached to the field.
+    let errors = crate::Chunk::compile("enum Foo { Bar { x: NotAType } }").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("undefined type")),
+        "expected undefined-type error, got {errors:?}"
+    );
+}
+
+// ----- enum_ctor: constructor expressions -----
+
+#[test]
+fn enum_ctor_nullary_compiles_and_runs() {
+    let chunk = crate::Chunk::compile(
+        "enum Color { Red\n Green\n Blue }\n\
+         let c = Color.Red\n\
+         assert(c == Color.Red)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_ctor_payload_compiles_and_runs() {
+    let chunk = crate::Chunk::compile(
+        "enum Shape { Circle { radius: float } }\n\
+         let s = Shape.Circle { radius: 1.5 }\n\
+         assert(s == Shape.Circle { radius: 1.5 })",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_ctor_field_order_does_not_matter() {
+    // Payload fields are reordered to declaration order before MakeEnum,
+    // so writing them out of order is fine and produces equal values.
+    let chunk = crate::Chunk::compile(
+        "enum P { Pair { x: int, y: int } }\n\
+         let a = P.Pair { x: 1, y: 2 }\n\
+         let b = P.Pair { y: 2, x: 1 }\n\
+         assert(a == b)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_ctor_missing_field_rejected() {
+    let errors =
+        crate::Chunk::compile("enum P { Pair { x: int, y: int } }\nlet p = P.Pair { x: 1 }")
+            .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("missing field `y`")),
+        "expected missing field error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_ctor_unknown_field_rejected() {
+    let errors = crate::Chunk::compile(
+        "enum P { Pair { x: int, y: int } }\nlet p = P.Pair { x: 1, y: 2, z: 3 }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("unknown field `z`")),
+        "expected unknown field error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_ctor_duplicate_field_rejected() {
+    let errors = crate::Chunk::compile(
+        "enum P { Pair { x: int, y: int } }\nlet p = P.Pair { x: 1, x: 2, y: 3 }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate field `x`")),
+        "expected duplicate field error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_ctor_field_type_mismatch_rejected() {
+    let errors = crate::Chunk::compile("enum P { Pair { x: int } }\nlet p = P.Pair { x: \"hi\" }")
+        .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("type mismatch")),
+        "expected field type mismatch, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_ctor_nullary_with_field_block_rejected() {
+    // Nullary variants must be referenced as bare paths — supplying
+    // a `{ }` block is a hard error.
+    let errors =
+        crate::Chunk::compile("enum Color { Red }\nlet c = Color.Red { x: 1 }").unwrap_err();
+    assert!(
+        errors.iter().any(|e| format!("{e}").contains("nullary")),
+        "expected nullary-with-fields error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_ctor_payload_without_field_block_rejected() {
+    // The dual of the previous test: a payload variant referenced
+    // as a bare path is missing required fields.
+    let errors = crate::Chunk::compile("enum P { Pair { x: int } }\nlet p = P.Pair").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("requires fields")
+                || format!("{e}").contains("missing field")),
+        "expected payload-required error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_ctor_unknown_variant_rejected() {
+    let errors = crate::Chunk::compile("enum Color { Red }\nlet c = Color.Blue").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("no variant `Blue`")),
+        "expected unknown variant error, got {errors:?}"
+    );
+}
+
+// ----- enum_eq: structural equality -----
+
+#[test]
+fn enum_eq_same_nullary_variant_equal() {
+    let chunk = crate::Chunk::compile("enum Color { Red\n Green }\nassert(Color.Red == Color.Red)")
+        .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_eq_different_variants_unequal() {
+    let chunk =
+        crate::Chunk::compile("enum Color { Red\n Green }\nassert(Color.Red != Color.Green)")
+            .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_eq_same_payload_equal() {
+    // Two independently constructed payload values with the same
+    // contents compare equal — this is structural, not identity.
+    let chunk = crate::Chunk::compile(
+        "enum P { Pair { x: int, y: int } }\n\
+         let a = P.Pair { x: 1, y: 2 }\n\
+         let b = P.Pair { x: 1, y: 2 }\n\
+         assert(a == b)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_eq_different_payload_unequal() {
+    let chunk = crate::Chunk::compile(
+        "enum P { Pair { x: int, y: int } }\n\
+         let a = P.Pair { x: 1, y: 2 }\n\
+         let b = P.Pair { x: 1, y: 3 }\n\
+         assert(a != b)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+// ----- enum_match: dispatch and type rules -----
+
+#[test]
+fn enum_match_dispatches_to_correct_arm() {
+    let chunk = crate::Chunk::compile(
+        "enum Color { Red\n Green\n Blue }\n\
+         fn name(c: Color) -> String {\n\
+             rn match c {\n\
+                 Color.Red => \"red\"\n\
+                 Color.Green => \"green\"\n\
+                 Color.Blue => \"blue\"\n\
+             }\n\
+         }\n\
+         assert(name(Color.Red) == \"red\")\n\
+         assert(name(Color.Green) == \"green\")\n\
+         assert(name(Color.Blue) == \"blue\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_match_with_wildcard_catches_remaining() {
+    // Note: Oryn's `!` is the error-unwrap operator, not boolean
+    // negation, so the expected-false branches use `== false`.
+    let chunk = crate::Chunk::compile(
+        "enum Color { Red\n Green\n Blue }\n\
+         fn is_red(c: Color) -> bool {\n\
+             rn match c {\n\
+                 Color.Red => true\n\
+                 _ => false\n\
+             }\n\
+         }\n\
+         assert(is_red(Color.Red))\n\
+         assert(is_red(Color.Green) == false)\n\
+         assert(is_red(Color.Blue) == false)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_match_used_as_expression_in_let() {
+    // Match-as-expression: the match's value flows directly into a
+    // let binding. This is the canonical reason for match being an
+    // expression rather than a statement.
+    let chunk = crate::Chunk::compile(
+        "enum Color { Red\n Green }\n\
+         let c = Color.Red\n\
+         let n: int = match c {\n\
+             Color.Red => 1\n\
+             Color.Green => 2\n\
+         }\n\
+         assert(n == 1)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_match_payload_variant_dispatches_correctly() {
+    // Even with payload variants in the enum, Slice 1+2 dispatch only
+    // looks at the discriminant — the payload comes along for the ride
+    // but isn't bound here. Slice 3 will add bindings.
+    let chunk = crate::Chunk::compile(
+        "enum FsResult {\n\
+             Ok { content: String }\n\
+             NotFound\n\
+         }\n\
+         let r = FsResult.Ok { content: \"hi\" }\n\
+         let label: String = match r {\n\
+             FsResult.Ok => \"got\"\n\
+             FsResult.NotFound => \"missing\"\n\
+         }\n\
+         assert(label == \"got\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_match_non_exhaustive_rejected() {
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green\n Blue }\n\
+         let c = Color.Red\n\
+         let n: int = match c {\n\
+             Color.Red => 1\n\
+             Color.Green => 2\n\
+         }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("non-exhaustive") && format!("{e}").contains("Blue")),
+        "expected non-exhaustive error mentioning Blue, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_match_wildcard_makes_exhaustive() {
+    // The exhaustiveness check accepts a `_` arm as a catch-all even
+    // when not every named variant is listed.
+    crate::Chunk::compile(
+        "enum Color { Red\n Green\n Blue }\n\
+         let c = Color.Red\n\
+         let n: int = match c {\n\
+             Color.Red => 1\n\
+             _ => 0\n\
+         }",
+    )
+    .unwrap();
+}
+
+#[test]
+fn enum_match_duplicate_arm_rejected() {
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green }\n\
+         let c = Color.Red\n\
+         let n: int = match c {\n\
+             Color.Red => 1\n\
+             Color.Red => 2\n\
+             Color.Green => 3\n\
+         }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("duplicate match arm")),
+        "expected duplicate arm error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_match_unknown_variant_in_pattern_rejected() {
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green }\n\
+         let c = Color.Red\n\
+         let n: int = match c {\n\
+             Color.Purple => 1\n\
+             _ => 0\n\
+         }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("no variant `Purple`")),
+        "expected unknown-variant error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_match_pattern_type_mismatch_rejected() {
+    // A pattern naming a variant of a different enum is rejected
+    // even if a variant with that name exists somewhere else.
+    let errors = crate::Chunk::compile(
+        "enum A { X }\n\
+         enum B { X }\n\
+         let a = A.X\n\
+         let n: int = match a {\n\
+             B.X => 1\n\
+             _ => 0\n\
+         }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("does not match scrutinee enum")),
+        "expected scrutinee-enum mismatch, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_match_non_enum_scrutinee_rejected() {
+    let errors =
+        crate::Chunk::compile("let n = 1\nlet s: String = match n { _ => \"x\" }").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("must be an enum value")),
+        "expected non-enum scrutinee error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_match_arm_result_type_mismatch_rejected() {
+    // All arm bodies must produce the same type. The first arm's
+    // type is the canonical one; subsequent arms are checked
+    // against it.
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green }\n\
+         let c = Color.Red\n\
+         let v = match c {\n\
+             Color.Red => 1\n\
+             Color.Green => \"green\"\n\
+         }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("match arm result type mismatch")),
+        "expected arm type mismatch, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_match_unreachable_after_wildcard_rejected() {
+    // Anything after a `_` arm is dead code; the compiler reports it.
+    let errors = crate::Chunk::compile(
+        "enum Color { Red\n Green }\n\
+         let c = Color.Red\n\
+         let n: int = match c {\n\
+             _ => 0\n\
+             _ => 1\n\
+         }",
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("unreachable")),
+        "expected unreachable arm error, got {errors:?}"
+    );
+}
+
+// ----- enum_type: type system integration -----
+
+#[test]
+fn enum_type_in_function_return_resolves() {
+    // Critical regression test for the bug where `-> FsResult` was
+    // resolving to Unknown because resolve_type only checked
+    // obj_table. The match's body type comes back as String here
+    // (not Unknown / 0) only when the function return type
+    // resolves correctly.
+    let chunk = crate::Chunk::compile(
+        "enum R { Ok\n Err }\n\
+         fn pick(b: bool) -> R { if b { rn R.Ok }\n rn R.Err }\n\
+         let label: String = match pick(true) {\n\
+             R.Ok => \"yes\"\n\
+             R.Err => \"no\"\n\
+         }\n\
+         assert(label == \"yes\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_type_in_let_annotation_resolves() {
+    let chunk = crate::Chunk::compile(
+        "enum Color { Red\n Green }\nlet c: Color = Color.Red\nassert(c == Color.Red)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_type_in_function_parameter_resolves() {
+    let chunk = crate::Chunk::compile(
+        "enum Color { Red\n Green }\n\
+         fn is_red(c: Color) -> bool {\n\
+             rn match c { Color.Red => true\n _ => false }\n\
+         }\n\
+         assert(is_red(Color.Red))",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn enum_type_undefined_annotation_rejected() {
+    let errors = crate::Chunk::compile("let c: NotAType = 1").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("undefined type `NotAType`")),
+        "expected undefined-type error, got {errors:?}"
+    );
+}
+
+#[test]
+fn enum_type_assigned_wrong_enum_rejected() {
+    // Cross-enum assignment is a type error: a `Color` slot can't
+    // hold a `Mood` value even though both are enums.
+    let errors =
+        crate::Chunk::compile("enum Color { Red }\nenum Mood { Happy }\nlet c: Color = Mood.Happy")
+            .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("expected `Color`")
+                && format!("{e}").contains("got `Mood`")),
+        "expected cross-enum assignment error, got {errors:?}"
+    );
+}
+
+// ----- enum_print: Display output via the print() builtin -----
+
+#[test]
+fn enum_print_nullary_variant() {
+    let chunk = crate::Chunk::compile("enum Color { Red\n Green }\nprint(Color.Red)").unwrap();
+    let mut buf: Vec<u8> = Vec::new();
+    crate::VM::new().run_with_writer(&chunk, &mut buf).unwrap();
+    assert_eq!(String::from_utf8(buf).unwrap(), "Color.Red\n");
+}
+
+#[test]
+fn enum_print_payload_variant() {
+    let chunk =
+        crate::Chunk::compile("enum P { Pair { x: int, y: int } }\nprint(P.Pair { x: 1, y: 2 })")
+            .unwrap();
+    let mut buf: Vec<u8> = Vec::new();
+    crate::VM::new().run_with_writer(&chunk, &mut buf).unwrap();
+    assert_eq!(String::from_utf8(buf).unwrap(), "P.Pair { x: 1, y: 2 }\n");
+}
+
+#[test]
+fn enum_print_payload_string_field_quoted() {
+    // Strings inside enum payloads print quoted, mirroring Debug
+    // output for debuggability.
+    let chunk = crate::Chunk::compile(
+        "enum FsResult { Ok { content: String } }\nprint(FsResult.Ok { content: \"hi\" })",
+    )
+    .unwrap();
+    let mut buf: Vec<u8> = Vec::new();
+    crate::VM::new().run_with_writer(&chunk, &mut buf).unwrap();
+    assert_eq!(
+        String::from_utf8(buf).unwrap(),
+        "FsResult.Ok { content: \"hi\" }\n"
+    );
+}

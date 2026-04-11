@@ -2,7 +2,7 @@ use crate::OrynError;
 use crate::compiler::types::{ModuleTable, ObjDefInfo, ResolvedType};
 use crate::parser::{Span, Spanned, Statement, TypeAnnotation};
 
-use super::tables::{FunctionSignature, FunctionTable, Locals, ObjTable};
+use super::tables::{EnumTable, FunctionSignature, FunctionTable, Locals, ObjTable};
 use super::types::{CompilerOutput, Instruction};
 
 // ---------------------------------------------------------------------------
@@ -22,6 +22,12 @@ pub(super) struct Compiler {
     pub(super) output: CompilerOutput,
     pub(super) fn_table: FunctionTable,
     pub(super) obj_table: ObjTable,
+    /// Compile-time registry of enum declarations in this compilation
+    /// unit. Cross-module enum imports are not supported in the
+    /// initial enum slice, so this table always has `base_offset: 0`
+    /// and lives entirely within the current compilation unit. The
+    /// machinery is parallel to `obj_table` for future extension.
+    pub(super) enum_table: EnumTable,
     pub(super) locals: Locals,
     pub(super) loops: Vec<LoopContext>,
     pub(super) modules: ModuleTable,
@@ -57,6 +63,7 @@ impl Compiler {
             output: CompilerOutput::default(),
             fn_table: FunctionTable::new(fn_base_offset),
             obj_table: ObjTable::new(obj_base_offset),
+            enum_table: EnumTable::new(0),
             locals: Locals::new(),
             loops: Vec::new(),
             modules: ModuleTable::default(),
@@ -130,6 +137,7 @@ pub(crate) fn compile(
 pub(super) fn resolve_type(
     ann: &TypeAnnotation,
     obj_table: &ObjTable,
+    enum_table: &EnumTable,
     modules: &ModuleTable,
 ) -> Result<ResolvedType, String> {
     match ann {
@@ -152,6 +160,11 @@ pub(super) fn resolve_type(
                                 name: other.to_string(),
                                 module: vec![],
                             })
+                        } else if enum_table.resolve(other).is_some() {
+                            Ok(ResolvedType::Enum {
+                                name: other.to_string(),
+                                module: vec![],
+                            })
                         } else {
                             Err(format!("undefined type `{other}`"))
                         }
@@ -168,6 +181,11 @@ pub(super) fn resolve_type(
                                 name: type_name.clone(),
                                 module: module_path.to_vec(),
                             })
+                        } else if exports.enum_defs.contains_key(type_name) {
+                            Ok(ResolvedType::Enum {
+                                name: type_name.clone(),
+                                module: module_path.to_vec(),
+                            })
                         } else {
                             Err(format!("undefined type `{module_key}.{type_name}`"))
                         }
@@ -177,26 +195,26 @@ pub(super) fn resolve_type(
             }
         }
         TypeAnnotation::Nillable(inner) => {
-            let inner_resolved = resolve_type(inner, obj_table, modules)?;
+            let inner_resolved = resolve_type(inner, obj_table, enum_table, modules)?;
             Ok(ResolvedType::Nillable(Box::new(inner_resolved)))
         }
         TypeAnnotation::ErrorUnion(inner) => {
-            let inner_resolved = resolve_type(inner, obj_table, modules)?;
+            let inner_resolved = resolve_type(inner, obj_table, enum_table, modules)?;
             Ok(ResolvedType::ErrorUnion(Box::new(inner_resolved)))
         }
         TypeAnnotation::List(inner) => {
-            let inner_resolved = resolve_type(inner, obj_table, modules)?;
+            let inner_resolved = resolve_type(inner, obj_table, enum_table, modules)?;
             Ok(ResolvedType::List(Box::new(inner_resolved)))
         }
         TypeAnnotation::Map(key, value) => {
-            let key_resolved = resolve_type(key, obj_table, modules)?;
+            let key_resolved = resolve_type(key, obj_table, enum_table, modules)?;
             if !key_resolved.is_map_key_type() {
                 return Err(format!(
                     "map key type must be `String`, `int`, or `bool`, got `{}`",
                     key_resolved.display_name()
                 ));
             }
-            let value_resolved = resolve_type(value, obj_table, modules)?;
+            let value_resolved = resolve_type(value, obj_table, enum_table, modules)?;
             Ok(ResolvedType::Map(
                 Box::new(key_resolved),
                 Box::new(value_resolved),
@@ -305,7 +323,7 @@ impl Compiler {
         &self,
         ann: &TypeAnnotation,
     ) -> Result<ResolvedType, String> {
-        let resolved = resolve_type(ann, &self.obj_table, &self.modules)?;
+        let resolved = resolve_type(ann, &self.obj_table, &self.enum_table, &self.modules)?;
         Ok(self.attach_current_module(resolved))
     }
 
@@ -318,6 +336,15 @@ impl Compiler {
             && !self.current_module_path.is_empty()
         {
             return ResolvedType::Object {
+                name: name.clone(),
+                module: self.current_module_path.clone(),
+            };
+        }
+        if let ResolvedType::Enum { name, module } = &ty
+            && module.is_empty()
+            && !self.current_module_path.is_empty()
+        {
+            return ResolvedType::Enum {
                 name: name.clone(),
                 module: self.current_module_path.clone(),
             };

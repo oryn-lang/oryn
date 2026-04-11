@@ -1,5 +1,6 @@
 mod block;
 mod compile;
+mod enums;
 mod expr;
 mod func;
 mod obj;
@@ -14,6 +15,7 @@ pub(crate) use compile::compile;
 pub(crate) use types::BuiltinFunction;
 pub(crate) use types::CompiledFunction;
 pub(crate) use types::CompilerOutput;
+pub(crate) use types::EnumDefInfo;
 pub(crate) use types::Instruction;
 pub(crate) use types::ModuleExports;
 pub(crate) use types::ModuleTable;

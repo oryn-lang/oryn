@@ -177,6 +177,24 @@ pub enum Instruction {
     MapGet,
     /// Pop value, key, and map; insert or replace the entry.
     MapSet,
+    /// Construct an enum value: pop `payload_count` values from the
+    /// stack (in declaration order — caller pushed them in order),
+    /// build a `Value::Enum { def_idx, variant_idx, payload }`,
+    /// push it. Nullary variants pass `payload_count = 0` and pop
+    /// nothing.
+    MakeEnum(usize, usize, usize),
+    /// Pop an enum value from the stack, push its variant index as
+    /// an `Int`. Used by match codegen for arm dispatch — the
+    /// generated code compares the discriminant against each arm's
+    /// expected variant index. Type errors at runtime if the value
+    /// isn't an enum.
+    EnumDiscriminant,
+    /// Duplicate the top of the stack: peek at TOS, clone it, and
+    /// push the clone. Used by match codegen so the discriminant
+    /// can be compared once per arm without re-running the
+    /// scrutinee. Cloning a value is cheap for primitives and a
+    /// pointer-clone for GC values.
+    Dup,
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +208,10 @@ pub struct CompilerOutput {
     pub spans: Vec<Range<usize>>,
     pub functions: Vec<CompiledFunction>,
     pub obj_defs: Vec<ObjDefInfo>,
+    /// Enum declarations encountered during compilation. The index
+    /// of each entry is the absolute enum_def index referenced by
+    /// `Instruction::MakeEnum` and the runtime `Value::Enum`.
+    pub enum_defs: Vec<EnumDefInfo>,
     /// Test blocks discovered during compilation. Each entry points at a
     /// zero-arity compiled function in `functions`. Only populated for
     /// the compilation unit that the user's invocation targets (imported
@@ -337,6 +359,33 @@ pub struct MethodSignature {
     pub is_mut: bool,
 }
 
+/// Compile-time information about an enum type. Stored in the
+/// compiler's `EnumTable` for in-module lookups, and cloned into
+/// `ModuleExports::enum_defs` when the type is `pub`. Carries enough
+/// information for the importing module to type-check constructors
+/// and matches without re-parsing the source.
+#[derive(Debug, Clone)]
+pub struct EnumDefInfo {
+    pub name: String,
+    /// Variants in declaration order. The index of each variant in
+    /// this vector is its discriminant — used by both `MakeEnum` and
+    /// `EnumDiscriminant` bytecode at runtime, and by match codegen
+    /// for arm dispatch.
+    pub variants: Vec<EnumVariantInfo>,
+    pub is_pub: bool,
+}
+
+/// Compile-time information about a single enum variant. Nullary
+/// variants have empty `field_names` and `field_types` vectors.
+#[derive(Debug, Clone)]
+pub struct EnumVariantInfo {
+    pub name: String,
+    /// Payload field names in declaration order. Index parallel to
+    /// `field_types`. Empty for nullary variants.
+    pub field_names: Vec<String>,
+    pub field_types: Vec<ResolvedType>,
+}
+
 /// A module-level constant value, used for `pub let` / `pub val` bindings
 /// that are exposed to importers. Only literal values are allowed for now;
 /// non-literal expressions produce a compile error during module compilation.
@@ -387,6 +436,13 @@ pub(crate) struct ModuleExports {
     /// enforce per-field/per-method privacy and construct qualified
     /// object literals without consulting the merged chunk directly.
     pub obj_defs: HashMap<String, ObjDefInfo>,
+    /// Full `EnumDefInfo` (cloned) for each pub enum type. Lets
+    /// importers type-check constructors and matches across module
+    /// boundaries. Enum variant indices are intra-enum, so no offset
+    /// remapping is needed for the enum metadata itself; only the
+    /// `def_idx` baked into bytecode would shift, and that lives on
+    /// the chunk side once cross-module enum values land.
+    pub enum_defs: HashMap<String, EnumDefInfo>,
     /// `pub let` / `pub val` literal constants, inlined at the call site.
     pub constants: HashMap<String, ConstValue>,
 }
@@ -411,6 +467,13 @@ pub(crate) enum ResolvedType {
     /// type was defined in the current compilation unit). The pair lets
     /// the compiler enforce cross-module field/method privacy.
     Object {
+        name: String,
+        module: Vec<String>,
+    },
+    /// An enum (tagged-union / sum) type. Same `name` + `module`
+    /// shape as `Object`. The variants and their payload types live
+    /// in the compiler's `EnumTable`, looked up by `name`.
+    Enum {
         name: String,
         module: Vec<String>,
     },
@@ -471,11 +534,19 @@ impl CompilerOutput {
             }
         }
 
+        let mut enum_defs = HashMap::new();
+        for enum_def in self.enum_defs.iter() {
+            if enum_def.is_pub {
+                enum_defs.insert(enum_def.name.clone(), enum_def.clone());
+            }
+        }
+
         ModuleExports {
             functions,
             fn_signatures,
             objects,
             obj_defs,
+            enum_defs,
             constants: self.module_constants.clone(),
         }
     }
@@ -490,6 +561,13 @@ impl ResolvedType {
             ResolvedType::Str => "String".into(),
             ResolvedType::Range => "Range".into(),
             ResolvedType::Object { name, module } => {
+                if module.is_empty() {
+                    name.as_str().into()
+                } else {
+                    format!("{}.{}", module.join("."), name).into()
+                }
+            }
+            ResolvedType::Enum { name, module } => {
                 if module.is_empty() {
                     name.as_str().into()
                 } else {

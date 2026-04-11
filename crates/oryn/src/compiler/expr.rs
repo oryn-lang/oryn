@@ -406,6 +406,27 @@ impl Compiler {
             return ResolvedType::Unknown;
         }
 
+        // Two-segment with payload: dispatch to enum constructor
+        // when the path matches `EnumName.VariantName` for a known
+        // enum. The user wrote `FsResult.Ok { content: "hi" }`,
+        // which the parser produced as ObjLiteral with type_name
+        // `["FsResult", "Ok"]`. Cross-module enum constructors
+        // (`some_module.SomeEnum.Variant`) aren't supported in
+        // Slice 1+2 — only the local two-segment form.
+        if type_name.len() == 2
+            && self
+                .enum_table
+                .resolve_variant(&type_name[0], &type_name[1])
+                .is_some()
+        {
+            return self.compile_enum_constructor(
+                &type_name[0].clone(),
+                &type_name[1].clone(),
+                fields,
+                span,
+            );
+        }
+
         // Single-segment: look up in local obj_table.
         if type_name.len() == 1 {
             let local_name = &type_name[0];
@@ -785,6 +806,28 @@ impl Compiler {
                 self.compile_obj_literal(type_name, fields, &span)
             }
             Expression::FieldAccess { object, field } => {
+                // Enum constructor for nullary variants: `Color.Red`
+                // parses as FieldAccess { object: Ident("Color"),
+                // field: "Red" }, and if `Color` is a known enum,
+                // this isn't a real field access — it's a
+                // constructor expression. Detect that here BEFORE
+                // attempting to compile `object` as a value (it
+                // isn't one). If the variant doesn't exist on the
+                // enum, we still dispatch into the constructor path
+                // so it can produce a clean "no variant" error
+                // instead of leaking "undefined variable Color".
+                if let Expression::Ident(enum_name) = &object.node
+                    && self.locals.resolve(enum_name).is_none()
+                    && self.enum_table.resolve(enum_name).is_some()
+                {
+                    return self.compile_enum_constructor(
+                        &enum_name.clone(),
+                        &field,
+                        Vec::new(),
+                        &span,
+                    );
+                }
+
                 if let Some(path) = extract_dotted_path(&object.node)
                     && self.locals.resolve(&path[0]).is_none()
                 {
@@ -1759,6 +1802,10 @@ impl Compiler {
 
                 self.emit(instruction, &span);
                 result_ty
+            }
+
+            Expression::Match { scrutinee, arms } => {
+                self.compile_match_expression(*scrutinee, arms, &span)
             }
         }
     }

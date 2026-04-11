@@ -1,7 +1,8 @@
 use std::fmt::Write as _;
 
 use oryn::{
-    BinOp, Expression, ObjMethod, Param, Spanned, Statement, StringPart, TypeAnnotation, UnaryOp,
+    BinOp, Expression, ObjMethod, Param, Pattern, Spanned, Statement, StringPart, TypeAnnotation,
+    UnaryOp,
 };
 
 use crate::comments::CommentAttachments;
@@ -283,6 +284,48 @@ impl<'a> Formatter<'a> {
                 self.write_expression(condition, 0);
                 self.out.push(')');
             }
+            Statement::EnumDef {
+                name,
+                variants,
+                is_pub,
+            } => {
+                if *is_pub {
+                    self.out.push_str("pub ");
+                }
+                self.out.push_str("enum ");
+                self.out.push_str(name);
+                self.out.push_str(" {\n");
+                self.indent += 1;
+                self.last_source_end = stmt.span.start;
+
+                for (i, variant) in variants.iter().enumerate() {
+                    if i > 0 {
+                        self.out.push('\n');
+                    }
+                    self.emit_leading_comments(variant.span.start);
+                    self.write_indent();
+                    self.out.push_str(&variant.name);
+                    if !variant.fields.is_empty() {
+                        self.out.push_str(" { ");
+                        for (i, field) in variant.fields.iter().enumerate() {
+                            if i > 0 {
+                                self.out.push_str(", ");
+                            }
+                            self.out.push_str(&field.name);
+                            self.out.push_str(": ");
+                            self.write_type_name(&field.type_ann);
+                        }
+                        self.out.push_str(" }");
+                    }
+                    self.last_source_end = variant.span.end;
+                }
+
+                self.emit_dangling_comments(stmt.span.end);
+                self.indent -= 1;
+                self.out.push('\n');
+                self.write_indent();
+                self.out.push('}');
+            }
         }
     }
 
@@ -558,6 +601,35 @@ impl<'a> Formatter<'a> {
                 self.out.push('[');
                 self.write_expression(index, 0);
                 self.out.push(']');
+            }
+            Expression::Match { scrutinee, arms } => {
+                self.out.push_str("match ");
+                self.write_expression(scrutinee, 0);
+                self.out.push_str(" {\n");
+                self.indent += 1;
+                for (i, arm) in arms.iter().enumerate() {
+                    if i > 0 {
+                        self.out.push('\n');
+                    }
+                    self.write_indent();
+                    match &arm.pattern.node {
+                        Pattern::Wildcard => self.out.push('_'),
+                        Pattern::Variant {
+                            enum_name,
+                            variant_name,
+                        } => {
+                            self.out.push_str(enum_name);
+                            self.out.push('.');
+                            self.out.push_str(variant_name);
+                        }
+                    }
+                    self.out.push_str(" => ");
+                    self.write_expression(&arm.body, 0);
+                }
+                self.indent -= 1;
+                self.out.push('\n');
+                self.write_indent();
+                self.out.push('}');
             }
         }
 

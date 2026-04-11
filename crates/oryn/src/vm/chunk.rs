@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::Statement;
 use crate::compiler::{
-    self, CompiledFunction, CompilerOutput, Instruction, ModuleExports, ModuleTable, ObjDefInfo,
-    TestInfo, TypeMap,
+    self, CompiledFunction, CompilerOutput, EnumDefInfo, Instruction, ModuleExports, ModuleTable,
+    ObjDefInfo, TestInfo, TypeMap,
 };
 use crate::errors::{FileDiagnostics, OrynError};
 use crate::lexer;
@@ -26,6 +26,12 @@ pub struct Chunk {
     pub(crate) spans: Vec<Range<usize>>,
     pub(crate) functions: Vec<CompiledFunction>,
     pub(crate) obj_defs: Vec<ObjDefInfo>,
+    /// Enum declarations indexed by their absolute def_idx. Each
+    /// `Value::Enum` and `Instruction::MakeEnum` carries a `def_idx`
+    /// into this vector; the metadata gives the variant's name (for
+    /// printing), payload field names (for printing structured
+    /// payloads), and the variant's discriminant.
+    pub(crate) enum_defs: Vec<EnumDefInfo>,
     /// Test blocks defined in this chunk's entry file (never in imported
     /// modules). The `oryn test` runner reads this vec and invokes each
     /// entry by `function_idx`.
@@ -75,6 +81,7 @@ impl Chunk {
             spans: output.spans,
             functions: output.functions,
             obj_defs: output.obj_defs,
+            enum_defs: output.enum_defs,
             tests: output.tests,
         })
     }
@@ -218,6 +225,12 @@ impl Chunk {
         merged.spans = entry_output.spans;
         merged.functions.extend(entry_output.functions);
         merged.obj_defs.extend(entry_output.obj_defs);
+        // Cross-module enum imports aren't supported yet (Slice 1+2
+        // restricts enums to the entry file's compilation unit).
+        // For now we just take the entry file's enum_defs directly;
+        // a future cross-module enum slice will need offset
+        // discipline parallel to obj_offset.
+        merged.enum_defs.extend(entry_output.enum_defs);
         // Tests come exclusively from the entry file. Imported modules
         // may also define tests, but their `TestInfo` entries stay
         // isolated so `oryn test <file>` only runs tests in the
@@ -229,6 +242,7 @@ impl Chunk {
             spans: merged.spans,
             functions: merged.functions,
             obj_defs: merged.obj_defs,
+            enum_defs: merged.enum_defs,
             tests: entry_tests,
         })
     }
@@ -633,6 +647,11 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
             Instruction::MakeMap(n) => format!("MakeMap {n}"),
             Instruction::MapGet => "MapGet".to_string(),
             Instruction::MapSet => "MapSet".to_string(),
+            Instruction::MakeEnum(def_idx, variant_idx, payload_count) => {
+                format!("MakeEnum {def_idx} {variant_idx} ({payload_count} fields)")
+            }
+            Instruction::EnumDiscriminant => "EnumDiscriminant".to_string(),
+            Instruction::Dup => "Dup".to_string(),
         };
 
         writeln!(out, "{i:04}  {formatted}").unwrap();

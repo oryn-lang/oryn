@@ -145,6 +145,10 @@ pub enum ValueType {
     Nil,
     Error,
     Object,
+    /// A tagged-union (enum) value. Distinct from `Object` so the
+    /// type-error machinery can produce accurate diagnostics
+    /// (`expected enum, got obj`).
+    Enum,
     Range,
     String,
     List,
@@ -164,6 +168,7 @@ impl From<&Value<'_>> for ValueType {
             Value::Float(_) => ValueType::Float,
             Value::Int(_) => ValueType::Int,
             Value::Object(_) => ValueType::Object,
+            Value::Enum(_) => ValueType::Enum,
             Value::Range(_) => ValueType::Range,
             Value::String(_) => ValueType::String,
             Value::List(_) => ValueType::List,
@@ -181,6 +186,7 @@ impl fmt::Display for ValueType {
             ValueType::Nil => write!(f, "nil"),
             ValueType::Error => write!(f, "error"),
             ValueType::Object => write!(f, "object"),
+            ValueType::Enum => write!(f, "enum"),
             ValueType::Range => write!(f, "range"),
             ValueType::String => write!(f, "string"),
             ValueType::List => write!(f, "list"),

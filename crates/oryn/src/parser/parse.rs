@@ -180,11 +180,80 @@ fn atom<'src>(
         )
         .map(Expression::MapLiteral);
 
+    // `match scrutinee { pattern => body, ... }` — pattern match
+    // on an enum value. The match keyword introduces an
+    // expression (Slice 1+2 makes match the first expression-form
+    // control flow in Oryn; if/while remain statements — see
+    // WARTS.md W26).
+    //
+    // Patterns in Slice 1+2 are limited to:
+    //   * `EnumName.VariantName` — variant pattern
+    //   * `_`                    — wildcard
+    //
+    // Slice 3 will extend the pattern grammar with payload
+    // bindings (`EnumName.Variant { field }`).
+    let pattern = {
+        let wildcard = select! { Token::Ident(name) if name == "_" => () }.map_with(|_, extra| {
+            let s: SimpleSpan = extra.span();
+            Spanned::new(Pattern::Wildcard, s)
+        });
+        let variant_path = select! { Token::Ident(name) => name }
+            .then_ignore(just(Token::Dot))
+            .then(select! { Token::Ident(name) => name })
+            .map_with(|(enum_name, variant_name), extra| {
+                let s: SimpleSpan = extra.span();
+                Spanned::new(
+                    Pattern::Variant {
+                        enum_name,
+                        variant_name,
+                    },
+                    s,
+                )
+            });
+        wildcard.or(variant_path)
+    };
+
+    let match_arm = pattern
+        .then_ignore(just(Token::FatArrow))
+        .then(expr.clone())
+        .map_with(|(pattern, body), extra| {
+            let s: SimpleSpan = extra.span();
+            MatchArm {
+                pattern,
+                body,
+                span: s.start..s.end,
+            }
+        });
+    // Arm separator: comma or newline, same as obj fields and
+    // enum variants. Trailing separator allowed.
+    let arm_sep = just(Token::Comma)
+        .then(nl.clone().or_not())
+        .ignored()
+        .or(nl.clone().at_least(1).ignored());
+
+    let match_expr = just(Token::Match)
+        .ignore_then(expr.clone())
+        .then(
+            match_arm
+                .separated_by(arm_sep)
+                .allow_trailing()
+                .collect::<Vec<MatchArm>>()
+                .delimited_by(
+                    just(Token::LeftCurly).then(nl.clone()),
+                    nl.clone().then(just(Token::RightCurly)),
+                ),
+        )
+        .map(|(scrutinee, arms)| Expression::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        });
+
     bool_lit
         .or(nil_lit)
         .or(float)
         .or(int)
         .or(string)
+        .or(match_expr)
         .or(ident_or_call)
         .or(paren)
         .or(list_literal)
@@ -830,7 +899,7 @@ fn program<'src>() -> impl Parser<
         let obj_item = obj_method
             .map(ObjItem::Method)
             .or(use_item.map(ObjItem::Use))
-            .or(obj_field.map(ObjItem::Field));
+            .or(obj_field.clone().map(ObjItem::Field));
 
         // obj <name> { <field>, <field> } or { <field> \n <field> }
         let field_sep = just(Token::Comma)
@@ -845,7 +914,7 @@ fn program<'src>() -> impl Parser<
             .then(select! { Token::Ident(name) => name })
             .then(
                 obj_item
-                    .separated_by(field_sep)
+                    .separated_by(field_sep.clone())
                     .allow_trailing()
                     .collect::<Vec<_>>()
                     .delimited_by(
@@ -878,6 +947,67 @@ fn program<'src>() -> impl Parser<
                 )
             })
             .labelled("object definition")
+            .boxed();
+
+        // -- Enums --
+        //
+        // `enum Name { Variant1, Variant2 { field: T, ... }, ... }`
+        // Variants are bare names for nullary cases or have a
+        // braced payload field list using the same shape as obj
+        // fields. Variant separator follows the same comma-or-
+        // newline rule as obj fields.
+        //
+        // Variant payloads parse as `Vec<ObjField>` directly so the
+        // compiler can apply the same field-resolution machinery
+        // to both shapes.
+        let variant_payload_fields = obj_field
+            .clone()
+            .separated_by(field_sep.clone())
+            .allow_trailing()
+            .collect::<Vec<ObjField>>()
+            .delimited_by(
+                just(Token::LeftCurly).then(newlines.clone().or_not()),
+                newlines.clone().or_not().then(just(Token::RightCurly)),
+            );
+
+        let enum_variant = select! { Token::Ident(name) => name }
+            .then(variant_payload_fields.or_not())
+            .map_with(|(name, fields), extra| {
+                let s: SimpleSpan = extra.span();
+                EnumVariant {
+                    name,
+                    fields: fields.unwrap_or_default(),
+                    span: s.start..s.end,
+                }
+            })
+            .labelled("enum variant");
+
+        let enum_stmt = just(Token::Pub)
+            .or_not()
+            .map(|t| t.is_some())
+            .then_ignore(just(Token::Enum))
+            .then(select! { Token::Ident(name) => name })
+            .then(
+                enum_variant
+                    .separated_by(field_sep)
+                    .allow_trailing()
+                    .collect::<Vec<EnumVariant>>()
+                    .delimited_by(
+                        just(Token::LeftCurly).then(newlines.clone().or_not()),
+                        newlines.clone().or_not().then(just(Token::RightCurly)),
+                    ),
+            )
+            .map_with(|((is_pub, name), variants), extra| {
+                Spanned::new(
+                    Statement::EnumDef {
+                        name,
+                        variants,
+                        is_pub,
+                    },
+                    extra.span(),
+                )
+            })
+            .labelled("enum definition")
             .boxed();
 
         // -- Functions --
@@ -1049,6 +1179,7 @@ fn program<'src>() -> impl Parser<
             .or(assign_stmt)
             .or(val_stmt)
             .or(obj_stmt)
+            .or(enum_stmt)
             .or(fn_stmt)
             .or(test_stmt)
             .or(assert_stmt)

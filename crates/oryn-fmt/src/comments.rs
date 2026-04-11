@@ -99,6 +99,11 @@ impl CommentAttachments {
                     }
                 }
             }
+            Statement::EnumDef { .. } => {
+                // Enum declarations have no expression children to
+                // walk for comments. Variant payloads are type
+                // annotations only.
+            }
         }
     }
 
@@ -161,6 +166,12 @@ impl CommentAttachments {
             Expression::Index { object, index } => {
                 self.walk_expression(object, parsed);
                 self.walk_expression(index, parsed);
+            }
+            Expression::Match { scrutinee, arms } => {
+                self.walk_expression(scrutinee, parsed);
+                for arm in arms {
+                    self.walk_expression(&arm.body, parsed);
+                }
             }
             Expression::Nil
             | Expression::True

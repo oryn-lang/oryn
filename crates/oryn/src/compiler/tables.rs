@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::compiler::types::ResolvedType;
 
-use super::types::{MethodSignature, ObjDefInfo};
+use super::types::{EnumDefInfo, EnumVariantInfo, MethodSignature, ObjDefInfo};
 
 // ---------------------------------------------------------------------------
 // Locals
@@ -259,5 +259,70 @@ impl ObjTable {
         let absolute = *self.names.get(name)?;
         let local = absolute - self.base_offset;
         Some((absolute, &self.defs[local]))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EnumTable
+// ---------------------------------------------------------------------------
+
+/// Compile-time registry of enum definitions. Parallel to ObjTable
+/// but for enum types. The `names` HashMap stores **absolute**
+/// enum_def indices (shifted by `base_offset`); the `defs` vector
+/// is indexed locally. `resolve_variant` returns the absolute enum
+/// index, the variant index within the enum, and the variant info,
+/// so callers can emit `MakeEnum(enum_idx, variant_idx, ..)` directly.
+#[derive(Clone)]
+pub(super) struct EnumTable {
+    pub(super) names: HashMap<String, usize>,
+    pub(super) defs: Vec<EnumDefInfo>,
+    pub(super) base_offset: usize,
+}
+
+impl EnumTable {
+    pub(super) fn new(base_offset: usize) -> Self {
+        Self {
+            names: HashMap::new(),
+            defs: Vec::new(),
+            base_offset,
+        }
+    }
+
+    pub(super) fn register(
+        &mut self,
+        name: String,
+        variants: Vec<EnumVariantInfo>,
+        is_pub: bool,
+    ) -> usize {
+        let local = self.defs.len();
+        let absolute = self.base_offset + local;
+        self.names.insert(name.clone(), absolute);
+        self.defs.push(EnumDefInfo {
+            name,
+            variants,
+            is_pub,
+        });
+        absolute
+    }
+
+    /// Resolve an enum name to its absolute index and def.
+    pub(super) fn resolve(&self, name: &str) -> Option<(usize, &EnumDefInfo)> {
+        let absolute = *self.names.get(name)?;
+        let local = absolute - self.base_offset;
+        Some((absolute, &self.defs[local]))
+    }
+
+    /// Resolve `EnumName.VariantName` to a (enum_idx, variant_idx,
+    /// variant_info) triple. Returns `None` if the enum doesn't
+    /// exist or the variant isn't on it.
+    pub(super) fn resolve_variant(
+        &self,
+        enum_name: &str,
+        variant_name: &str,
+    ) -> Option<(usize, usize, &EnumVariantInfo)> {
+        let (enum_idx, def) = self.resolve(enum_name)?;
+        let variant_idx = def.variants.iter().position(|v| v.name == variant_name)?;
+        let variant_info = &def.variants[variant_idx];
+        Some((enum_idx, variant_idx, variant_info))
     }
 }

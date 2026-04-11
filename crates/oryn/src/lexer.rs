@@ -24,6 +24,10 @@ pub enum Token {
     Rn,
     #[token("obj")]
     Obj,
+    #[token("enum")]
+    Enum,
+    #[token("match")]
+    Match,
     #[token("use")]
     Use,
     #[token("for")]
@@ -125,6 +129,8 @@ pub enum Token {
     Colon,
     #[token("->")]
     Arrow,
+    #[token("=>")]
+    FatArrow,
     #[token(",")]
     Comma,
     #[token("(")]
@@ -164,6 +170,8 @@ impl Display for Token {
             Token::Fn => write!(f, "fn"),
             Token::Rn => write!(f, "rn"),
             Token::Obj => write!(f, "obj"),
+            Token::Enum => write!(f, "enum"),
+            Token::Match => write!(f, "match"),
             Token::Use => write!(f, "use"),
             Token::For => write!(f, "for"),
             Token::In => write!(f, "in"),
@@ -208,6 +216,7 @@ impl Display for Token {
             Token::Dot => write!(f, "."),
             Token::Colon => write!(f, ":"),
             Token::Arrow => write!(f, "->"),
+            Token::FatArrow => write!(f, "=>"),
             Token::Comma => write!(f, ","),
             Token::LeftParen => write!(f, "("),
             Token::RightParen => write!(f, ")"),

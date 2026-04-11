@@ -56,6 +56,17 @@ pub enum Statement {
         uses: Vec<Vec<String>>,
         is_pub: bool,
     },
+    /// `enum Name { Variant1, Variant2 { field: T, ... }, ... }` —
+    /// a tagged-union (sum) type. Each variant is either nullary
+    /// (a bare name) or carries named-field payloads with the same
+    /// shape as obj fields. Top-level only; cannot be nested in
+    /// functions or methods. See WARTS.md (enums section) and
+    /// `examples/11_enums.on` for the user-facing form.
+    EnumDef {
+        name: String,
+        variants: Vec<EnumVariant>,
+        is_pub: bool,
+    },
     FieldAssignment {
         object: Spanned<Expression>,
         field: String,
@@ -189,6 +200,17 @@ pub enum Expression {
         index: Box<Spanned<Expression>>,
     },
     Block(Vec<Spanned<Statement>>),
+    /// `match scrutinee { pattern => body, ... }` — pattern match on
+    /// an enum value. The arms are tried in order; the first arm
+    /// whose pattern matches the scrutinee fires. Match is *always*
+    /// an expression — its value is the value of the matched arm's
+    /// body. All arms must produce the same type. Used as a
+    /// statement, the value is discarded via the existing
+    /// expression-statement form.
+    Match {
+        scrutinee: Box<Spanned<Expression>>,
+        arms: Vec<MatchArm>,
+    },
 }
 
 /// A binary operator.
@@ -303,6 +325,57 @@ impl Param {
             is_mut: false,
         }
     }
+}
+
+/// A variant of an enum declaration. Variants are either nullary
+/// (no payload, `fields` is empty) or carry **named** payload fields
+/// with the same shape as obj fields. The reuse of `ObjField` is
+/// deliberate: enum payloads parse, type-check, and store the same
+/// way obj fields do, so we share the type to keep the two paths
+/// in lockstep.
+#[derive(Debug)]
+pub struct EnumVariant {
+    pub name: String,
+    /// Empty for nullary variants. Otherwise the payload fields in
+    /// declaration order. Each field carries its name, type, span,
+    /// and `is_pub` (always `false` for now — per-variant payload
+    /// visibility isn't a thing).
+    pub fields: Vec<ObjField>,
+    /// Byte range covering the variant declaration. Used for
+    /// per-variant error reporting (e.g. duplicate variant names).
+    pub span: Span,
+}
+
+/// A single arm of a `match` expression: `pattern => body`.
+/// The body is any expression — single value, function call, block
+/// expression, nested match. The arm's value is the body's value;
+/// all arms in a match must produce the same type.
+#[derive(Debug)]
+pub struct MatchArm {
+    pub pattern: Spanned<Pattern>,
+    pub body: Spanned<Expression>,
+    pub span: Span,
+}
+
+/// A pattern that appears on the left of `=>` in a match arm.
+/// Slice 1+2 supports only the discriminant subset: a fully-qualified
+/// enum variant path (`Color.Red`, `FsResult.Ok`) and the wildcard
+/// `_`. Slice 3 will add payload bindings (`FsResult.Ok { content }`),
+/// Slice 4 will add nested patterns and exhaustiveness across them.
+#[derive(Debug)]
+pub enum Pattern {
+    /// `EnumName.VariantName` — matches when the scrutinee is the
+    /// named variant, regardless of payload contents. The compiler
+    /// resolves the names against the enum table to verify the
+    /// variant exists and to compute the discriminant for codegen.
+    Variant {
+        enum_name: String,
+        variant_name: String,
+    },
+    /// `_` — matches anything. Used as a catch-all in non-exhaustive
+    /// matches. Does not bind a name; Slice 3 will add a binding form
+    /// if we want it.
+    Wildcard,
 }
 
 #[derive(Debug)]

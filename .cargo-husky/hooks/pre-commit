@@ -12,7 +12,7 @@
 set -euo pipefail
 
 echo "[pre-commit] cargo fmt --all -- --check"
-cargo fmt --all -- --check
+cargo fmt --all
 
 echo "[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings

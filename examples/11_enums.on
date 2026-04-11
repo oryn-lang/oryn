@@ -1,0 +1,192 @@
+// ---------------------------------------------------------------------
+// Enums and match
+// ---------------------------------------------------------------------
+// Oryn enums are tagged unions: a value of an enum type is exactly one
+// of its declared variants, and each variant can either be nullary or
+// carry a named-field payload. The `match` expression dispatches on
+// the active variant.
+//
+// Run with:
+//   cargo run --bin oryn -- examples/11_enums.on
+
+// ── 1. Nullary enums ────────────────────────────────────────────────
+// The simplest case: an enum whose variants carry no data. These are
+// the rough equivalent of C-style enums but with no implicit
+// integer interconversion — they're a closed set of named values.
+
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+// Construct values with `Type.Variant` syntax. Two independently
+// constructed values of the same nullary variant compare equal.
+let c = Color.Red
+print("c == Color.Red? {c == Color.Red}")  // → true
+print("c == Color.Blue? {c == Color.Blue}")  // → false
+
+// ── 2. Match as expression ──────────────────────────────────────────
+// `match` is an expression — its value flows directly into a let
+// binding, a function return, or any other expression context.
+// Every arm body must produce the same type, and the set of arms
+// must cover every variant (or end in a `_` wildcard).
+
+let label: String = match c {
+    Color.Red => "warm"
+    Color.Green => "fresh"
+    Color.Blue => "cool"
+}
+print("label = {label}")  // → warm
+
+// Same idea inside a function. The match's result is the function's
+// return value because the match is the body of the `rn`.
+fn rgb_hex(c: Color) -> String {
+    rn match c {
+        Color.Red => "#ff0000"
+        Color.Green => "#00ff00"
+        Color.Blue => "#0000ff"
+    }
+}
+
+print(rgb_hex(Color.Red))  // → #ff0000
+print(rgb_hex(Color.Green))  // → #00ff00
+print(rgb_hex(Color.Blue))  // → #0000ff
+
+// ── 3. Wildcard arms ────────────────────────────────────────────────
+// A `_` arm matches anything not covered by an earlier arm. Use it
+// when you only care about a few variants and want to lump the rest
+// together. A wildcard satisfies the exhaustiveness check.
+
+enum Direction {
+    North
+    South
+    East
+    West
+    Up
+    Down
+}
+
+fn is_horizontal(d: Direction) -> bool {
+    rn match d {
+        Direction.North => true
+        Direction.South => true
+        Direction.East => true
+        Direction.West => true
+        _ => false
+    }
+}
+
+print("North horizontal? {is_horizontal(Direction.North)}")  // → true
+print("Up horizontal?    {is_horizontal(Direction.Up)}")  // → false
+print("Down horizontal?  {is_horizontal(Direction.Down)}")  // → false
+
+// ── 4. Payload variants ─────────────────────────────────────────────
+// Variants can carry named-field payloads with the same shape as obj
+// fields. Field types may be any Oryn type — primitives, strings,
+// objects, lists, even other enums. Nullary and payload variants
+// can mix freely inside the same enum.
+
+enum GameEvent {
+    Damage { amount: int }
+    Heal { amount: int }
+    Move { dx: int, dy: int }
+    GameOver
+}
+
+// Construct payload values with a field block. Field order in the
+// constructor doesn't matter — fields are reordered to declaration
+// order before the value is built, so two literals with the same
+// fields in different orders compare equal.
+let e1 = GameEvent.Damage { amount: 10 }
+let e2 = GameEvent.Move { dx: 3, dy: 4 }
+let e3 = GameEvent.Move { dy: 4, dx: 3 }
+let e4 = GameEvent.GameOver
+
+print("e1 = {e1}")
+print("e2 = {e2}")
+print("e2 == e3? {e2 == e3}")  // → true (structural equality)
+print("e4 = {e4}")
+
+// ── 5. Match across mixed variants ──────────────────────────────────
+// Slice 1+2 dispatches on the variant tag only — the payload comes
+// along for the ride but isn't bound into the arm body. Slice 3
+// will add `match e { GameEvent.Damage { amount } => ... }`
+// destructuring; for now, treat the variant as a discriminant.
+
+fn describe(e: GameEvent) -> String {
+    rn match e {
+        GameEvent.Damage => "took damage"
+        GameEvent.Heal => "got healed"
+        GameEvent.Move => "moved"
+        GameEvent.GameOver => "game over"
+    }
+}
+
+print(describe(e1))  // → took damage
+print(describe(e2))  // → moved
+print(describe(e4))  // → game over
+
+// Wildcard works the same with payload enums.
+fn is_terminal(e: GameEvent) -> bool {
+    rn match e {
+        GameEvent.GameOver => true
+        _ => false
+    }
+}
+
+print("e1 terminal? {is_terminal(e1)}")  // → false
+print("e4 terminal? {is_terminal(e4)}")  // → true
+
+// ── 6. Returning enums from functions ───────────────────────────────
+// Enum types are first-class — you can name them in let annotations,
+// function parameters, and function return types. This is the main
+// reason match-as-expression matters: it lets you build values with
+// the variant decided by data flow, then hand them straight to a
+// caller.
+
+fn classify(hp: int) -> GameEvent {
+    if hp <= 0 {
+        rn GameEvent.GameOver
+    }
+    if hp < 20 {
+        rn GameEvent.Damage { amount: 20 - hp }
+    }
+    rn GameEvent.Heal { amount: 0 }
+}
+
+print(describe(classify(0)))  // → game over
+print(describe(classify(15)))  // → took damage
+print(describe(classify(80)))  // → got healed
+
+// ---------------------------------------------------------------------
+// Notes on the rules `enum` and `match` follow
+// ---------------------------------------------------------------------
+// • Closed set: an enum's variants are fixed at declaration. There is
+//   no way to add a variant from outside the declaring module, so
+//   match exhaustiveness is meaningful — adding a new variant is a
+//   breaking change that the compiler will surface at every
+//   non-wildcard match.
+//
+// • Structural equality: two enum values are equal iff their variant
+//   tags match AND their payloads are field-by-field equal. There is
+//   no pointer/identity comparison — `Color.Red == Color.Red` is
+//   always true regardless of how the values were constructed.
+//
+// • Cross-enum comparison: comparing a `Color` to a `Direction` is a
+//   compile error at the type level. Two enums that happen to have a
+//   variant with the same name are still distinct types.
+//
+// • Exhaustiveness: a match without a `_` must cover every declared
+//   variant. The compiler lists the missing variants in the error.
+//   Adding a `_` arm switches off the check entirely — there's no
+//   middle ground.
+//
+// • Match arms are expressions: every arm body produces a value, and
+//   they must all have the same type. The match expression's value
+//   is the chosen arm's value.
+//
+// • Payload destructuring: not yet — Slice 3 adds the
+//   `Variant { field } => ...` form that binds payload fields into
+//   the arm body. Until then, you can dispatch on the variant tag
+//   but not read the payload from within the arm.

@@ -461,6 +461,14 @@ impl Compiler {
                 self.compile_obj_def(name, fields, methods, uses, &stmt_span, is_pub);
             }
 
+            Statement::EnumDef {
+                name,
+                variants,
+                is_pub,
+            } => {
+                self.compile_enum_def(name, variants, &stmt_span, is_pub);
+            }
+
             // -- Control flow --
             Statement::If {
                 condition,

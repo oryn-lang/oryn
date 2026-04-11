@@ -6,7 +6,7 @@ use gc_arena::{Arena, Gc, Rootable};
 
 use crate::compiler::{BuiltinFunction, Instruction, ListMethod};
 use crate::errors::{RuntimeError, ValueType};
-use crate::vm::value::{ListData, MapData, MapKey, ObjData, RangeValue};
+use crate::vm::value::{EnumData, ListData, MapData, MapKey, ObjData, RangeValue};
 
 use super::chunk::Chunk;
 use super::value::{CallFrame, Value, VmState};
@@ -62,6 +62,21 @@ macro_rules! equality_op {
             }
             (Value::String(l), Value::String(r)) => {
                 $state.stack.push(Value::Bool(**l $op **r));
+            }
+            // Enum equality: same def_idx, same variant_idx, structural
+            // payload equality. Identity (Gc pointer) is NOT used — two
+            // independently constructed `FsResult.NotFound` values are
+            // equal. Cross-enum comparisons (different def_idx) are
+            // false rather than a type error so users can write
+            // `result == FsResult.NotFound` against any enum-typed
+            // expression without the compiler tracking which enum it is.
+            (Value::Enum(l), Value::Enum(r)) => {
+                let l_data = l.borrow();
+                let r_data = r.borrow();
+                let eq = l_data.def_idx == r_data.def_idx
+                    && l_data.variant_idx == r_data.variant_idx
+                    && l_data.payload == r_data.payload;
+                $state.stack.push(Value::Bool(eq $op true));
             }
             // Nil comparisons: nil == nil is true, nil == non-nil is false.
             // For != the result is naturally inverted since the macro passes !=.
@@ -334,6 +349,39 @@ impl VM {
                                 let data = obj_ref.borrow();
                                 let type_name = &chunk.obj_defs[data.type_idx].name;
                                 format!("<{type_name} instance>")
+                            }
+                            Value::Enum(enum_ref) => {
+                                // Format as the source-equivalent
+                                // constructor: nullary variants
+                                // produce `EnumName.VariantName`,
+                                // payload variants produce
+                                // `EnumName.VariantName { field: value, ... }`.
+                                // Payload values are formatted via
+                                // `format_value` (see below) which
+                                // recurses through compound types.
+                                let data = enum_ref.borrow();
+                                let def = &chunk.enum_defs[data.def_idx];
+                                let variant = &def.variants[data.variant_idx];
+                                if variant.field_names.is_empty() {
+                                    format!("{}.{}", def.name, variant.name)
+                                } else {
+                                    let mut s = format!("{}.{} {{ ", def.name, variant.name);
+                                    for (i, (field_name, field_value)) in variant
+                                        .field_names
+                                        .iter()
+                                        .zip(data.payload.iter())
+                                        .enumerate()
+                                    {
+                                        if i > 0 {
+                                            s.push_str(", ");
+                                        }
+                                        s.push_str(field_name);
+                                        s.push_str(": ");
+                                        s.push_str(&Self::format_value(field_value, chunk));
+                                    }
+                                    s.push_str(" }");
+                                    s
+                                }
                             }
                             Value::Range(range_ref) => {
                                 let range = range_ref.borrow();
@@ -672,6 +720,43 @@ impl VM {
                                             let type_name = &chunk.obj_defs[data.type_idx].name;
 
                                             format!("<{type_name} instance>")
+                                        }
+                                        Value::Enum(enum_ref) => {
+                                            // Source-equivalent format:
+                                            // `EnumName.VariantName` for
+                                            // nullary, plus `{ field: value, ... }`
+                                            // for payload variants. The
+                                            // print path uses the same
+                                            // shape as `format_value`
+                                            // because enum values are
+                                            // their own readable form.
+                                            let data = enum_ref.borrow();
+                                            let def = &chunk.enum_defs[data.def_idx];
+                                            let variant = &def.variants[data.variant_idx];
+                                            if variant.field_names.is_empty() {
+                                                format!("{}.{}", def.name, variant.name)
+                                            } else {
+                                                let mut s =
+                                                    format!("{}.{} {{ ", def.name, variant.name);
+                                                for (i, (field_name, field_value)) in variant
+                                                    .field_names
+                                                    .iter()
+                                                    .zip(data.payload.iter())
+                                                    .enumerate()
+                                                {
+                                                    if i > 0 {
+                                                        s.push_str(", ");
+                                                    }
+                                                    s.push_str(field_name);
+                                                    s.push_str(": ");
+                                                    s.push_str(&Self::format_value(
+                                                        field_value,
+                                                        chunk,
+                                                    ));
+                                                }
+                                                s.push_str(" }");
+                                                s
+                                            }
                                         }
                                         Value::Range(range_ref) => {
                                             let range = range_ref.borrow();
@@ -1181,6 +1266,55 @@ impl VM {
                             }
                         }
                     }
+                    Instruction::MakeEnum(def_idx, variant_idx, payload_count) => {
+                        // The compiler pushed payload values in
+                        // declaration order. split_off pops them as a
+                        // contiguous slice so payload indices line up
+                        // with the EnumVariantInfo.
+                        let payload_count = *payload_count;
+                        let payload: Vec<Value> =
+                            state.stack.split_off(state.stack.len() - payload_count);
+                        let data = EnumData {
+                            def_idx: *def_idx,
+                            variant_idx: *variant_idx,
+                            payload,
+                        };
+                        state
+                            .stack
+                            .push(Value::Enum(Gc::new(mc, RefLock::new(data))));
+                    }
+                    Instruction::EnumDiscriminant => {
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        match value {
+                            Value::Enum(data_ref) => {
+                                let variant_idx = data_ref.borrow().variant_idx;
+                                state.stack.push(Value::Int(variant_idx as i32));
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Enum,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    Instruction::Dup => {
+                        // Peek + clone the TOS without consuming it.
+                        // For primitives this is a real copy; for GC
+                        // values it's a pointer alias (the underlying
+                        // heap object isn't duplicated). Used by
+                        // match codegen so the same scrutinee
+                        // discriminant can be compared against
+                        // multiple arms in sequence.
+                        let value = state
+                            .stack
+                            .last()
+                            .ok_or(RuntimeError::StackUnderflow)?
+                            .clone();
+                        state.stack.push(value);
+                    }
                 }
 
                 state.frames[frame_idx].ip += 1;
@@ -1206,6 +1340,69 @@ impl VM {
             Value::Int(i) => Some(MapKey::Int(*i)),
             Value::Bool(b) => Some(MapKey::Bool(*b)),
             _ => None,
+        }
+    }
+
+    /// Format a value for display in print output and string
+    /// interpolation. Recursive — compound values format their
+    /// children using this same function. The output is intended to
+    /// be readable; for enums and primitives it is also
+    /// source-equivalent (could be pasted back into a program).
+    fn format_value(value: &Value<'_>, chunk: &Chunk) -> String {
+        match value {
+            Value::Bool(b) => b.to_string(),
+            Value::Float(f) => {
+                let s = f.to_string();
+                if s.contains('.') { s } else { format!("{s}.0") }
+            }
+            Value::Int(i) => i.to_string(),
+            Value::String(s) => format!("\"{}\"", s.as_str()),
+            Value::Nil => "nil".to_string(),
+            Value::Error(msg) => format!("error: {}", msg.as_str()),
+            Value::Object(obj_ref) => {
+                let data = obj_ref.borrow();
+                let type_name = &chunk.obj_defs[data.type_idx].name;
+                format!("<{type_name} instance>")
+            }
+            Value::Enum(enum_ref) => {
+                let data = enum_ref.borrow();
+                let def = &chunk.enum_defs[data.def_idx];
+                let variant = &def.variants[data.variant_idx];
+                if variant.field_names.is_empty() {
+                    format!("{}.{}", def.name, variant.name)
+                } else {
+                    let mut s = format!("{}.{} {{ ", def.name, variant.name);
+                    for (i, (field_name, field_value)) in variant
+                        .field_names
+                        .iter()
+                        .zip(data.payload.iter())
+                        .enumerate()
+                    {
+                        if i > 0 {
+                            s.push_str(", ");
+                        }
+                        s.push_str(field_name);
+                        s.push_str(": ");
+                        s.push_str(&Self::format_value(field_value, chunk));
+                    }
+                    s.push_str(" }");
+                    s
+                }
+            }
+            Value::Range(range_ref) => {
+                let r = range_ref.borrow();
+                let op = if r.inclusive { "..=" } else { ".." };
+                format!("{}{}{}", r.current, op, r.end)
+            }
+            Value::List(list_ref) => {
+                let data = list_ref.borrow();
+                format!("<list of {}>", data.elements.len())
+            }
+            Value::Map(map_ref) => {
+                let data = map_ref.borrow();
+                format!("<map of {}>", data.entries.len())
+            }
+            Value::Uninitialized => "<uninitialized>".to_string(),
         }
     }
 
@@ -1237,6 +1434,7 @@ mod tests {
             spans: vec![0..0; len],
             functions: vec![],
             obj_defs: vec![],
+            enum_defs: vec![],
             tests: vec![],
         }
     }

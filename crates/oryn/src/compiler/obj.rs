@@ -279,8 +279,13 @@ impl Compiler {
                             .as_ref()
                             .map(|a| {
                                 self.attach_current_module(
-                                    resolve_type(a, &self.obj_table, &self.modules)
-                                        .unwrap_or(ResolvedType::Unknown),
+                                    resolve_type(
+                                        a,
+                                        &self.obj_table,
+                                        &self.enum_table,
+                                        &self.modules,
+                                    )
+                                    .unwrap_or(ResolvedType::Unknown),
                                 )
                             })
                             .unwrap_or(ResolvedType::Unknown)
@@ -289,7 +294,7 @@ impl Compiler {
 
                 let return_type = match &m.return_type {
                     Some(rt) => self.attach_current_module(
-                        resolve_type(rt, &self.obj_table, &self.modules)
+                        resolve_type(rt, &self.obj_table, &self.enum_table, &self.modules)
                             .unwrap_or(ResolvedType::Unknown),
                     ),
                     None => ResolvedType::Unknown,
@@ -353,8 +358,13 @@ impl Compiler {
                             .as_ref()
                             .map(|a| {
                                 self.attach_current_module(
-                                    resolve_type(a, &self.obj_table, &self.modules)
-                                        .unwrap_or(ResolvedType::Unknown),
+                                    resolve_type(
+                                        a,
+                                        &self.obj_table,
+                                        &self.enum_table,
+                                        &self.modules,
+                                    )
+                                    .unwrap_or(ResolvedType::Unknown),
                                 )
                             })
                             .unwrap_or(ResolvedType::Unknown)
@@ -376,7 +386,7 @@ impl Compiler {
 
             let return_resolved = match &method.return_type {
                 Some(rt) => self.attach_current_module(
-                    resolve_type(rt, &self.obj_table, &self.modules)
+                    resolve_type(rt, &self.obj_table, &self.enum_table, &self.modules)
                         .unwrap_or(ResolvedType::Unknown),
                 ),
                 None => ResolvedType::Unknown,

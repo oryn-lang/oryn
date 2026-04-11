@@ -52,12 +52,12 @@ print("points   = {points}")  // → 0
 let first: int? = nil
 let second: int? = nil
 let third: int? = 7
-let pick = first orelse second orelse third orelse 0
+let pick = first orelse (second orelse (third orelse 0))
 print("pick = {pick}")  // → 7  (first two are nil)
 
 let all_nil: int? = nil
 let also_nil: int? = nil
-let last_resort = all_nil orelse also_nil orelse 99
+let last_resort = all_nil orelse (also_nil orelse 99)
 print("last_resort = {last_resort}")  // → 99  (everything was nil)
 
 // ── 3. if-let unwrapping ────────────────────────────────────────────

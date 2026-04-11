@@ -6,7 +6,7 @@
 //! emission, etc.), then call the corresponding `walk_*` function to
 //! recurse into children.
 
-use crate::parser::{Expression, ObjMethod, Span, Spanned, Statement, StringPart};
+use crate::parser::{Expression, ObjMethod, Pattern, Span, Spanned, Statement, StringPart};
 
 /// Trait for walking the Oryn AST with custom side effects at each node.
 ///
@@ -111,6 +111,18 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
 
             for method in methods {
                 walk_obj_method(visitor, method, &stmt.span);
+            }
+        }
+
+        Statement::EnumDef { name, variants, .. } => {
+            visitor.on_define(name, &stmt.span, &stmt.span);
+            // Each variant introduces a name in the enum's namespace,
+            // accessed as `EnumName.VariantName`. The visitor's
+            // current model doesn't have a "qualified name" concept,
+            // so we just record the bare variant name as a definition
+            // — good enough for hover/completion to find them.
+            for variant in variants {
+                visitor.on_define(&variant.name, &variant.span, &variant.span);
             }
         }
 
@@ -298,6 +310,25 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
             walk_stmts(visitor, stmts);
             visitor.exit_scope();
         }
+
+        Expression::Match { scrutinee, arms } => {
+            visitor.visit_expr(scrutinee);
+            for arm in arms {
+                // Patterns may reference enum and variant names; record
+                // those as references so the LSP can hover/jump to the
+                // enum definition. Wildcard patterns have nothing to
+                // walk.
+                if let Pattern::Variant {
+                    enum_name,
+                    variant_name,
+                } = &arm.pattern.node
+                {
+                    visitor.on_reference(enum_name, &arm.pattern.span);
+                    visitor.on_reference(variant_name, &arm.pattern.span);
+                }
+                visitor.visit_expr(&arm.body);
+            }
+        }
     }
 }
 
@@ -325,6 +356,7 @@ mod tests {
                 Statement::Function { .. } => "fn",
                 Statement::Assignment { .. } => "assign",
                 Statement::ObjDef { .. } => "obj",
+                Statement::EnumDef { .. } => "enum",
                 Statement::If { .. } => "if",
                 Statement::Unless { .. } => "unless",
                 Statement::While { .. } => "while",
