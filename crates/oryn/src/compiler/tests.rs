@@ -2118,7 +2118,7 @@ fn enum_match_non_enum_scrutinee_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| format!("{e}").contains("must be an enum value")),
+            .any(|e| format!("{e}").contains("must be an enum or error union")),
         "expected non-enum scrutinee error, got {errors:?}"
     );
 }

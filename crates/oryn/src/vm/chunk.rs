@@ -650,6 +650,7 @@ fn disassemble_instructions(out: &mut String, instructions: &[Instruction]) {
                 format!("MakeEnum {def_idx} {variant_idx} ({payload_count} fields)")
             }
             Instruction::EnumDiscriminant => "EnumDiscriminant".to_string(),
+            Instruction::EnumDefIdx => "EnumDefIdx".to_string(),
             Instruction::GetEnumPayload(field_idx) => {
                 format!("GetEnumPayload {field_idx}")
             }

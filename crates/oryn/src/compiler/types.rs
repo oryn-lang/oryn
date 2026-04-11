@@ -191,6 +191,13 @@ pub enum Instruction {
     /// expected variant index. Type errors at runtime if the value
     /// isn't an enum.
     EnumDiscriminant,
+    /// Pop an enum value from the stack, push its `def_idx` as an
+    /// `Int`. Mirrors [`Instruction::EnumDiscriminant`]. Used by
+    /// error-union match dispatch, where arms can target variants
+    /// of different error enums and need to distinguish which
+    /// enum the scrutinee belongs to before checking the variant
+    /// discriminant.
+    EnumDefIdx,
     /// Pop an enum value, push the payload field at the given
     /// declaration-order index. The compiler resolves field names
     /// to indices via [`EnumVariantInfo::field_names`], so the
@@ -498,8 +505,22 @@ pub(crate) enum ResolvedType {
     },
     /// `T?` — a nillable type wrapping an inner type.
     Nillable(Box<ResolvedType>),
-    /// `!T` — an error union type wrapping an inner success type.
-    ErrorUnion(Box<ResolvedType>),
+    /// `error T` (loose) or `error of E T` (precise) — an error union
+    /// type wrapping an inner success type.
+    ///
+    /// `error_enum` is `None` for the loose form, where any error
+    /// enum value may appear on the error side. `Some((name, module))`
+    /// is the precise form, naming a specific error enum. The
+    /// compiler validates at resolution time that the referenced
+    /// enum was declared with the `error` modifier.
+    ErrorUnion {
+        /// The error enum pinned by the precise form, or `None`
+        /// for the loose form. The `(name, module)` shape mirrors
+        /// [`ResolvedType::Enum`] so the compatibility rules can
+        /// compare enum identities uniformly.
+        error_enum: Option<(String, Vec<String>)>,
+        inner: Box<ResolvedType>,
+    },
     /// `[T]` — a homogeneous list whose element type is tracked
     /// statically but erased at runtime.
     List(Box<ResolvedType>),
@@ -591,7 +612,17 @@ impl ResolvedType {
                 }
             }
             ResolvedType::Nillable(inner) => format!("maybe {}", inner.display_name()).into(),
-            ResolvedType::ErrorUnion(inner) => format!("error {}", inner.display_name()).into(),
+            ResolvedType::ErrorUnion { error_enum, inner } => match error_enum {
+                Some((name, module)) => {
+                    let qualified: std::borrow::Cow<'_, str> = if module.is_empty() {
+                        name.as_str().into()
+                    } else {
+                        format!("{}.{}", module.join("."), name).into()
+                    };
+                    format!("error {} of {}", inner.display_name(), qualified).into()
+                }
+                None => format!("error {}", inner.display_name()).into(),
+            },
             ResolvedType::List(inner) => format!("[{}]", inner.display_name()).into(),
             ResolvedType::Map(key, value) => {
                 format!("{{{}: {}}}", key.display_name(), value.display_name()).into()
@@ -614,11 +645,6 @@ impl ResolvedType {
         }
     }
 
-    /// Returns `true` if this is an `ErrorUnion` type.
-    pub(crate) fn is_error_union(&self) -> bool {
-        matches!(self, ResolvedType::ErrorUnion(_))
-    }
-
     pub(crate) fn is_map_key_type(&self) -> bool {
         matches!(
             self,
@@ -629,7 +655,7 @@ impl ResolvedType {
     /// If this is `ErrorUnion(T)`, returns `Some(&T)`. Otherwise `None`.
     pub(crate) fn unwrap_error_union(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::ErrorUnion(inner) => Some(inner),
+            ResolvedType::ErrorUnion { inner, .. } => Some(inner),
             _ => None,
         }
     }
@@ -640,11 +666,15 @@ impl ResolvedType {
     /// - `Unknown` is compatible with anything (inference gap).
     /// - `Nil` is compatible with any `Nillable(_)`.
     /// - `T` is compatible with `Nillable(T)` (value promotion).
-    /// - Any `Enum { is_error: true }` is compatible with any
-    ///   `ErrorUnion(_)` (error enum values promote into the error
-    ///   side of an error union — replaces the old string-backed
-    ///   `Error("msg")` constructor).
-    /// - `T` is compatible with `ErrorUnion(T)` (success value promotion).
+    /// - An `error enum E` value is compatible with `error T` (loose)
+    ///   and with `error of E T` (precise matching E); it is **not**
+    ///   compatible with `error of F T` when F ≠ E.
+    /// - `T` is compatible with `error T` and with `error of E T`
+    ///   (success value promotion into either form).
+    /// - A precise `error of E T` is compatible with a loose
+    ///   `error T` of the same inner (precise widens to loose).
+    /// - A loose `error T` is **not** compatible with a precise
+    ///   `error of E T` (can't narrow).
     /// - Otherwise, structural equality is required.
     pub(crate) fn is_compatible_with(&self, actual: &ResolvedType) -> bool {
         // Unknown is a wildcard in both directions.
@@ -669,16 +699,51 @@ impl ResolvedType {
             return true;
         }
 
-        // error enum → error T (any error enum value promotes into
-        // the error side of an error union, regardless of the
-        // success type T).
-        if matches!(actual, ResolvedType::Enum { is_error: true, .. }) && self.is_error_union() {
+        // error enum → error T / error of E T.
+        //
+        // * Loose expected: any error enum value is accepted.
+        // * Precise expected: only values of the named error enum.
+        if let ResolvedType::ErrorUnion {
+            error_enum: expected_enum,
+            ..
+        } = self
+            && let ResolvedType::Enum {
+                name: actual_name,
+                module: actual_module,
+                is_error: true,
+            } = actual
+        {
+            match expected_enum {
+                None => return true,
+                Some((expected_name, expected_module)) => {
+                    if expected_name == actual_name && expected_module == actual_module {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // T → error T or T → error of E T (success value promotion).
+        if let ResolvedType::ErrorUnion { inner, .. } = self
+            && inner.as_ref() == actual
+        {
             return true;
         }
 
-        // T → !T (success value promotion into error union).
-        if let ResolvedType::ErrorUnion(inner) = self
-            && inner.as_ref() == actual
+        // Precise → loose widening: `error of E T` is compatible with
+        // `error T` when the inner types match. Narrowing (loose →
+        // precise) is NOT allowed and intentionally falls through.
+        if let (
+            ResolvedType::ErrorUnion {
+                error_enum: None,
+                inner: expected_inner,
+            },
+            ResolvedType::ErrorUnion {
+                error_enum: Some(_),
+                inner: actual_inner,
+            },
+        ) = (self, actual)
+            && expected_inner == actual_inner
         {
             return true;
         }

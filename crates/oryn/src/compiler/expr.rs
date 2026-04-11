@@ -1517,34 +1517,68 @@ impl Compiler {
             Expression::Try(inner_expr) => {
                 let inner_type = self.compile_expr(*inner_expr);
 
-                let success_type = match inner_type.unwrap_error_union() {
-                    Some(t) => {
-                        // Verify the enclosing function returns an error union.
-                        if let Some(ref return_type) = self.locals.return_type
-                            && !return_type.is_error_union()
-                            && !matches!(return_type, ResolvedType::Unknown)
-                        {
-                            self.output.errors.push(crate::OrynError::compiler(
-                                    span.clone(),
-                                    format!(
-                                        "`try` requires the enclosing function to return an error union type, but it returns `{}`",
-                                        return_type.display_name()
-                                    ),
-                                ));
+                let success_type = match &inner_type {
+                    ResolvedType::ErrorUnion {
+                        error_enum: inner_enum,
+                        inner: t,
+                    } => {
+                        // Verify the enclosing function returns an
+                        // error union and, when both sides are
+                        // precise, that their error enums agree.
+                        // A loose caller can absorb any inner; a
+                        // precise caller only accepts matching
+                        // precise inners (or a loose inner falls
+                        // through to runtime dispatch).
+                        if let Some(ref return_type) = self.locals.return_type {
+                            match return_type {
+                                ResolvedType::ErrorUnion {
+                                    error_enum: caller_enum,
+                                    ..
+                                } => {
+                                    if let (Some(caller), Some(inner)) = (caller_enum, inner_enum)
+                                        && caller != inner
+                                    {
+                                        let fmt_enum =
+                                            |(name, module): &(String, Vec<String>)| -> String {
+                                                if module.is_empty() {
+                                                    name.clone()
+                                                } else {
+                                                    format!("{}.{}", module.join("."), name)
+                                                }
+                                            };
+                                        self.output.errors.push(crate::OrynError::compiler(
+                                            span.clone(),
+                                            format!(
+                                                "`try` cannot propagate `{}`: enclosing function expects error enum `{}`",
+                                                fmt_enum(inner),
+                                                fmt_enum(caller),
+                                            ),
+                                        ));
+                                    }
+                                }
+                                ResolvedType::Unknown => {}
+                                _ => {
+                                    self.output.errors.push(crate::OrynError::compiler(
+                                        span.clone(),
+                                        format!(
+                                            "`try` requires the enclosing function to return an error union type, but it returns `{}`",
+                                            return_type.display_name()
+                                        ),
+                                    ));
+                                }
+                            }
                         }
-                        t.clone()
+                        (**t).clone()
                     }
-                    None => {
-                        if !matches!(inner_type, ResolvedType::Unknown) {
-                            self.output.errors.push(crate::OrynError::compiler(
-                                span.clone(),
-                                format!(
-                                    "`try` requires an error union type, got `{}`",
-                                    inner_type.display_name()
-                                ),
-                            ));
-                        }
-
+                    ResolvedType::Unknown => ResolvedType::Unknown,
+                    other => {
+                        self.output.errors.push(crate::OrynError::compiler(
+                            span.clone(),
+                            format!(
+                                "`try` requires an error union type, got `{}`",
+                                other.display_name()
+                            ),
+                        ));
                         ResolvedType::Unknown
                     }
                 };
@@ -1914,10 +1948,14 @@ impl Compiler {
     }
 
     /// Compile `if let x = value { body } else { else_body }` as a
-    /// value-producing expression. The body branch fires only when
-    /// `value` is non-nil and binds the unwrapped value to `x` as
-    /// an immutable local for the body's scope. Same with-else /
-    /// no-else result-type rules as `compile_if_expression`.
+    /// value-producing expression. The body branch fires when
+    /// `value` is non-nil (for a nillable scrutinee) or non-error
+    /// (for an error-union scrutinee), binding the unwrapped value
+    /// to `x` as an immutable local for the body's scope.
+    ///
+    /// The else branch does NOT bind the error/nil value — it runs
+    /// as a plain fallback. Use `match` if you need to destructure
+    /// the error side.
     pub(super) fn compile_if_let_expression(
         &mut self,
         name: String,
@@ -1928,24 +1966,46 @@ impl Compiler {
     ) -> ResolvedType {
         let scrutinee_type = self.compile_expr(value);
 
-        let inner_type = match scrutinee_type.unwrap_nillable() {
-            Some(inner) => inner.clone(),
-            None => {
-                if !matches!(scrutinee_type, ResolvedType::Unknown) {
-                    self.output.errors.push(crate::OrynError::compiler(
-                        span.clone(),
-                        format!(
-                            "`if let` requires a nillable type, got `{}`",
-                            scrutinee_type.display_name()
-                        ),
-                    ));
-                }
-                ResolvedType::Unknown
-            }
+        // Three accepted shapes:
+        //   * Nillable(T)       — JumpIfNil branching, binds T
+        //   * ErrorUnion { T }  — JumpIfError branching, binds T
+        //   * Unknown           — upstream error; proceed silently
+        enum IfLetMode {
+            Nillable,
+            ErrorUnion,
+            Unknown,
+        }
+        let (mode, inner_type) = if let Some(inner) = scrutinee_type.unwrap_nillable() {
+            (IfLetMode::Nillable, inner.clone())
+        } else if let ResolvedType::ErrorUnion { inner, .. } = &scrutinee_type {
+            (IfLetMode::ErrorUnion, (**inner).clone())
+        } else if matches!(scrutinee_type, ResolvedType::Unknown) {
+            (IfLetMode::Unknown, ResolvedType::Unknown)
+        } else {
+            self.output.errors.push(crate::OrynError::compiler(
+                span.clone(),
+                format!(
+                    "`if let` requires a nillable or error union type, got `{}`",
+                    scrutinee_type.display_name()
+                ),
+            ));
+            (IfLetMode::Unknown, ResolvedType::Unknown)
         };
 
-        let jump_if_nil_idx = self.output.instructions.len();
-        self.emit(Instruction::JumpIfNil(0), span);
+        // Emit the branch test. Both JumpIfNil and JumpIfError are
+        // peek-then-maybe-jump, but they leave different stack
+        // state on the jump path that the else branch must clean up:
+        //   * JumpIfNil pops the nil before jumping — else-start is clean.
+        //   * JumpIfError leaves the error on TOS — else-start must Pop.
+        let branch_jump_idx = self.output.instructions.len();
+        match mode {
+            IfLetMode::Nillable | IfLetMode::Unknown => {
+                self.emit(Instruction::JumpIfNil(0), span);
+            }
+            IfLetMode::ErrorUnion => {
+                self.emit(Instruction::JumpIfError(0), span);
+            }
+        }
 
         // Then-branch: introduce `name: T` in a new scope and bind
         // the unwrapped value to it. The compiled body expression
@@ -1964,7 +2024,19 @@ impl Compiler {
             self.emit(Instruction::Jump(0), span);
 
             let else_start = self.output.instructions.len();
-            self.output.instructions[jump_if_nil_idx] = Instruction::JumpIfNil(else_start);
+            // Patch the branch test's target to the else start.
+            match mode {
+                IfLetMode::Nillable | IfLetMode::Unknown => {
+                    self.output.instructions[branch_jump_idx] = Instruction::JumpIfNil(else_start);
+                }
+                IfLetMode::ErrorUnion => {
+                    self.output.instructions[branch_jump_idx] =
+                        Instruction::JumpIfError(else_start);
+                    // JumpIfError leaves the error on TOS; pop it
+                    // so the else body starts with a clean stack.
+                    self.emit(Instruction::Pop, span);
+                }
+            }
 
             let else_span = else_body.span.clone();
             let else_ty = self.with_scope(|this| this.compile_value_body(else_body));
@@ -2001,7 +2073,18 @@ impl Compiler {
             self.emit(Instruction::Jump(0), span);
 
             let else_start = self.output.instructions.len();
-            self.output.instructions[jump_if_nil_idx] = Instruction::JumpIfNil(else_start);
+            match mode {
+                IfLetMode::Nillable | IfLetMode::Unknown => {
+                    self.output.instructions[branch_jump_idx] = Instruction::JumpIfNil(else_start);
+                }
+                IfLetMode::ErrorUnion => {
+                    self.output.instructions[branch_jump_idx] =
+                        Instruction::JumpIfError(else_start);
+                    // Pop the leftover error value before the
+                    // implicit nil result is pushed.
+                    self.emit(Instruction::Pop, span);
+                }
+            }
             self.emit(Instruction::PushNil, span);
 
             let end = self.output.instructions.len();

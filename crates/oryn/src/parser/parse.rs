@@ -266,7 +266,18 @@ fn atom<'src>(
                     s,
                 )
             });
-        wildcard.or(variant_path)
+        // `ok <name>` — success-side pattern for a match arm over an
+        // error union scrutinee. The bound name is introduced into
+        // the arm body as an immutable local holding the unwrapped
+        // success value. Compiler rejects this pattern in plain-enum
+        // matches (see `compile_match_expression`).
+        let ok_pattern = just(Token::Ok)
+            .ignore_then(select! { Token::Ident(name) => name })
+            .map_with(|name, extra| {
+                let s: SimpleSpan = extra.span();
+                Spanned::new(Pattern::Ok { name }, s)
+            });
+        choice((wildcard, ok_pattern, variant_path))
     };
 
     let match_arm = pattern
@@ -773,10 +784,30 @@ fn program<'src>() -> impl Parser<
                 .ignore_then(type_ann_rec.clone())
                 .map(|inner| TypeAnnotation::Nillable(Box::new(inner)));
 
-            // `error T` — prefix error union.
+            // `error T` (loose) or `error T of E` (precise) — prefix
+            // error union. The optional postfix `of <dotted_name>`
+            // pins a specific error enum that the function is
+            // allowed to return on the error side; omitting it
+            // keeps the loose semantics where any `error enum`
+            // value may appear. The `of` clause attaches to the
+            // most recent `error` keyword, and no other type rule
+            // knows `of`, so the greedy type_ann parse followed by
+            // an optional `of` suffix is unambiguous.
+            let precise_error_enum = just(Token::Of)
+                .ignore_then(
+                    select! { Token::Ident(name) => name }
+                        .separated_by(just(Token::Dot))
+                        .at_least(1)
+                        .collect::<Vec<String>>(),
+                )
+                .or_not();
             let error_union = just(Token::Error)
                 .ignore_then(type_ann_rec.clone())
-                .map(|inner| TypeAnnotation::ErrorUnion(Box::new(inner)));
+                .then(precise_error_enum)
+                .map(|(inner, error_enum)| TypeAnnotation::ErrorUnion {
+                    error_enum,
+                    inner: Box::new(inner),
+                });
 
             // Try the prefix forms first so `maybe`/`error` are
             // recognized as type modifiers, not consumed as

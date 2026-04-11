@@ -116,8 +116,13 @@ fn parses_error_union_type_annotation() {
     let stmts = parse_ok("let x: error int = 5");
     assert!(matches!(
         &stmts[0].node,
-        Statement::Let { type_ann: Some(TypeAnnotation::ErrorUnion(inner)), .. }
-            if matches!(inner.as_ref(), TypeAnnotation::Named(segments) if segments == &["int"])
+        Statement::Let {
+            type_ann: Some(TypeAnnotation::ErrorUnion {
+                error_enum: None,
+                inner,
+            }),
+            ..
+        } if matches!(inner.as_ref(), TypeAnnotation::Named(segments) if segments == &["int"])
     ));
 }
 
@@ -147,7 +152,11 @@ fn parses_parenthesized_error_union_of_nillable() {
     let stmts = parse_ok("let x: error (maybe int) = 5");
     match &stmts[0].node {
         Statement::Let {
-            type_ann: Some(TypeAnnotation::ErrorUnion(inner)),
+            type_ann:
+                Some(TypeAnnotation::ErrorUnion {
+                    error_enum: None,
+                    inner,
+                }),
             ..
         } => {
             assert!(matches!(inner.as_ref(), TypeAnnotation::Nillable(inner2)
@@ -166,8 +175,10 @@ fn parses_parenthesized_nillable_of_error_union() {
             type_ann: Some(TypeAnnotation::Nillable(inner)),
             ..
         } => {
-            assert!(matches!(inner.as_ref(), TypeAnnotation::ErrorUnion(inner2)
-                if matches!(inner2.as_ref(), TypeAnnotation::Named(s) if s == &["int"])));
+            assert!(matches!(inner.as_ref(), TypeAnnotation::ErrorUnion {
+                error_enum: None,
+                inner: inner2,
+            } if matches!(inner2.as_ref(), TypeAnnotation::Named(s) if s == &["int"])));
         }
         other => panic!("expected Nillable(ErrorUnion(Named)), got {other:?}"),
     }
@@ -182,7 +193,11 @@ fn parses_unparenthesized_error_maybe() {
     let stmts = parse_ok("let x: error maybe int = 5");
     match &stmts[0].node {
         Statement::Let {
-            type_ann: Some(TypeAnnotation::ErrorUnion(inner)),
+            type_ann:
+                Some(TypeAnnotation::ErrorUnion {
+                    error_enum: None,
+                    inner,
+                }),
             ..
         } => {
             assert!(matches!(inner.as_ref(), TypeAnnotation::Nillable(inner2)
@@ -202,8 +217,10 @@ fn parses_unparenthesized_maybe_error() {
             type_ann: Some(TypeAnnotation::Nillable(inner)),
             ..
         } => {
-            assert!(matches!(inner.as_ref(), TypeAnnotation::ErrorUnion(inner2)
-                if matches!(inner2.as_ref(), TypeAnnotation::Named(s) if s == &["int"])));
+            assert!(matches!(inner.as_ref(), TypeAnnotation::ErrorUnion {
+                error_enum: None,
+                inner: inner2,
+            } if matches!(inner2.as_ref(), TypeAnnotation::Named(s) if s == &["int"])));
         }
         other => panic!("expected Nillable(ErrorUnion(Named)), got {other:?}"),
     }
@@ -227,7 +244,7 @@ fn parses_error_union_return_type() {
     assert!(matches!(
         &stmts[0].node,
         Statement::Function {
-            return_type: Some(TypeAnnotation::ErrorUnion(_)),
+            return_type: Some(TypeAnnotation::ErrorUnion { .. }),
             ..
         }
     ));

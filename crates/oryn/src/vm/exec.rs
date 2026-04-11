@@ -1280,6 +1280,29 @@ impl VM {
                             }
                         }
                     }
+                    Instruction::EnumDefIdx => {
+                        // Pop an enum value, push its def_idx as an
+                        // Int. Mirrors EnumDiscriminant but reads
+                        // the enum-identity slot. Used by error-
+                        // union match dispatch to discriminate
+                        // across multiple error enums before
+                        // checking the variant discriminant.
+                        let value = state.stack.pop().ok_or(RuntimeError::StackUnderflow)?;
+                        match value {
+                            Value::Enum(data_ref) => {
+                                let def_idx = data_ref.borrow().def_idx;
+                                state.stack.push(Value::Int(def_idx as i32));
+                            }
+                            _ => {
+                                let span = Self::current_span_from_state(&state.frames, chunk);
+                                return Err(RuntimeError::TypeError {
+                                    expected: ValueType::Enum,
+                                    actual: ValueType::from(&value),
+                                    span,
+                                });
+                            }
+                        }
+                    }
                     Instruction::GetEnumPayload(field_idx) => {
                         // Pop an enum value, push payload[field_idx].
                         // Used by match codegen to extract bound

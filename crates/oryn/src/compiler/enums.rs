@@ -343,11 +343,21 @@ impl Compiler {
             return ResolvedType::Unknown;
         }
 
-        // 1. Compile the scrutinee. Its type must resolve to an enum.
+        // 1. Compile the scrutinee. Accept one of two shapes:
+        //    * Plain enum — existing single-enum dispatch, arms are
+        //      variants of that enum plus an optional wildcard.
+        //    * Error union — arms include `ok v` for the success
+        //      side, variant patterns for error-enum variants, and
+        //      optional wildcard. In loose mode, arm variants can
+        //      come from any in-scope error enum. In precise mode,
+        //      variants must come from the named error enum.
         let scrutinee_type = self.compile_expr(scrutinee);
-        let (enum_name, enum_def): (String, EnumDefInfo) = match &scrutinee_type {
+        let match_mode: MatchMode = match &scrutinee_type {
             ResolvedType::Enum { name, .. } => match self.enum_table.resolve(name) {
-                Some((_, def)) => (name.clone(), def.clone()),
+                Some((_, def)) => MatchMode::PlainEnum {
+                    enum_name: name.clone(),
+                    enum_def: def.clone(),
+                },
                 None => {
                     self.output.errors.push(OrynError::compiler(
                         span.clone(),
@@ -358,6 +368,27 @@ impl Compiler {
                     return ResolvedType::Unknown;
                 }
             },
+            ResolvedType::ErrorUnion { error_enum, inner } => {
+                let precise = match error_enum {
+                    None => None,
+                    Some((name, _module)) => match self.enum_table.resolve(name) {
+                        Some((_, def)) => Some(def.clone()),
+                        None => {
+                            self.output.errors.push(OrynError::compiler(
+                                span.clone(),
+                                format!("unknown precise error enum `{name}` for match scrutinee"),
+                            ));
+                            self.emit(Instruction::Pop, span);
+                            self.emit(Instruction::PushInt(0), span);
+                            return ResolvedType::Unknown;
+                        }
+                    },
+                };
+                MatchMode::ErrorUnion {
+                    success_type: (**inner).clone(),
+                    precise,
+                }
+            }
             ResolvedType::Unknown => {
                 self.emit(Instruction::Pop, span);
                 self.emit(Instruction::PushInt(0), span);
@@ -367,7 +398,7 @@ impl Compiler {
                 self.output.errors.push(OrynError::compiler(
                     span.clone(),
                     format!(
-                        "match scrutinee must be an enum value, got `{}`",
+                        "match scrutinee must be an enum or error union, got `{}`",
                         other.display_name()
                     ),
                 ));
@@ -378,9 +409,7 @@ impl Compiler {
         };
 
         // 2. Stash the scrutinee in an anonymous local so each arm
-        //    can re-read it for the discriminant test and for
-        //    payload extraction. The local is named with a leading
-        //    `@` so user code cannot collide with it.
+        //    can re-read it for dispatch tests and payload extraction.
         let scrut_slot = self.locals.define(
             "@match_scrutinee".to_string(),
             super::tables::BindingKind::Internal,
@@ -388,14 +417,26 @@ impl Compiler {
         );
         self.emit(Instruction::SetLocal(scrut_slot), span);
 
-        // 3. Per-arm dispatch + body. Track coverage for
-        //    exhaustiveness, collect end-jumps for patching, and
-        //    reconcile arm result types.
-        let mut covered: Vec<bool> = vec![false; enum_def.variants.len()];
-        let mut has_wildcard = false;
+        // 3. Per-arm dispatch + body. The kinds of arms we need to
+        //    handle depend on the match mode; see `ResolvedArm` below.
         let mut end_jumps: Vec<usize> = Vec::new();
         let mut result_type: Option<ResolvedType> = None;
         let mut wildcard_warning_pushed = false;
+
+        // Coverage for plain-enum exhaustiveness.
+        let mut plain_covered: Vec<bool> = match &match_mode {
+            MatchMode::PlainEnum { enum_def, .. } => vec![false; enum_def.variants.len()],
+            _ => Vec::new(),
+        };
+        // Coverage for precise error-union exhaustiveness.
+        let mut precise_covered: Vec<bool> = match &match_mode {
+            MatchMode::ErrorUnion {
+                precise: Some(def), ..
+            } => vec![false; def.variants.len()],
+            _ => Vec::new(),
+        };
+        let mut has_wildcard = false;
+        let mut has_ok_arm = false;
 
         for arm in arms {
             let MatchArm {
@@ -404,219 +445,100 @@ impl Compiler {
                 span: arm_span,
             } = arm;
 
-            // Resolve pattern → (variant_idx, bindings). None for
-            // variant_idx means wildcard or unresolvable. Coverage
-            // is tracked here so the exhaustiveness pass below sees
-            // the post-arm state. Slice 4 also flags wildcards that
-            // come after every variant has been listed.
+            let resolved = self.resolve_arm_pattern(
+                &pattern,
+                &match_mode,
+                &mut plain_covered,
+                &mut precise_covered,
+                &mut has_wildcard,
+                &mut has_ok_arm,
+                &mut wildcard_warning_pushed,
+            );
+
+            // Emit per-arm dispatch. Each arm ends in one of:
+            //   (a) a JumpIfFalse (variant arms) that lands at the
+            //       next arm's dispatch start; or
+            //   (b) a JumpIfError + Pop cleanup (ok arms); or
+            //   (c) no test at all (wildcard and unresolvable arms).
             //
-            // For variant patterns, also validate the brace
-            // bindings (if any) against the variant's payload
-            // declaration. The validated `(field_idx, name, type)`
-            // triples are used during codegen to emit the
-            // GetEnumPayload + SetLocal sequence inside the per-arm
-            // scope.
-            struct ResolvedBinding {
-                field_idx: usize,
-                name: String,
-                ty: ResolvedType,
+            // For each arm we collect the patch sites for its
+            // "arm failed, go to next arm" jumps and patch them
+            // once we know the address of the next arm.
+            let mut skip_patch_sites: Vec<usize> = Vec::new();
+            match &resolved {
+                ResolvedArm::Unresolvable | ResolvedArm::Wildcard => {
+                    // No pre-body dispatch; body always runs.
+                }
+                ResolvedArm::Ok { .. } => {
+                    // `ok v` arm: the success side is "scrut is not
+                    // an error enum". Use JumpIfError as a peek test
+                    // to skip. If we take the skip, the scrut value
+                    // we pushed to probe is still on the stack and
+                    // needs cleanup at the skip target.
+                    self.emit(Instruction::GetLocal(scrut_slot), &arm_span);
+                    let jump_idx = self.output.instructions.len();
+                    self.emit(Instruction::JumpIfError(0), &arm_span); // patched below
+                    skip_patch_sites.push(jump_idx);
+                }
+                ResolvedArm::Variant {
+                    enum_def_idx,
+                    variant_idx,
+                    ..
+                } => {
+                    // Error-union variants need both a def_idx check
+                    // and a variant_idx check. Plain-enum matches
+                    // skip the def_idx check because the scrutinee
+                    // type already pins the enum.
+                    if matches!(match_mode, MatchMode::ErrorUnion { .. }) {
+                        self.emit(Instruction::GetLocal(scrut_slot), &arm_span);
+                        self.emit(Instruction::EnumDefIdx, &arm_span);
+                        self.emit(Instruction::PushInt(*enum_def_idx as i32), &arm_span);
+                        self.emit(Instruction::Equal, &arm_span);
+                        let jump_idx = self.output.instructions.len();
+                        self.emit(Instruction::JumpIfFalse(0), &arm_span);
+                        skip_patch_sites.push(jump_idx);
+                    }
+                    self.emit(Instruction::GetLocal(scrut_slot), &arm_span);
+                    self.emit(Instruction::EnumDiscriminant, &arm_span);
+                    self.emit(Instruction::PushInt(*variant_idx as i32), &arm_span);
+                    self.emit(Instruction::Equal, &arm_span);
+                    let jump_idx = self.output.instructions.len();
+                    self.emit(Instruction::JumpIfFalse(0), &arm_span);
+                    skip_patch_sites.push(jump_idx);
+                }
             }
 
-            let mut resolved_bindings: Vec<ResolvedBinding> = Vec::new();
-            let variant_idx: Option<usize> = match &pattern.node {
-                Pattern::Wildcard => {
-                    if has_wildcard && !wildcard_warning_pushed {
-                        self.output.errors.push(OrynError::compiler(
-                            pattern.span.clone(),
-                            "match arm is unreachable: a previous `_` already matches everything"
-                                .to_string(),
-                        ));
-                        wildcard_warning_pushed = true;
-                    }
-                    // Slice 4: a wildcard arm that appears after
-                    // every variant has already been covered is
-                    // itself unreachable. Diagnose it pointing at
-                    // the wildcard's own span so the user can
-                    // delete it cleanly.
-                    if !has_wildcard && covered.iter().all(|c| *c) {
-                        self.output.errors.push(OrynError::compiler(
-                            pattern.span.clone(),
-                            format!(
-                                "wildcard arm is unreachable: all variants of enum `{enum_name}` are already covered",
-                            ),
-                        ));
-                    }
-                    has_wildcard = true;
-                    None
-                }
-                Pattern::Variant {
-                    enum_name: pat_enum,
-                    variant_name,
-                    bindings,
-                } => {
-                    if pat_enum != &enum_name {
-                        self.output.errors.push(OrynError::compiler(
-                            pattern.span.clone(),
-                            format!(
-                                "pattern type `{pat_enum}` does not match scrutinee enum `{enum_name}`"
-                            ),
-                        ));
-                        None
-                    } else {
-                        match enum_def
-                            .variants
-                            .iter()
-                            .position(|v| &v.name == variant_name)
-                        {
-                            Some(idx) => {
-                                if covered[idx] {
-                                    self.output.errors.push(OrynError::compiler(
-                                        pattern.span.clone(),
-                                        format!(
-                                            "duplicate match arm: variant `{enum_name}.{variant_name}` already covered"
-                                        ),
-                                    ));
-                                }
-                                covered[idx] = true;
-
-                                // Validate payload bindings against
-                                // the variant's declared fields.
-                                // `bindings == None` means the user
-                                // wrote a tag-only pattern (no
-                                // braces) — always allowed regardless
-                                // of whether the variant has a
-                                // payload. `bindings == Some(...)`
-                                // means braces were present and we
-                                // need to validate the contents.
-                                let variant = &enum_def.variants[idx];
-                                if let Some(bs) = bindings {
-                                    if variant.field_names.is_empty() {
-                                        // Nullary variant + braces:
-                                        // category error, mirrors
-                                        // the constructor-side rule.
-                                        // Covers both empty `{ }`
-                                        // and bogus `{ x }` cases.
-                                        self.output.errors.push(OrynError::compiler(
-                                            pattern.span.clone(),
-                                            format!(
-                                                "variant `{enum_name}.{variant_name}` is nullary; remove the `{{ }}` block from the pattern"
-                                            ),
-                                        ));
-                                    } else if bs.is_empty() {
-                                        // Empty braces on a payload
-                                        // variant: useless syntax,
-                                        // tell the user to drop them.
-                                        self.output.errors.push(OrynError::compiler(
-                                            pattern.span.clone(),
-                                            format!(
-                                                "empty `{{ }}` block in pattern for `{enum_name}.{variant_name}`; drop the braces or list at least one field binding"
-                                            ),
-                                        ));
-                                    } else {
-                                        // Detect duplicate `name`
-                                        // collisions inside the
-                                        // same brace block — the
-                                        // user wrote e.g.
-                                        // `Variant { x, x }` or
-                                        // `Variant { x: a, y: a }`.
-                                        let mut seen_local_names: Vec<&str> = Vec::new();
-
-                                        for binding in bs {
-                                            match variant
-                                                .field_names
-                                                .iter()
-                                                .position(|f| f == &binding.field)
-                                            {
-                                                Some(field_idx) => {
-                                                    if seen_local_names
-                                                        .contains(&binding.name.as_str())
-                                                    {
-                                                        self.output.errors.push(
-                                                            OrynError::compiler(
-                                                                binding.span.clone(),
-                                                                format!(
-                                                                    "duplicate binding name `{}` in pattern for `{enum_name}.{variant_name}`",
-                                                                    binding.name
-                                                                ),
-                                                            ),
-                                                        );
-                                                    } else {
-                                                        seen_local_names.push(&binding.name);
-                                                    }
-
-                                                    resolved_bindings.push(ResolvedBinding {
-                                                        field_idx,
-                                                        name: binding.name.clone(),
-                                                        ty: variant.field_types[field_idx].clone(),
-                                                    });
-                                                }
-                                                None => {
-                                                    self.output.errors.push(OrynError::compiler(
-                                                        binding.span.clone(),
-                                                        format!(
-                                                            "unknown field `{}` on variant `{enum_name}.{variant_name}`",
-                                                            binding.field
-                                                        ),
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Some(idx)
-                            }
-                            None => {
-                                self.output.errors.push(OrynError::compiler(
-                                    pattern.span.clone(),
-                                    format!("no variant `{variant_name}` on enum `{enum_name}`"),
-                                ));
-                                None
-                            }
-                        }
-                    }
-                }
-            };
-
-            // Emit per-arm dispatch.
-            //
-            // Variant arms: GetLocal(scrut) → EnumDiscriminant →
-            //               PushInt → Equal → JumpIfFalse → next.
-            //               Then bind any payload fields, then
-            //               compile the body.
-            // Wildcard arms: skip the test entirely; the body
-            //                always runs (until either matched or
-            //                an earlier arm took the value).
-            let skip_arm_jump_idx: Option<usize> = if let Some(idx) = variant_idx {
-                self.emit(Instruction::GetLocal(scrut_slot), &arm_span);
-                self.emit(Instruction::EnumDiscriminant, &arm_span);
-                self.emit(Instruction::PushInt(idx as i32), &arm_span);
-                self.emit(Instruction::Equal, &arm_span);
-                let jump_idx = self.output.instructions.len();
-                self.emit(Instruction::JumpIfFalse(0), &arm_span); // patched below
-                Some(jump_idx)
-            } else {
-                None
-            };
-
-            // Compile the arm body inside a fresh scope so payload
-            // bindings vanish at the end. The scope also bounds the
-            // resolved binding locals introduced via the
-            // GetEnumPayload sequence below.
+            // Compile the arm body inside a fresh scope so bindings
+            // introduced by the pattern vanish at the end.
             let body_span = body.span.clone();
             let body_type = self.with_scope(|this| {
-                // Bind any resolved payload fields as locals in the
-                // arm body. Each binding emits:
-                //   GetLocal(scrut); GetEnumPayload(idx); SetLocal(slot)
-                for binding in &resolved_bindings {
-                    this.emit(Instruction::GetLocal(scrut_slot), &arm_span);
-                    this.emit(Instruction::GetEnumPayload(binding.field_idx), &arm_span);
-                    let slot = this.locals.define(
-                        binding.name.clone(),
-                        super::tables::BindingKind::Let,
-                        binding.ty.clone(),
-                    );
-                    this.emit(Instruction::SetLocal(slot), &arm_span);
+                match &resolved {
+                    ResolvedArm::Ok { name, success_type } => {
+                        // The JumpIfError peek left the scrut value
+                        // on the stack when we fell through. Bind it
+                        // to the `ok` name as an immutable local.
+                        let slot = this.locals.define(
+                            name.clone(),
+                            super::tables::BindingKind::Val,
+                            success_type.clone(),
+                        );
+                        this.emit(Instruction::SetLocal(slot), &arm_span);
+                    }
+                    ResolvedArm::Variant { bindings, .. } => {
+                        // Each payload binding emits:
+                        //   GetLocal(scrut); GetEnumPayload(idx); SetLocal(slot)
+                        for binding in bindings {
+                            this.emit(Instruction::GetLocal(scrut_slot), &arm_span);
+                            this.emit(Instruction::GetEnumPayload(binding.field_idx), &arm_span);
+                            let slot = this.locals.define(
+                                binding.name.clone(),
+                                super::tables::BindingKind::Let,
+                                binding.ty.clone(),
+                            );
+                            this.emit(Instruction::SetLocal(slot), &arm_span);
+                        }
+                    }
+                    ResolvedArm::Wildcard | ResolvedArm::Unresolvable => {}
                 }
                 this.compile_expr(body)
             });
@@ -640,53 +562,437 @@ impl Compiler {
                 }
             }
 
-            // Jump to end so subsequent arms don't run after a match.
+            // Jump past the remaining arms after a matched body
+            // runs. Patched to the final end address below.
             let end_jump_idx = self.output.instructions.len();
-            self.emit(Instruction::Jump(0), &arm_span); // patched below
+            self.emit(Instruction::Jump(0), &arm_span);
             end_jumps.push(end_jump_idx);
 
-            // Patch the per-arm skip jump (variant patterns only)
-            // so the false branch lands at the next arm's test.
-            if let Some(jump_idx) = skip_arm_jump_idx {
-                let next_arm_addr = self.output.instructions.len();
-                self.output.instructions[jump_idx] = Instruction::JumpIfFalse(next_arm_addr);
+            // Patch the per-arm skip jumps so they land at the next
+            // arm's dispatch start. For `ok v` arms, the skip
+            // target needs to pop the leftover scrut value that was
+            // peeked by JumpIfError — we insert a Pop instruction
+            // right here so the next arm starts with a clean stack.
+            if !skip_patch_sites.is_empty() {
+                if matches!(resolved, ResolvedArm::Ok { .. }) {
+                    // JumpIfError leaves the peeked value on the
+                    // stack; clean it up before the next arm runs.
+                    let pop_addr = self.output.instructions.len();
+                    self.emit(Instruction::Pop, &arm_span);
+                    for jump_idx in &skip_patch_sites {
+                        self.output.instructions[*jump_idx] = Instruction::JumpIfError(pop_addr);
+                    }
+                } else {
+                    let next_arm_addr = self.output.instructions.len();
+                    for jump_idx in &skip_patch_sites {
+                        // JumpIfFalse after each comparison.
+                        self.output.instructions[*jump_idx] =
+                            Instruction::JumpIfFalse(next_arm_addr);
+                    }
+                }
             }
         }
 
-        // Patch all end-jumps to land here. No fall-through
-        // cleanup is needed: each arm body produces its value
-        // directly on the stack, and the exhaustiveness check
-        // ensures we don't reach the end without a match at
-        // runtime. (For the diagnostic-only case where compilation
-        // proceeds despite a non-exhaustive match, an unmatched
-        // value would land here with whatever the last
-        // JumpIfFalse left on the stack — but the user already
-        // has a hard compile error, so the runtime path is moot.)
+        // Patch all end-jumps.
         let end_addr = self.output.instructions.len();
         for jump_idx in end_jumps {
             self.output.instructions[jump_idx] = Instruction::Jump(end_addr);
         }
 
-        // Exhaustiveness check.
-        if !has_wildcard {
-            let missing: Vec<String> = enum_def
-                .variants
-                .iter()
-                .zip(covered.iter())
-                .filter(|(_, c)| !**c)
-                .map(|(v, _)| format!("{enum_name}.{}", v.name))
-                .collect();
-            if !missing.is_empty() {
-                self.output.errors.push(OrynError::compiler(
-                    span.clone(),
-                    format!(
-                        "non-exhaustive match: missing variants `{}` (add `_ => ...` to catch the rest)",
-                        missing.join("`, `"),
-                    ),
-                ));
+        // 4. Exhaustiveness checks. Differ per match mode.
+        match &match_mode {
+            MatchMode::PlainEnum {
+                enum_name,
+                enum_def,
+            } => {
+                if !has_wildcard {
+                    let missing: Vec<String> = enum_def
+                        .variants
+                        .iter()
+                        .zip(plain_covered.iter())
+                        .filter(|(_, c)| !**c)
+                        .map(|(v, _)| format!("{enum_name}.{}", v.name))
+                        .collect();
+                    if !missing.is_empty() {
+                        self.output.errors.push(OrynError::compiler(
+                            span.clone(),
+                            format!(
+                                "non-exhaustive match: missing variants `{}` (add `_ => ...` to catch the rest)",
+                                missing.join("`, `"),
+                            ),
+                        ));
+                    }
+                }
+            }
+            MatchMode::ErrorUnion {
+                precise: Some(def), ..
+            } => {
+                // Precise scrutinee: full exhaustiveness possible.
+                // Require `ok v` + every variant of `def`, OR `_`.
+                if !has_wildcard {
+                    let mut missing: Vec<String> = def
+                        .variants
+                        .iter()
+                        .zip(precise_covered.iter())
+                        .filter(|(_, c)| !**c)
+                        .map(|(v, _)| format!("{}.{}", def.name, v.name))
+                        .collect();
+                    if !has_ok_arm {
+                        missing.push("ok".to_string());
+                    }
+                    if !missing.is_empty() {
+                        self.output.errors.push(OrynError::compiler(
+                            span.clone(),
+                            format!(
+                                "non-exhaustive match: missing `{}` (add `_ => ...` to catch the rest)",
+                                missing.join("`, `"),
+                            ),
+                        ));
+                    }
+                }
+            }
+            MatchMode::ErrorUnion { precise: None, .. } => {
+                // Loose scrutinee: we cannot know which error enums
+                // can show up, so a wildcard is always required
+                // unless the user listed `ok v` and somehow every
+                // possible error variant (not statically checkable).
+                // Require `_` in loose mode, period.
+                if !has_wildcard {
+                    self.output.errors.push(OrynError::compiler(
+                        span.clone(),
+                        "non-exhaustive match on loose `error T`: add `_ => ...` to catch unmatched errors",
+                    ));
+                }
             }
         }
 
         result_type.unwrap_or(ResolvedType::Unknown)
     }
+
+    /// Resolve one match arm's pattern against the active match mode,
+    /// updating coverage tracking and pushing diagnostics for
+    /// category errors (wrong enum, unknown variant, `ok` in plain
+    /// match, etc.). Returns a `ResolvedArm` describing how codegen
+    /// should handle this arm.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_arm_pattern(
+        &mut self,
+        pattern: &Spanned<Pattern>,
+        match_mode: &MatchMode,
+        plain_covered: &mut [bool],
+        precise_covered: &mut [bool],
+        has_wildcard: &mut bool,
+        has_ok_arm: &mut bool,
+        wildcard_warning_pushed: &mut bool,
+    ) -> ResolvedArm {
+        match &pattern.node {
+            Pattern::Wildcard => {
+                if *has_wildcard && !*wildcard_warning_pushed {
+                    self.output.errors.push(OrynError::compiler(
+                        pattern.span.clone(),
+                        "match arm is unreachable: a previous `_` already matches everything"
+                            .to_string(),
+                    ));
+                    *wildcard_warning_pushed = true;
+                }
+                // In plain-enum mode, flag a wildcard that comes
+                // after every variant is already covered.
+                if let MatchMode::PlainEnum { enum_name, .. } = match_mode
+                    && !*has_wildcard
+                    && plain_covered.iter().all(|c| *c)
+                {
+                    self.output.errors.push(OrynError::compiler(
+                        pattern.span.clone(),
+                        format!(
+                            "wildcard arm is unreachable: all variants of enum `{enum_name}` are already covered",
+                        ),
+                    ));
+                }
+                *has_wildcard = true;
+                ResolvedArm::Wildcard
+            }
+            Pattern::Ok { name } => match match_mode {
+                MatchMode::ErrorUnion { success_type, .. } => {
+                    if *has_ok_arm {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            "duplicate `ok` arm in match".to_string(),
+                        ));
+                    }
+                    *has_ok_arm = true;
+                    ResolvedArm::Ok {
+                        name: name.clone(),
+                        success_type: success_type.clone(),
+                    }
+                }
+                MatchMode::PlainEnum { enum_name, .. } => {
+                    self.output.errors.push(OrynError::compiler(
+                        pattern.span.clone(),
+                        format!(
+                            "`ok` pattern is only valid when matching an error union; scrutinee has type `{enum_name}`"
+                        ),
+                    ));
+                    ResolvedArm::Unresolvable
+                }
+            },
+            Pattern::Variant {
+                enum_name: pat_enum,
+                variant_name,
+                bindings,
+            } => match match_mode {
+                MatchMode::PlainEnum {
+                    enum_name,
+                    enum_def,
+                } => {
+                    if pat_enum != enum_name {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            format!(
+                                "pattern type `{pat_enum}` does not match scrutinee enum `{enum_name}`"
+                            ),
+                        ));
+                        return ResolvedArm::Unresolvable;
+                    }
+                    let Some(variant_idx) = enum_def
+                        .variants
+                        .iter()
+                        .position(|v| &v.name == variant_name)
+                    else {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            format!("no variant `{variant_name}` on enum `{enum_name}`"),
+                        ));
+                        return ResolvedArm::Unresolvable;
+                    };
+                    if plain_covered[variant_idx] {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            format!(
+                                "duplicate match arm: variant `{enum_name}.{variant_name}` already covered"
+                            ),
+                        ));
+                    }
+                    plain_covered[variant_idx] = true;
+                    // For plain-enum matches, the (enum_def_idx)
+                    // check is unused — codegen branches on
+                    // match_mode and skips the def-idx step.
+                    let enum_def_idx = self
+                        .enum_table
+                        .resolve(enum_name)
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(0);
+                    let variant = &enum_def.variants[variant_idx];
+                    let resolved_bindings = self.resolve_variant_bindings(
+                        pat_enum,
+                        variant_name,
+                        variant,
+                        bindings.as_deref(),
+                        &pattern.span,
+                    );
+                    ResolvedArm::Variant {
+                        enum_def_idx,
+                        variant_idx,
+                        bindings: resolved_bindings,
+                    }
+                }
+                MatchMode::ErrorUnion { precise, .. } => {
+                    // Look the pattern's enum up in the local error
+                    // enum table. Validate it exists and is an
+                    // `error enum`.
+                    let Some((enum_def_idx, def)) = self
+                        .enum_table
+                        .resolve(pat_enum)
+                        .map(|(i, d)| (i, d.clone()))
+                    else {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            format!("unknown enum `{pat_enum}` in match arm"),
+                        ));
+                        return ResolvedArm::Unresolvable;
+                    };
+                    if !def.is_error {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            format!(
+                                "`{pat_enum}` is not an `error enum`; only error enums may appear in a match on an error union"
+                            ),
+                        ));
+                        return ResolvedArm::Unresolvable;
+                    }
+                    // Precise-mode constraint: the pattern's enum
+                    // must be the named error enum.
+                    if let Some(precise_def) = precise
+                        && pat_enum != &precise_def.name
+                    {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            format!(
+                                "pattern enum `{pat_enum}` does not match scrutinee's precise error enum `{}`",
+                                precise_def.name
+                            ),
+                        ));
+                        return ResolvedArm::Unresolvable;
+                    }
+                    let Some(variant_idx) =
+                        def.variants.iter().position(|v| &v.name == variant_name)
+                    else {
+                        self.output.errors.push(OrynError::compiler(
+                            pattern.span.clone(),
+                            format!("no variant `{variant_name}` on enum `{pat_enum}`"),
+                        ));
+                        return ResolvedArm::Unresolvable;
+                    };
+                    // Precise mode tracks coverage for exhaustiveness.
+                    if precise.is_some() {
+                        if precise_covered[variant_idx] {
+                            self.output.errors.push(OrynError::compiler(
+                                pattern.span.clone(),
+                                format!(
+                                    "duplicate match arm: variant `{pat_enum}.{variant_name}` already covered"
+                                ),
+                            ));
+                        }
+                        precise_covered[variant_idx] = true;
+                    }
+                    let variant = &def.variants[variant_idx];
+                    let resolved_bindings = self.resolve_variant_bindings(
+                        pat_enum,
+                        variant_name,
+                        variant,
+                        bindings.as_deref(),
+                        &pattern.span,
+                    );
+                    ResolvedArm::Variant {
+                        enum_def_idx,
+                        variant_idx,
+                        bindings: resolved_bindings,
+                    }
+                }
+            },
+        }
+    }
+
+    /// Validate a payload-binding block against the variant's declared
+    /// fields and return the resolved `(field_idx, name, ty)` triples
+    /// ready for codegen. Extracted from the body of the original
+    /// match function so both plain-enum and error-union modes can
+    /// reuse it.
+    fn resolve_variant_bindings(
+        &mut self,
+        enum_name: &str,
+        variant_name: &str,
+        variant: &super::types::EnumVariantInfo,
+        bindings: Option<&[crate::parser::PatternBinding]>,
+        pattern_span: &Span,
+    ) -> Vec<ResolvedBinding> {
+        let mut resolved: Vec<ResolvedBinding> = Vec::new();
+        let Some(bs) = bindings else {
+            return resolved;
+        };
+        if variant.field_names.is_empty() {
+            self.output.errors.push(OrynError::compiler(
+                pattern_span.clone(),
+                format!(
+                    "variant `{enum_name}.{variant_name}` is nullary; remove the `{{ }}` block from the pattern"
+                ),
+            ));
+            return resolved;
+        }
+        if bs.is_empty() {
+            self.output.errors.push(OrynError::compiler(
+                pattern_span.clone(),
+                format!(
+                    "empty `{{ }}` block in pattern for `{enum_name}.{variant_name}`; drop the braces or list at least one field binding"
+                ),
+            ));
+            return resolved;
+        }
+        let mut seen_local_names: Vec<&str> = Vec::new();
+        for binding in bs {
+            match variant.field_names.iter().position(|f| f == &binding.field) {
+                Some(field_idx) => {
+                    if seen_local_names.contains(&binding.name.as_str()) {
+                        self.output.errors.push(OrynError::compiler(
+                            binding.span.clone(),
+                            format!(
+                                "duplicate binding name `{}` in pattern for `{enum_name}.{variant_name}`",
+                                binding.name
+                            ),
+                        ));
+                    } else {
+                        seen_local_names.push(&binding.name);
+                    }
+                    resolved.push(ResolvedBinding {
+                        field_idx,
+                        name: binding.name.clone(),
+                        ty: variant.field_types[field_idx].clone(),
+                    });
+                }
+                None => {
+                    self.output.errors.push(OrynError::compiler(
+                        binding.span.clone(),
+                        format!(
+                            "unknown field `{}` on variant `{enum_name}.{variant_name}`",
+                            binding.field
+                        ),
+                    ));
+                }
+            }
+        }
+        resolved
+    }
+}
+
+/// The mode of a `match` expression, determined by the scrutinee's
+/// resolved type. Each mode has different rules for which patterns
+/// are accepted, how codegen dispatches, and how exhaustiveness is
+/// measured.
+enum MatchMode {
+    /// Scrutinee is a plain enum. Arms match variants of that
+    /// specific enum (plus wildcard).
+    PlainEnum {
+        enum_name: String,
+        enum_def: EnumDefInfo,
+    },
+    /// Scrutinee is an `error T` union (loose or precise). Arms
+    /// include `ok v` for the success side plus variant patterns
+    /// for error-enum variants. Precise mode names the allowed
+    /// error enum and enables full exhaustiveness.
+    ErrorUnion {
+        /// The success type `T` — bound into the `ok v` arm's body.
+        success_type: ResolvedType,
+        /// Precise form's error enum, if any. `None` is the loose
+        /// form and cannot be exhaustively matched.
+        precise: Option<EnumDefInfo>,
+    },
+}
+
+/// One resolved match arm, ready for codegen.
+enum ResolvedArm {
+    /// Pattern resolution failed (unknown variant, wrong enum, etc.).
+    /// The body still compiles for diagnostic coverage but no
+    /// dispatch is emitted.
+    Unresolvable,
+    /// Catch-all wildcard arm.
+    Wildcard,
+    /// `ok name` arm binding the success side of an error union.
+    Ok {
+        name: String,
+        success_type: ResolvedType,
+    },
+    /// A variant pattern with resolved payload bindings.
+    Variant {
+        /// Absolute index of the variant's enum in the enum def table.
+        /// Used by error-union dispatch to compare against `EnumDefIdx`.
+        enum_def_idx: usize,
+        variant_idx: usize,
+        bindings: Vec<ResolvedBinding>,
+    },
+}
+
+/// A resolved payload binding ready for codegen.
+struct ResolvedBinding {
+    field_idx: usize,
+    name: String,
+    ty: ResolvedType,
 }

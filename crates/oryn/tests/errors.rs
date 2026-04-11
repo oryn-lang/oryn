@@ -323,8 +323,8 @@ fn run_source(source: &str) -> (Result<(), oryn::RuntimeError>, String) {
 fn error_enum_must_unwrap_succeeds_on_ok_value() {
     let (result, out) = run_source(
         "error enum E { Bad }\n\
-         fn ok() -> error int { return 42 }\n\
-         let x = must ok()\n\
+         fn succeed() -> error int { return 42 }\n\
+         let x = must succeed()\n\
          print(x)",
     );
     assert!(result.is_ok(), "run failed: {result:?}");
@@ -369,6 +369,351 @@ fn error_enum_payload_survives_try_propagation() {
     );
     assert!(result.is_ok(), "run failed: {result:?}");
     assert_eq!(out, "E.Overflow { value: 99 }\n");
+}
+
+// -- match on error union --
+
+#[test]
+fn match_on_loose_error_union_with_ok_and_wildcard() {
+    let (result, out) = run_source(
+        "error enum E { Bad }\n\
+         fn divide(a: int, b: int) -> error int {\n\
+            if b == 0 { return E.Bad }\n\
+            return a / b\n\
+         }\n\
+         let got: string = match divide(10, 2) {\n\
+            ok v => \"ok {v}\"\n\
+            E.Bad => \"bad\"\n\
+            _ => \"other\"\n\
+         }\n\
+         print(got)",
+    );
+    assert!(result.is_ok(), "run failed: {result:?}");
+    assert_eq!(out, "ok 5\n");
+}
+
+#[test]
+fn match_on_loose_error_union_catches_error() {
+    let (result, out) = run_source(
+        "error enum E { Bad }\n\
+         fn divide(a: int, b: int) -> error int {\n\
+            if b == 0 { return E.Bad }\n\
+            return a / b\n\
+         }\n\
+         let got: string = match divide(10, 0) {\n\
+            ok v => \"ok {v}\"\n\
+            E.Bad => \"bad\"\n\
+            _ => \"other\"\n\
+         }\n\
+         print(got)",
+    );
+    assert!(result.is_ok(), "run failed: {result:?}");
+    assert_eq!(out, "bad\n");
+}
+
+#[test]
+fn match_on_error_union_destructures_payload() {
+    let (result, out) = run_source(
+        "error enum E { Overflow { value: int } }\n\
+         fn run() -> error int { return E.Overflow { value: 42 } }\n\
+         let got: string = match run() {\n\
+            ok v => \"ok {v}\"\n\
+            E.Overflow { value } => \"overflow {value}\"\n\
+            _ => \"other\"\n\
+         }\n\
+         print(got)",
+    );
+    assert!(result.is_ok(), "run failed: {result:?}");
+    assert_eq!(out, "overflow 42\n");
+}
+
+#[test]
+fn match_on_loose_error_union_without_wildcard_is_rejected() {
+    let errors = oryn::Chunk::check(
+        "error enum E { Bad }\n\
+         fn f() -> error int { return 1 }\n\
+         let got: string = match f() {\n\
+            ok v => \"ok\"\n\
+            E.Bad => \"bad\"\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("non-exhaustive match on loose")
+        )),
+        "expected non-exhaustive error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn match_ok_pattern_rejected_on_plain_enum() {
+    let errors = oryn::Chunk::check(
+        "enum Color { Red, Blue }\n\
+         fn f(c: Color) -> int {\n\
+            return match c {\n\
+                ok v => 1\n\
+                Color.Red => 2\n\
+                Color.Blue => 3\n\
+            }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("`ok` pattern is only valid")
+        )),
+        "expected ok-pattern-only-for-error-union error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn match_variant_from_non_error_enum_rejected_on_error_union() {
+    let errors = oryn::Chunk::check(
+        "enum Plain { X, Y }\n\
+         fn f() -> error int { return 1 }\n\
+         let g: int = match f() {\n\
+            ok v => 0\n\
+            Plain.X => 1\n\
+            _ => 2\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("not an `error enum`")
+        )),
+        "expected non-error-enum arm error, got: {errors:?}"
+    );
+}
+
+// -- if let on error unions --
+
+#[test]
+fn if_let_on_error_union_binds_success_value() {
+    let (result, out) = run_source(
+        "error enum E { Bad }\n\
+         fn f() -> error int { return 42 }\n\
+         if let v = f() {\n\
+            print(\"got {v}\")\n\
+         } else {\n\
+            print(\"no\")\n\
+         }",
+    );
+    assert!(result.is_ok(), "run failed: {result:?}");
+    assert_eq!(out, "got 42\n");
+}
+
+#[test]
+fn if_let_on_error_union_falls_through_on_error() {
+    let (result, out) = run_source(
+        "error enum E { Bad }\n\
+         fn f() -> error int { return E.Bad }\n\
+         if let v = f() {\n\
+            print(\"got {v}\")\n\
+         } else {\n\
+            print(\"nope\")\n\
+         }",
+    );
+    assert!(result.is_ok(), "run failed: {result:?}");
+    assert_eq!(out, "nope\n");
+}
+
+// -- precise error-union typing --
+
+#[test]
+fn precise_error_union_parses_and_type_checks() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero }\n\
+         fn divide(a: int, b: int) -> error int of MathError {\n\
+            if b == 0 { return MathError.DivByZero }\n\
+            return a / b\n\
+         }",
+    );
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn precise_error_union_rejects_foreign_error_enum() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero }\n\
+         error enum NetError { Timeout }\n\
+         fn divide(a: int, b: int) -> error int of MathError {\n\
+            return NetError.Timeout\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("return type mismatch")
+        )),
+        "expected return type mismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn precise_error_union_accepts_its_own_error_enum() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero }\n\
+         fn divide() -> error int of MathError {\n\
+            return MathError.DivByZero\n\
+         }",
+    );
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn precise_error_union_requires_error_enum() {
+    // A plain (non-error) enum cannot appear after `of`.
+    let errors = oryn::Chunk::check(
+        "enum Color { Red, Blue }\n\
+         fn f() -> error int of Color { return 1 }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("error enum")
+        )),
+        "expected error-enum requirement error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn precise_scrutinee_enforces_full_exhaustiveness_without_wildcard() {
+    // When the scrutinee is precise, all variants of the named
+    // error enum must be covered or a wildcard is required.
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero, Overflow { value: int } }\n\
+         fn f() -> error int of MathError { return 1 }\n\
+         let got: int = match f() {\n\
+            ok v => v\n\
+            MathError.DivByZero => 0\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("non-exhaustive match")
+                    && message.contains("MathError.Overflow")
+        )),
+        "expected non-exhaustive error naming MathError.Overflow, got: {errors:?}"
+    );
+}
+
+#[test]
+fn precise_scrutinee_full_coverage_without_wildcard_compiles() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero, Overflow { value: int } }\n\
+         fn f() -> error int of MathError { return 1 }\n\
+         let got: int = match f() {\n\
+            ok v => v\n\
+            MathError.DivByZero => 0\n\
+            MathError.Overflow { value } => value\n\
+         }",
+    );
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn precise_scrutinee_rejects_foreign_variant_in_match() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero }\n\
+         error enum NetError { Timeout }\n\
+         fn f() -> error int of MathError { return 1 }\n\
+         let got: int = match f() {\n\
+            ok v => v\n\
+            NetError.Timeout => 0\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("does not match scrutinee's precise error enum")
+        )),
+        "expected precise-enum mismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn try_propagates_precise_error_to_matching_precise_caller() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero }\n\
+         fn inner() -> error int of MathError { return MathError.DivByZero }\n\
+         fn outer() -> error int of MathError { return try inner() }",
+    );
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
+}
+
+#[test]
+fn try_rejects_propagating_precise_error_across_different_precise_enums() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero }\n\
+         error enum NetError { Timeout }\n\
+         fn inner() -> error int of NetError { return NetError.Timeout }\n\
+         fn outer() -> error int of MathError { return try inner() }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            oryn::OrynError::Compiler { message, .. }
+                if message.contains("try")
+                    && message.contains("NetError")
+                    && message.contains("MathError")
+        )),
+        "expected precise try cross-enum error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn try_propagates_precise_error_to_loose_caller() {
+    let errors = oryn::Chunk::check(
+        "error enum MathError { DivByZero }\n\
+         fn inner() -> error int of MathError { return MathError.DivByZero }\n\
+         fn outer() -> error int { return try inner() }",
+    );
+    let compiler_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
+        .collect();
+    assert!(
+        compiler_errors.is_empty(),
+        "expected no compiler errors, got: {compiler_errors:?}"
+    );
 }
 
 #[test]

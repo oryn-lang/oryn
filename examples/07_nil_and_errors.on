@@ -188,7 +188,11 @@ error enum MathError {
     Overflow { value: int }
 }
 
-fn divide(a: int, b: int) -> error int {
+// `error int of MathError` is the *precise* form: this function
+// is only allowed to return the success int or a MathError variant,
+// never some other error enum. The bare `error int` form is the
+// loose version; both coexist.
+fn divide(a: int, b: int) -> error int of MathError {
     if b == 0 {
         return MathError.DivByZero
     }
@@ -207,8 +211,9 @@ let five = must divide(10, 2)
 print("unwrapped = {five}")  // → 5
 
 // `try` propagates an error out of the enclosing function.
-// The enclosing function must itself return `error T`.
-fn compute(a: int, b: int, c: int) -> error int {
+// The enclosing function must itself return a compatible error
+// union (loose `error T` absorbs any inner; precise must agree).
+fn compute(a: int, b: int, c: int) -> error int of MathError {
     let ab = try divide(a, b)
     let result = try divide(ab, c)
     return result
@@ -222,5 +227,40 @@ print("compute(100, 0, 2) = {c2}")  // → MathError.DivByZero
 
 let c3 = compute(100, 5, 0)
 print("compute(100, 5, 0) = {c3}")  // → MathError.DivByZero
+
+// ── 7. Matching on an error union ───────────────────────────────────
+// `match` on an `error T` scrutinee splits into a success side
+// (`ok v => ...`) and error variants. For a *precise* scrutinee
+// like `error int of MathError`, the compiler checks that every
+// MathError variant is covered (or that a `_` catches the rest).
+
+fn describe(r: error int of MathError) -> string {
+    return match r {
+        ok v                         => "got {v}"
+        MathError.DivByZero          => "division by zero"
+        MathError.Overflow { value } => "overflowed at {value}"
+    }
+}
+
+print("describe divide(10, 2) = {describe(divide(10, 2))}")
+print("describe divide(10, 0) = {describe(divide(10, 0))}")
+
+// ── 8. `if let` on an error union ──────────────────────────────────
+// `if let x = call()` binds the success value in the then-branch
+// and falls through to the else on any error. The else branch does
+// NOT bind the error value — use `match` if you need to destructure
+// the error side.
+
+if let v = divide(100, 4) {
+    print("if let success = {v}")   // → 25
+} else {
+    print("if let fell to error")
+}
+
+if let v = divide(100, 0) {
+    print("if let success = {v}")
+} else {
+    print("if let fell to error")  // → this one
+}
 
 print("--- done ---")

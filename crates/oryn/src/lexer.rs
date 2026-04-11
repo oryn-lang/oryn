@@ -48,6 +48,17 @@ pub enum Token {
     Maybe,
     #[token("error")]
     Error,
+    /// `of` — used inside precise error-union type annotations
+    /// (`error of MathError int`). Hard keyword; reserved across
+    /// the whole grammar, even though it currently only appears in
+    /// type position.
+    #[token("of")]
+    Of,
+    /// `ok` — success-side pattern in a match arm over an error
+    /// union (`ok v => ...`). Hard keyword; reserved across the
+    /// whole grammar.
+    #[token("ok")]
+    Ok,
     #[token("nil")]
     Nil,
     #[token("test")]
@@ -182,6 +193,8 @@ impl Display for Token {
             Token::Must => write!(f, "must"),
             Token::Maybe => write!(f, "maybe"),
             Token::Error => write!(f, "error"),
+            Token::Of => write!(f, "of"),
+            Token::Ok => write!(f, "ok"),
             Token::Nil => write!(f, "nil"),
             Token::Test => write!(f, "test"),
             Token::Assert => write!(f, "assert"),

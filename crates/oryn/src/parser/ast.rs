@@ -260,8 +260,18 @@ pub enum TypeAnnotation {
     Named(Vec<String>),
     /// `T?` — a nillable type.
     Nillable(Box<TypeAnnotation>),
-    /// `!T` — an error union type.
-    ErrorUnion(Box<TypeAnnotation>),
+    /// `error T` (loose) or `error of E T` (precise) — an error union
+    /// type. `error_enum` is `None` for the loose form (any error
+    /// enum may appear on the error side) and `Some(path)` for the
+    /// precise form where `path` is the dotted name of the specific
+    /// error enum allowed on the error side.
+    ErrorUnion {
+        /// Dotted name of the error enum for the precise form
+        /// (`error of math.errors.Fault int`), or `None` for the
+        /// loose form (`error int`).
+        error_enum: Option<Vec<String>>,
+        inner: Box<TypeAnnotation>,
+    },
     /// `[T]` — a homogeneous list whose element type is tracked statically
     /// but erased at runtime.
     List(Box<TypeAnnotation>),
@@ -406,6 +416,16 @@ pub enum Pattern {
     /// `_` — matches anything. Used as a catch-all in non-exhaustive
     /// matches. Does not bind a name.
     Wildcard,
+    /// `ok name` — matches the success side of an `error T` union
+    /// scrutinee and binds the unwrapped success value to `name`
+    /// in the arm body. Only valid when the match scrutinee has
+    /// type `error T` (loose or precise); rejected in a plain
+    /// enum match.
+    Ok {
+        /// The local name introduced in the arm body, bound to
+        /// the unwrapped success value.
+        name: String,
+    },
 }
 
 /// A single payload field binding inside a `Variant { ... }` pattern.

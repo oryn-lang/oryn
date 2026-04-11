@@ -305,9 +305,14 @@ impl Compiler {
                         let t = p
                             .type_ann
                             .as_ref()
-                            .map(|a| {
-                                self.resolve_type_annotation(a)
-                                    .unwrap_or(ResolvedType::Unknown)
+                            .map(|a| match self.resolve_type_annotation(a) {
+                                Ok(t) => t,
+                                Err(msg) => {
+                                    self.output
+                                        .errors
+                                        .push(OrynError::compiler(stmt_span.clone(), msg));
+                                    ResolvedType::Unknown
+                                }
                             })
                             .unwrap_or(ResolvedType::Unknown);
                         (p.name.clone(), t)
@@ -351,9 +356,15 @@ impl Compiler {
                 }
 
                 let return_resolved = match &return_type {
-                    Some(rt) => self
-                        .resolve_type_annotation(rt)
-                        .unwrap_or(ResolvedType::Unknown),
+                    Some(rt) => match self.resolve_type_annotation(rt) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            self.output
+                                .errors
+                                .push(OrynError::compiler(stmt_span.clone(), msg));
+                            ResolvedType::Unknown
+                        }
+                    },
                     None => ResolvedType::Unknown,
                 };
 

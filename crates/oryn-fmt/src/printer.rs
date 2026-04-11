@@ -572,6 +572,10 @@ impl<'a> Formatter<'a> {
                     self.write_indent();
                     match &arm.pattern.node {
                         Pattern::Wildcard => self.out.push('_'),
+                        Pattern::Ok { name } => {
+                            self.out.push_str("ok ");
+                            self.out.push_str(name);
+                        }
                         Pattern::Variant {
                             enum_name,
                             variant_name,
@@ -665,9 +669,13 @@ impl<'a> Formatter<'a> {
                 self.out.push_str("maybe ");
                 self.write_type_name(inner);
             }
-            TypeAnnotation::ErrorUnion(inner) => {
+            TypeAnnotation::ErrorUnion { error_enum, inner } => {
                 self.out.push_str("error ");
                 self.write_type_name(inner);
+                if let Some(path) = error_enum {
+                    self.out.push_str(" of ");
+                    self.out.push_str(&path.join("."));
+                }
             }
             TypeAnnotation::List(inner) => {
                 self.out.push('[');

@@ -200,9 +200,57 @@ pub(super) fn resolve_type(
             let inner_resolved = resolve_type(inner, obj_table, enum_table, modules)?;
             Ok(ResolvedType::Nillable(Box::new(inner_resolved)))
         }
-        TypeAnnotation::ErrorUnion(inner) => {
+        TypeAnnotation::ErrorUnion { error_enum, inner } => {
             let inner_resolved = resolve_type(inner, obj_table, enum_table, modules)?;
-            Ok(ResolvedType::ErrorUnion(Box::new(inner_resolved)))
+            // For the precise form (`error of E T`), resolve the
+            // named error enum against the local table or the
+            // imported module's exports. Validate that `E` was
+            // declared with the `error` modifier — a plain enum
+            // cannot be used here.
+            let resolved_error_enum = match error_enum {
+                None => None,
+                Some(path) => {
+                    if path.len() == 1 {
+                        let name = &path[0];
+                        match enum_table.resolve(name) {
+                            Some((_, def)) if def.is_error => Some((name.clone(), Vec::new())),
+                            Some(_) => {
+                                return Err(format!(
+                                    "`error ... of {name}` requires `{name}` to be declared as an `error enum`"
+                                ));
+                            }
+                            None => {
+                                return Err(format!("undefined error enum `{name}`"));
+                            }
+                        }
+                    } else {
+                        let (type_name, module_path) = path.split_last().unwrap();
+                        let module_key = module_path.join(".");
+                        match modules.modules.get(&module_key) {
+                            Some(exports) => match exports.enum_defs.get(type_name) {
+                                Some(def) if def.is_error => {
+                                    Some((type_name.clone(), module_path.to_vec()))
+                                }
+                                Some(_) => {
+                                    return Err(format!(
+                                        "`error ... of {module_key}.{type_name}` requires `{type_name}` to be declared as an `error enum`"
+                                    ));
+                                }
+                                None => {
+                                    return Err(format!(
+                                        "undefined error enum `{module_key}.{type_name}`"
+                                    ));
+                                }
+                            },
+                            None => return Err(format!("undefined module `{module_key}`")),
+                        }
+                    }
+                }
+            };
+            Ok(ResolvedType::ErrorUnion {
+                error_enum: resolved_error_enum,
+                inner: Box::new(inner_resolved),
+            })
         }
         TypeAnnotation::List(inner) => {
             let inner_resolved = resolve_type(inner, obj_table, enum_table, modules)?;
