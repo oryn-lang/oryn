@@ -1,0 +1,17 @@
+let xs: [int] = [0]
+let i = 0
+while i < 500 {
+    xs.push(i)
+    i = i + 1
+}
+
+let total = 0
+let round = 0
+while round < 2000 {
+    for x in xs {
+        total = total + x
+    }
+    round = round + 1
+}
+
+print(total)

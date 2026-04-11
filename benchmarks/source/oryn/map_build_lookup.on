@@ -1,0 +1,17 @@
+// Build a map with N integer-keyed entries, then look up every key.
+let m: {int: int} = {}
+let i = 0
+
+while i < 2000 {
+    m[i] = i * 2
+    i = i + 1
+}
+
+let total = 0
+let j = 0
+while j < 2000 {
+    total = total + (m[j] orelse 0)
+    j = j + 1
+}
+
+print(total)

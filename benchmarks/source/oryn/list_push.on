@@ -1,0 +1,9 @@
+let xs: [int] = [0]
+let i = 0
+
+while i < 20000 {
+    xs.push(i)
+    i = i + 1
+}
+
+print(xs.len())

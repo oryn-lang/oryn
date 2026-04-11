@@ -1,0 +1,24 @@
+error enum MathError {
+    DivByZero
+}
+
+fn safe_div(a: int, b: int) -> error int of MathError {
+    if b == 0 { return MathError.DivByZero }
+    return a / b
+}
+
+fn step(x: int) -> error int of MathError {
+    let a = try safe_div(x, 2)
+    let b = try safe_div(a, 1)
+    let c = try safe_div(b, 1)
+    return c + 1
+}
+
+let total = 0
+let i = 0
+while i < 500000 {
+    total = must step(i + 2)
+    i = i + 1
+}
+
+print(total)

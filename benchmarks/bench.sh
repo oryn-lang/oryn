@@ -15,7 +15,21 @@ set -euo pipefail
 
 ORYN="./target/release/oryn"
 MODE="all"
-ALL_PROGRAMS=(fib sum_loop call_loop field_update method_loop range_loop)
+ALL_PROGRAMS=(
+    fib
+    sum_loop
+    call_loop
+    field_update
+    method_loop
+    range_loop
+    list_push
+    list_iterate
+    map_build_lookup
+    enum_match
+    string_interp
+    closure_call
+    try_chain
+)
 REPORT_FILE="benchmarks/report.md"
 README_FILE="README.md"
 SUMMARY_FILE="$(mktemp)"

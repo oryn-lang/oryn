@@ -1,0 +1,13 @@
+// Build a fresh interpolated string each iteration. Tests the hot
+// path the VM uses for `print` and string concatenation — fresh
+// string allocation, value-to-string formatting for each interpolated
+// expression, and GC arena pressure.
+
+let i = 0
+
+while i < 5000 {
+    let s = "x={i} y={i}"
+    i = i + 1
+}
+
+print(i)

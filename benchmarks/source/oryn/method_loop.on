@@ -1,7 +1,7 @@
 struct Counter {
     value: int
 
-    fn inc(self) {
+    fn inc(mut self) {
         self.value = self.value + 1
     }
 }

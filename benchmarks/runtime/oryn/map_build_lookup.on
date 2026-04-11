@@ -1,0 +1,16 @@
+let m: {int: int} = {}
+let i = 0
+
+while i < 10000 {
+    m[i] = i * 2
+    i = i + 1
+}
+
+let total = 0
+let j = 0
+while j < 10000 {
+    total = total + (m[j] orelse 0)
+    j = j + 1
+}
+
+print(total)

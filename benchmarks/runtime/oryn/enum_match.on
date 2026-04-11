@@ -1,0 +1,38 @@
+enum Op {
+    Add
+    Sub
+    Mul
+    Noop
+}
+
+fn apply(op: Op, acc: int) -> int {
+    return match op {
+        Op.Add  => acc + 1
+        Op.Sub  => acc - 1
+        Op.Mul  => acc * 2
+        Op.Noop => acc
+    }
+}
+
+let total = 0
+let i = 0
+while i < 200000 {
+    let r = i - ((i / 4) * 4)
+    let op: Op = if r == 0 {
+        Op.Add
+    } else {
+        if r == 1 {
+            Op.Sub
+        } else {
+            if r == 2 {
+                Op.Mul
+            } else {
+                Op.Noop
+            }
+        }
+    }
+    total = apply(op, total)
+    i = i + 1
+}
+
+print(total)

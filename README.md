@@ -13,6 +13,7 @@ language.
 
 ## [Benchmarks](./benchmarks/report.md)
 
-- Overall: across 12 benchmarks, Oryn is about 2.22x slower than Lua.
-- Source: across 6 benchmarks, Oryn is about 1.94x slower than Lua.
-- Runtime: across 6 benchmarks, Oryn is about 2.53x slower than Lua.
+- Overall: across 26 benchmarks, Oryn is about 2.65x slower than Lua.
+- Source: across 13 benchmarks, Oryn is about 2.22x slower than Lua.
+- Runtime: across 13 benchmarks, Oryn is about 3.16x slower than Lua.
+
