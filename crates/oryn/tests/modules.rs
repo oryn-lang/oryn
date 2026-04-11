@@ -81,7 +81,10 @@ fn assert_compile_error_contains(errors: &[oryn::OrynError], needle: &str) {
 #[test]
 fn flat_import_function_call() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
+    p.write(
+        "math.on",
+        "pub fn add(a: int, b: int) -> int { return a + b }",
+    );
     p.write("main.on", "import math\nprint(math.add(3, 4))");
 
     assert_eq!(p.run("main.on").unwrap(), "7\n");
@@ -99,7 +102,7 @@ fn flat_import_pub_constant() {
 #[test]
 fn flat_import_private_function_rejected() {
     let p = TempProject::new();
-    p.write("math.on", "fn helper() -> int { rn 1 }");
+    p.write("math.on", "fn helper() -> int { return 1 }");
     p.write("main.on", "import math\nprint(math.helper())");
 
     let err = p.run("main.on").unwrap_err();
@@ -115,7 +118,7 @@ fn nested_import_function_call() {
     let p = TempProject::new();
     p.write(
         "math/nested/lib.on",
-        "pub fn triple(n: int) -> int { rn n * 3 }",
+        "pub fn triple(n: int) -> int { return n * 3 }",
     );
     p.write(
         "main.on",
@@ -142,8 +145,8 @@ fn module_calling_internal_helper() {
     let p = TempProject::new();
     p.write(
         "math.on",
-        "fn double(n: int) -> int { rn n + n }
-pub fn quadruple(n: int) -> int { rn double(double(n)) }",
+        "fn double(n: int) -> int { return n + n }
+pub fn quadruple(n: int) -> int { return double(double(n)) }",
     );
     p.write("main.on", "import math\nprint(math.quadruple(5))");
 
@@ -159,7 +162,7 @@ fn qualified_object_literal_all_pub_fields() {
     let p = TempProject::new();
     p.write(
         "geom.on",
-        "pub obj Vec2 {
+        "pub struct Vec2 {
     pub x: float
     pub y: float
 }",
@@ -180,7 +183,7 @@ fn qualified_object_literal_field_type_mismatch_rejected() {
     let p = TempProject::new();
     p.write(
         "geom.on",
-        "pub obj Vec2 {
+        "pub struct Vec2 {
     pub x: float
     pub y: float
 }",
@@ -201,7 +204,7 @@ fn qualified_object_literal_duplicate_field_rejected() {
     let p = TempProject::new();
     p.write(
         "geom.on",
-        "pub obj Vec2 {
+        "pub struct Vec2 {
     pub x: float
     pub y: float
 }",
@@ -222,7 +225,7 @@ fn qualified_object_literal_with_private_field_rejected() {
     let p = TempProject::new();
     p.write(
         "geom.on",
-        "pub obj Vec2 {
+        "pub struct Vec2 {
     pub x: float
     y: float
 }",
@@ -243,12 +246,12 @@ fn cross_module_method_call_pub() {
     let p = TempProject::new();
     p.write(
         "geom.on",
-        "pub obj Vec2 {
+        "pub struct Vec2 {
     pub x: float
     pub y: float
 
     pub fn length_sq(self) -> float {
-        rn self.x * self.x + self.y * self.y
+        return self.x * self.x + self.y * self.y
     }
 }",
     );
@@ -267,11 +270,11 @@ fn cross_module_private_method_rejected() {
     let p = TempProject::new();
     p.write(
         "geom.on",
-        "pub obj Vec2 {
+        "pub struct Vec2 {
     pub x: float
     pub y: float
 
-    fn _hidden(self) -> float { rn self.x }
+    fn _hidden(self) -> float { return self.x }
 }",
     );
     p.write(
@@ -291,12 +294,12 @@ fn cross_module_private_field_access_rejected() {
     let p = TempProject::new();
     p.write(
         "geom.on",
-        "pub obj Vec2 {
+        "pub struct Vec2 {
     pub x: float
     pub y: float
 
     pub fn make(a: float, b: float) -> Vec2 {
-        rn Vec2 { x: a, y: b }
+        return Vec2 { x: a, y: b }
     }
 }",
     );
@@ -318,15 +321,15 @@ fn cross_module_static_constructor_for_private_fields() {
     let p = TempProject::new();
     p.write(
         "secrets.on",
-        "pub obj Hidden {
+        "pub struct Hidden {
     secret: int
 
     pub fn new(n: int) -> Hidden {
-        rn Hidden { secret: n }
+        return Hidden { secret: n }
     }
 
     pub fn get(self) -> int {
-        rn self.secret
+        return self.secret
     }
 }",
     );
@@ -370,8 +373,8 @@ fn repeated_missing_import_is_not_mislabeled_as_circular() {
     // failure, not "circular import detected" from a poisoned
     // `compiling` set.
     let p = TempProject::new();
-    p.write("a.on", "import missing\npub fn a() -> int { rn 1 }");
-    p.write("b.on", "import missing\npub fn b() -> int { rn 2 }");
+    p.write("a.on", "import missing\npub fn a() -> int { return 1 }");
+    p.write("b.on", "import missing\npub fn b() -> int { return 2 }");
     p.write("main.on", "import a\nimport b\nprint(a.a())");
 
     let err = p.run("main.on").unwrap_err();
@@ -394,7 +397,7 @@ fn module_private_constant_visible_to_own_functions() {
     p.write(
         "config.on",
         "val SECRET = 7
-pub fn get_secret() -> int { rn SECRET }",
+pub fn get_secret() -> int { return SECRET }",
     );
     p.write("main.on", "import config\nprint(config.get_secret())");
 
@@ -509,7 +512,10 @@ print(config.ON)",
 #[test]
 fn check_module_passes_for_valid_project() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
+    p.write(
+        "math.on",
+        "pub fn add(a: int, b: int) -> int { return a + b }",
+    );
     p.write("main.on", "import math\nprint(math.add(1, 2))");
     p.check("main.on").unwrap();
 }
@@ -521,7 +527,10 @@ fn check_module_passes_for_valid_project() {
 #[test]
 fn check_file_resolves_cross_module_references() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
+    p.write(
+        "math.on",
+        "pub fn add(a: int, b: int) -> int { return a + b }",
+    );
     let main_src = "import math\nprint(math.add(1, 2))";
     p.write("main.on", main_src);
 
@@ -535,12 +544,12 @@ fn check_file_resolves_nested_imports() {
     let p = TempProject::new();
     p.write(
         "math/vec2.on",
-        "pub obj Vec2 {
+        "pub struct Vec2 {
     pub x: float
     pub y: float
 
     pub fn length_sq(self) -> float {
-        rn self.x * self.x + self.y * self.y
+        return self.x * self.x + self.y * self.y
     }
 }",
     );
@@ -557,7 +566,10 @@ print(v.length_sq())";
 #[test]
 fn check_file_uses_in_memory_source_not_disk() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
+    p.write(
+        "math.on",
+        "pub fn add(a: int, b: int) -> int { return a + b }",
+    );
     // Disk has a stale version that references a non-existent function.
     p.write("main.on", "import math\nprint(math.missing(1, 2))");
 
@@ -575,7 +587,10 @@ fn check_file_uses_in_memory_source_not_disk() {
 #[test]
 fn check_file_still_reports_real_errors() {
     let p = TempProject::new();
-    p.write("math.on", "pub fn add(a: int, b: int) -> int { rn a + b }");
+    p.write(
+        "math.on",
+        "pub fn add(a: int, b: int) -> int { return a + b }",
+    );
     let main_src = "import math\nprint(math.nonexistent(1, 2))";
     p.write("main.on", main_src);
 

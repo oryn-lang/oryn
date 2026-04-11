@@ -9,14 +9,14 @@
 // One test deliberately fails so you can see the pretty failure output.
 
 fn add(a: int, b: int) -> int {
-    rn a + b
+    return a + b
 }
 
 fn max(a: int, b: int) -> int {
     if a > b {
-        rn a
+        return a
     }
-    rn b
+    return b
 }
 
 test "addition works" {

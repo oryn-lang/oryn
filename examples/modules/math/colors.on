@@ -4,7 +4,7 @@
 
 pub val MAX_CHANNEL = 255
 
-pub obj Color {
+pub struct Color {
     pub r: int
     pub g: int
     pub b: int
@@ -13,14 +13,14 @@ pub obj Color {
     // Static constructor — the only way for outsiders to make a Color
     // because the `alpha` field is private.
     pub fn rgb(r: int, g: int, b: int) -> Color {
-        rn Color { r: r, g: g, b: b, alpha: MAX_CHANNEL }
+        return Color { r: r, g: g, b: b, alpha: MAX_CHANNEL }
     }
 
     pub fn rgba(r: int, g: int, b: int, a: int) -> Color {
-        rn Color { r: r, g: g, b: b, alpha: a }
+        return Color { r: r, g: g, b: b, alpha: a }
     }
 
     pub fn opacity(self) -> int {
-        rn self.alpha
+        return self.alpha
     }
 }

@@ -126,30 +126,6 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
             }
         }
 
-        Statement::If {
-            condition,
-            body,
-            else_body,
-        } => {
-            visitor.visit_expr(condition);
-            visitor.visit_expr(body);
-            if let Some(else_body) = else_body {
-                visitor.visit_expr(else_body);
-            }
-        }
-
-        Statement::Unless {
-            condition,
-            body,
-            else_body,
-        } => {
-            visitor.visit_expr(condition);
-            visitor.visit_expr(body);
-            if let Some(else_body) = else_body {
-                visitor.visit_expr(else_body);
-            }
-        }
-
         Statement::While { condition, body } => {
             visitor.visit_expr(condition);
             visitor.visit_expr(body);
@@ -171,22 +147,6 @@ pub fn walk_stmt<V: AstVisitor + ?Sized>(visitor: &mut V, stmt: &Spanned<Stateme
 
         Statement::Expression(expr) => {
             visitor.visit_expr(expr);
-        }
-
-        Statement::IfLet {
-            value,
-            name,
-            body,
-            else_body,
-        } => {
-            visitor.visit_expr(value);
-            visitor.enter_scope();
-            visitor.on_define(name, &stmt.span, &stmt.span);
-            visitor.visit_expr(body);
-            visitor.exit_scope();
-            if let Some(else_body) = else_body {
-                visitor.visit_expr(else_body);
-            }
         }
 
         Statement::Import { .. } => {}
@@ -330,6 +290,34 @@ pub fn walk_expr<V: AstVisitor + ?Sized>(visitor: &mut V, expr: &Spanned<Express
                 visitor.visit_expr(&arm.body);
             }
         }
+
+        Expression::If {
+            condition,
+            body,
+            else_body,
+        } => {
+            visitor.visit_expr(condition);
+            visitor.visit_expr(body);
+            if let Some(else_body) = else_body {
+                visitor.visit_expr(else_body);
+            }
+        }
+
+        Expression::IfLet {
+            value,
+            name,
+            body,
+            else_body,
+        } => {
+            visitor.visit_expr(value);
+            visitor.enter_scope();
+            visitor.on_define(name, &expr.span, &expr.span);
+            visitor.visit_expr(body);
+            visitor.exit_scope();
+            if let Some(else_body) = else_body {
+                visitor.visit_expr(else_body);
+            }
+        }
     }
 }
 
@@ -358,8 +346,6 @@ mod tests {
                 Statement::Assignment { .. } => "assign",
                 Statement::ObjDef { .. } => "obj",
                 Statement::EnumDef { .. } => "enum",
-                Statement::If { .. } => "if",
-                Statement::Unless { .. } => "unless",
                 Statement::While { .. } => "while",
                 Statement::For { .. } => "for",
                 Statement::Return(_) => "return",
@@ -369,7 +355,6 @@ mod tests {
                 Statement::FieldAssignment { .. } => "field_assign",
                 Statement::IndexAssignment { .. } => "index_assign",
                 Statement::Import { .. } => "import",
-                Statement::IfLet { .. } => "if_let",
                 Statement::Test { .. } => "test",
                 Statement::Assert { .. } => "assert",
             };
@@ -425,7 +410,10 @@ mod tests {
 
     #[test]
     fn function_enters_scope_for_body() {
-        let events = visit("fn foo(a) {\nrn a\n}");
+        let events = visit(
+            "fn foo(a) {
+return a\n}",
+        );
         assert!(events.contains(&"define:foo".to_string()));
         assert!(events.contains(&"scope:enter".to_string()));
         assert!(events.contains(&"define:a".to_string()));
@@ -450,7 +438,7 @@ mod tests {
 
     #[test]
     fn obj_def_visits_name_and_methods() {
-        let events = visit("obj Foo {\nfn bar(self) {\nprint(1)\n}\n}");
+        let events = visit("struct Foo {\nfn bar(self) {\nprint(1)\n}\n}");
         assert!(events.contains(&"define:Foo".to_string()));
         assert!(events.contains(&"define:bar".to_string()));
         assert!(events.contains(&"define:self".to_string()));
@@ -458,8 +446,10 @@ mod tests {
 
     #[test]
     fn obj_use_fires_reference() {
-        let events =
-            visit("obj Base {\nfn hello(self) {\nprint(1)\n}\n}\nobj Child {\nuse Base\n}");
+        let events = visit(
+            "struct Base {\nfn hello(self) {\nprint(1)\n}\n}
+struct Child {\nuse Base\n}",
+        );
         assert!(events.contains(&"ref:Base".to_string()));
     }
 

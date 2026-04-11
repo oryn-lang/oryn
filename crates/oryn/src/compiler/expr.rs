@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::OrynError;
 use crate::compiler::types::ResolvedType;
-use crate::parser::{BinOp, Expression, Spanned, StringPart, UnaryOp};
+use crate::parser::{BinOp, Expression, Span, Spanned, StringPart, UnaryOp};
 
 use super::block::BlockMode;
 use super::compile::Compiler;
@@ -1807,6 +1807,234 @@ impl Compiler {
             Expression::Match { scrutinee, arms } => {
                 self.compile_match_expression(*scrutinee, arms, &span)
             }
+
+            Expression::If {
+                condition,
+                body,
+                else_body,
+            } => self.compile_if_expression(*condition, *body, else_body.map(|b| *b), &span),
+
+            Expression::IfLet {
+                name,
+                value,
+                body,
+                else_body,
+            } => self.compile_if_let_expression(name, *value, *body, else_body.map(|b| *b), &span),
+        }
+    }
+
+    /// Compile `if cond { body } else { else_body }` as a value-
+    /// producing expression. Both branches must produce the same
+    /// type when an else is present; in expression position the
+    /// no-else form has type `nil` (the body's value is computed
+    /// then discarded, and `nil` is pushed in its place — so a
+    /// no-else `if` can only be bound to a `nil`-typed slot, which
+    /// in practice means it's only useful in statement position
+    /// where the wrapping `Statement::Expression` Pop discards the
+    /// result anyway).
+    ///
+    /// Codegen shape (with else):
+    /// ```text
+    ///   <compile cond>           ; [bool]
+    ///   JumpIfFalse → else       ; pops bool
+    ///   <compile body>           ; [body_value]
+    ///   Jump → end
+    /// else:
+    ///   <compile else_body>      ; [else_value]
+    /// end:
+    /// ```
+    ///
+    /// No-else form:
+    /// ```text
+    ///   <compile cond>           ; [bool]
+    ///   JumpIfFalse → else       ; pops bool
+    ///   <compile body>           ; [body_value]
+    ///   Pop                      ; discard body value
+    ///   PushNil                  ; standardize result
+    ///   Jump → end
+    /// else:
+    ///   PushNil
+    /// end:
+    /// ```
+    pub(super) fn compile_if_expression(
+        &mut self,
+        condition: Spanned<Expression>,
+        body: Spanned<Expression>,
+        else_body: Option<Spanned<Expression>>,
+        span: &Span,
+    ) -> ResolvedType {
+        let cond_span = condition.span.clone();
+        let cond_ty = self.compile_expr(condition);
+        self.check_types(
+            &ResolvedType::Bool,
+            &cond_ty,
+            &cond_span,
+            "if condition type mismatch",
+        );
+
+        let branch_jump_idx = self.output.instructions.len();
+        self.emit(Instruction::JumpIfFalse(0), span);
+
+        // Compile the body branch in its own scope so any locals
+        // declared inside don't leak across the if/else split.
+        let body_span = body.span.clone();
+        let body_ty = self.with_scope(|this| this.compile_value_body(body));
+
+        if let Some(else_body) = else_body {
+            // With-else form: body's value stays on the stack;
+            // jump over the else block.
+            let jump_to_end_idx = self.output.instructions.len();
+            self.emit(Instruction::Jump(0), span);
+
+            let else_start = self.output.instructions.len();
+            self.output.instructions[branch_jump_idx] = Instruction::JumpIfFalse(else_start);
+
+            let else_span = else_body.span.clone();
+            let else_ty = self.with_scope(|this| this.compile_value_body(else_body));
+
+            let end = self.output.instructions.len();
+            self.output.instructions[jump_to_end_idx] = Instruction::Jump(end);
+
+            // Reconcile branch types. The merged result is the
+            // body's type when both agree (or when the else type
+            // is Unknown — common for branches that hit upstream
+            // errors). Mismatched non-Unknown types are a hard
+            // error.
+            if body_ty != ResolvedType::Unknown
+                && else_ty != ResolvedType::Unknown
+                && body_ty != else_ty
+            {
+                self.output.errors.push(crate::OrynError::compiler(
+                    else_span,
+                    format!(
+                        "if branches must produce the same type: body has `{}`, else has `{}`",
+                        body_ty.display_name(),
+                        else_ty.display_name()
+                    ),
+                ));
+            }
+
+            if body_ty != ResolvedType::Unknown {
+                body_ty
+            } else {
+                else_ty
+            }
+        } else {
+            // No-else form: discard the body's value and push nil
+            // so the if-expression has uniform "one value on TOS"
+            // shape regardless of which branch ran.
+            self.emit(Instruction::Pop, &body_span);
+            self.emit(Instruction::PushNil, span);
+
+            let jump_to_end_idx = self.output.instructions.len();
+            self.emit(Instruction::Jump(0), span);
+
+            let else_start = self.output.instructions.len();
+            self.output.instructions[branch_jump_idx] = Instruction::JumpIfFalse(else_start);
+            self.emit(Instruction::PushNil, span);
+
+            let end = self.output.instructions.len();
+            self.output.instructions[jump_to_end_idx] = Instruction::Jump(end);
+
+            ResolvedType::Nil
+        }
+    }
+
+    /// Compile `if let x = value { body } else { else_body }` as a
+    /// value-producing expression. The body branch fires only when
+    /// `value` is non-nil and binds the unwrapped value to `x` as
+    /// an immutable local for the body's scope. Same with-else /
+    /// no-else result-type rules as `compile_if_expression`.
+    pub(super) fn compile_if_let_expression(
+        &mut self,
+        name: String,
+        value: Spanned<Expression>,
+        body: Spanned<Expression>,
+        else_body: Option<Spanned<Expression>>,
+        span: &Span,
+    ) -> ResolvedType {
+        let scrutinee_type = self.compile_expr(value);
+
+        let inner_type = match scrutinee_type.unwrap_nillable() {
+            Some(inner) => inner.clone(),
+            None => {
+                if !matches!(scrutinee_type, ResolvedType::Unknown) {
+                    self.output.errors.push(crate::OrynError::compiler(
+                        span.clone(),
+                        format!(
+                            "`if let` requires a nillable type, got `{}`",
+                            scrutinee_type.display_name()
+                        ),
+                    ));
+                }
+                ResolvedType::Unknown
+            }
+        };
+
+        let jump_if_nil_idx = self.output.instructions.len();
+        self.emit(Instruction::JumpIfNil(0), span);
+
+        // Then-branch: introduce `name: T` in a new scope and bind
+        // the unwrapped value to it. The compiled body expression
+        // leaves its value on the stack.
+        let body_span = body.span.clone();
+        let body_ty = self.with_scope(|this| {
+            let slot = this
+                .locals
+                .define(name, super::tables::BindingKind::Val, inner_type);
+            this.emit(Instruction::SetLocal(slot), span);
+            this.compile_value_body(body)
+        });
+
+        if let Some(else_body) = else_body {
+            let jump_to_end_idx = self.output.instructions.len();
+            self.emit(Instruction::Jump(0), span);
+
+            let else_start = self.output.instructions.len();
+            self.output.instructions[jump_if_nil_idx] = Instruction::JumpIfNil(else_start);
+
+            let else_span = else_body.span.clone();
+            let else_ty = self.with_scope(|this| this.compile_value_body(else_body));
+
+            let end = self.output.instructions.len();
+            self.output.instructions[jump_to_end_idx] = Instruction::Jump(end);
+
+            if body_ty != ResolvedType::Unknown
+                && else_ty != ResolvedType::Unknown
+                && body_ty != else_ty
+            {
+                self.output.errors.push(crate::OrynError::compiler(
+                    else_span,
+                    format!(
+                        "if let branches must produce the same type: body has `{}`, else has `{}`",
+                        body_ty.display_name(),
+                        else_ty.display_name()
+                    ),
+                ));
+            }
+
+            if body_ty != ResolvedType::Unknown {
+                body_ty
+            } else {
+                else_ty
+            }
+        } else {
+            // No-else form: discard the body's value and push nil
+            // (parallel to the plain `if` no-else case).
+            self.emit(Instruction::Pop, &body_span);
+            self.emit(Instruction::PushNil, span);
+
+            let jump_to_end_idx = self.output.instructions.len();
+            self.emit(Instruction::Jump(0), span);
+
+            let else_start = self.output.instructions.len();
+            self.output.instructions[jump_if_nil_idx] = Instruction::JumpIfNil(else_start);
+            self.emit(Instruction::PushNil, span);
+
+            let end = self.output.instructions.len();
+            self.output.instructions[jump_to_end_idx] = Instruction::Jump(end);
+
+            ResolvedType::Nil
         }
     }
 }

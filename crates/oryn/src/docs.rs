@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn single_comment_above_function() {
-        let source = "// adds two numbers\nfn add(a, b) { rn a + b }";
+        let source = "// adds two numbers\nfn add(a, b) { return a + b }";
         assert_eq!(doc_above(source, "fn add"), Some("adds two numbers".into()));
     }
 
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn indented_comment_block_is_accepted() {
-        let source = "obj Foo {\n    // field doc\n    x: int\n}";
+        let source = "struct Foo {\n    // field doc\n    x: int\n}";
         assert_eq!(doc_above(source, "x: int"), Some("field doc".into()));
     }
 }

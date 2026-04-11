@@ -561,8 +561,8 @@ impl ResolvedType {
             ResolvedType::Int => "int".into(),
             ResolvedType::Float => "float".into(),
             ResolvedType::Bool => "bool".into(),
-            ResolvedType::Str => "String".into(),
-            ResolvedType::Range => "Range".into(),
+            ResolvedType::Str => "string".into(),
+            ResolvedType::Range => "range".into(),
             ResolvedType::Object { name, module } => {
                 if module.is_empty() {
                     name.as_str().into()
@@ -577,8 +577,8 @@ impl ResolvedType {
                     format!("{}.{}", module.join("."), name).into()
                 }
             }
-            ResolvedType::Nillable(inner) => format!("{}?", inner.display_name()).into(),
-            ResolvedType::ErrorUnion(inner) => format!("!{}", inner.display_name()).into(),
+            ResolvedType::Nillable(inner) => format!("maybe {}", inner.display_name()).into(),
+            ResolvedType::ErrorUnion(inner) => format!("error {}", inner.display_name()).into(),
             ResolvedType::List(inner) => format!("[{}]", inner.display_name()).into(),
             ResolvedType::Map(key, value) => {
                 format!("{{{}: {}}}", key.display_name(), value.display_name()).into()

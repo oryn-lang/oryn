@@ -1,5 +1,5 @@
 fn add_one(n: int) -> int {
-    rn n + 1
+    return n + 1
 }
 
 let i = 0

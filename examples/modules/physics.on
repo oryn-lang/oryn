@@ -11,12 +11,12 @@ import math.vec2
 pub val GRAVITY = -9.8
 
 pub fn fall_distance(seconds: float) -> float {
-    rn 0.5 * GRAVITY * seconds * seconds
+    return 0.5 * GRAVITY * seconds * seconds
 }
 
 // A function whose argument and return type are both a type from
 // another module. Qualified type names (`math.vec2.Vec2`) can appear
 // in every position a bare type name can.
 pub fn step(start: math.vec2.Vec2, dt: float) -> math.vec2.Vec2 {
-    rn start.scaled(dt)
+    return start.scaled(dt)
 }

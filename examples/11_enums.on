@@ -32,7 +32,7 @@ print("c == Color.Blue? {c == Color.Blue}")  // → false
 // Every arm body must produce the same type, and the set of arms
 // must cover every variant (or end in a `_` wildcard).
 
-let label: String = match c {
+let label: string = match c {
     Color.Red => "warm"
     Color.Green => "fresh"
     Color.Blue => "cool"
@@ -40,9 +40,9 @@ let label: String = match c {
 print("label = {label}")  // → warm
 
 // Same idea inside a function. The match's result is the function's
-// return value because the match is the body of the `rn`.
-fn rgb_hex(c: Color) -> String {
-    rn match c {
+// return value because the match is the body of the `return`.
+fn rgb_hex(c: Color) -> string {
+    return match c {
         Color.Red => "#ff0000"
         Color.Green => "#00ff00"
         Color.Blue => "#0000ff"
@@ -68,7 +68,7 @@ enum Direction {
 }
 
 fn is_horizontal(d: Direction) -> bool {
-    rn match d {
+    return match d {
         Direction.North => true
         Direction.South => true
         Direction.East => true
@@ -82,7 +82,7 @@ print("Up horizontal?    {is_horizontal(Direction.Up)}")  // → false
 print("Down horizontal?  {is_horizontal(Direction.Down)}")  // → false
 
 // ── 4. Payload variants ─────────────────────────────────────────────
-// Variants can carry named-field payloads with the same shape as obj
+// Variants can carry named-field payloads with the same shape as struct
 // fields. Field types may be any Oryn type — primitives, strings,
 // objects, lists, even other enums. Nullary and payload variants
 // can mix freely inside the same enum.
@@ -114,8 +114,8 @@ print("e4 = {e4}")
 // body. Tag-only is the simplest form; binding extracts the data
 // you actually need.
 
-fn describe(e: GameEvent) -> String {
-    rn match e {
+fn describe(e: GameEvent) -> string {
+    return match e {
         GameEvent.Damage { amount } => "took {amount} damage"
         GameEvent.Heal { amount } => "got {amount} healed"
         GameEvent.Move { dx, dy } => "moved by {dx},{dy}"
@@ -131,8 +131,8 @@ print(describe(e4))  // → game over
 // the payload and binds it as `name` in the arm body. Useful when
 // the field's declared name would shadow an outer local or when
 // you want a shorter alias.
-fn move_summary(e: GameEvent) -> String {
-    rn match e {
+fn move_summary(e: GameEvent) -> string {
+    return match e {
         GameEvent.Move { dx: x, dy: y } => "delta=({x}, {y})"
         _ => "not a move"
     }
@@ -145,7 +145,7 @@ print(move_summary(e4))  // → not a move
 // Unlisted fields are simply not bound. Here `Move` has both `dx`
 // and `dy`, but the function only needs `dx`.
 fn dx_of(e: GameEvent) -> int {
-    rn match e {
+    return match e {
         GameEvent.Move { dx } => dx
         _ => 0
     }
@@ -158,7 +158,7 @@ print("dx_of(e4) = {dx_of(e4)}")   // → 0
 // braces and the payload is matched but not bound. Useful when
 // you only care about which variant fired.
 fn is_terminal(e: GameEvent) -> bool {
-    rn match e {
+    return match e {
         GameEvent.GameOver => true
         _ => false
     }
@@ -176,12 +176,12 @@ print("e4 terminal? {is_terminal(e4)}")  // → true
 
 fn classify(hp: int) -> GameEvent {
     if hp <= 0 {
-        rn GameEvent.GameOver
+        return GameEvent.GameOver
     }
     if hp < 20 {
-        rn GameEvent.Damage { amount: 20 - hp }
+        return GameEvent.Damage { amount: 20 - hp }
     }
-    rn GameEvent.Heal { amount: 0 }
+    return GameEvent.Heal { amount: 0 }
 }
 
 print(describe(classify(0)))  // → game over

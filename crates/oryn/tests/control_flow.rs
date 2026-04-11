@@ -5,23 +5,26 @@ use common::run;
 
 #[test]
 fn nil_binding_prints_nil() {
-    assert_eq!(run("let x: int? = nil\nprint(x)"), "nil\n");
+    assert_eq!(run("let x: maybe int = nil\nprint(x)"), "nil\n");
 }
 
 #[test]
 fn nillable_binding_with_value_prints_value() {
-    assert_eq!(run("let x: int? = 5\nprint(x)"), "5\n");
+    assert_eq!(run("let x: maybe int = 5\nprint(x)"), "5\n");
 }
 
 #[test]
 fn coalesce_returns_value_when_not_nil() {
-    assert_eq!(run("let x: int? = 5\nlet y = x orelse 0\nprint(y)"), "5\n");
+    assert_eq!(
+        run("let x: maybe int = 5\nlet y = x orelse 0\nprint(y)"),
+        "5\n"
+    );
 }
 
 #[test]
 fn coalesce_returns_fallback_when_nil() {
     assert_eq!(
-        run("let x: int? = nil\nlet y = x orelse 42\nprint(y)"),
+        run("let x: maybe int = nil\nlet y = x orelse 42\nprint(y)"),
         "42\n"
     );
 }
@@ -32,7 +35,9 @@ fn coalesce_nested_fallback() {
     // orelse on the result would not type-check. Use if-let or nested
     // coalesce with separate bindings instead.
     assert_eq!(
-        run("let a: int? = nil\nlet b: int? = 7\nlet y = a orelse (b orelse 0)\nprint(y)"),
+        run(
+            "let a: maybe int = nil\nlet b: maybe int = 7\nlet y = a orelse (b orelse 0)\nprint(y)"
+        ),
         "7\n"
     );
 }
@@ -40,20 +45,25 @@ fn coalesce_nested_fallback() {
 #[test]
 fn coalesce_nested_all_nil() {
     assert_eq!(
-        run("let a: int? = nil\nlet b: int? = nil\nlet y = a orelse (b orelse 99)\nprint(y)"),
+        run(
+            "let a: maybe int = nil\nlet b: maybe int = nil\nlet y = a orelse (b orelse 99)\nprint(y)"
+        ),
         "99\n"
     );
 }
 
 #[test]
 fn if_let_runs_body_when_not_nil() {
-    assert_eq!(run("let x: int? = 10\nif let v = x {\nprint(v)\n}"), "10\n");
+    assert_eq!(
+        run("let x: maybe int = 10\nif let v = x {\nprint(v)\n}"),
+        "10\n"
+    );
 }
 
 #[test]
 fn if_let_skips_body_when_nil() {
     assert_eq!(
-        run("let x: int? = nil\nif let v = x {\nprint(v)\n}\nprint(0)"),
+        run("let x: maybe int = nil\nif let v = x {\nprint(v)\n}\nprint(0)"),
         "0\n"
     );
 }
@@ -61,7 +71,7 @@ fn if_let_skips_body_when_nil() {
 #[test]
 fn if_let_else_runs_else_when_nil() {
     assert_eq!(
-        run("let x: int? = nil\nif let v = x {\nprint(v)\n} else {\nprint(99)\n}"),
+        run("let x: maybe int = nil\nif let v = x {\nprint(v)\n} else {\nprint(99)\n}"),
         "99\n"
     );
 }
@@ -69,25 +79,25 @@ fn if_let_else_runs_else_when_nil() {
 #[test]
 fn if_let_else_runs_body_when_not_nil() {
     assert_eq!(
-        run("let x: int? = 7\nif let v = x {\nprint(v)\n} else {\nprint(99)\n}"),
+        run("let x: maybe int = 7\nif let v = x {\nprint(v)\n} else {\nprint(99)\n}"),
         "7\n"
     );
 }
 
 #[test]
 fn nil_equality() {
-    assert_eq!(run("let x: int? = nil\nprint(x == nil)"), "true\n");
+    assert_eq!(run("let x: maybe int = nil\nprint(x == nil)"), "true\n");
 }
 
 #[test]
 fn non_nil_not_equal_to_nil() {
-    assert_eq!(run("let x: int? = 5\nprint(x == nil)"), "false\n");
+    assert_eq!(run("let x: maybe int = 5\nprint(x == nil)"), "false\n");
 }
 
 #[test]
 fn nil_not_equals() {
-    assert_eq!(run("let x: int? = nil\nprint(x != nil)"), "false\n");
-    assert_eq!(run("let x: int? = 5\nprint(x != nil)"), "true\n");
+    assert_eq!(run("let x: maybe int = nil\nprint(x != nil)"), "false\n");
+    assert_eq!(run("let x: maybe int = 5\nprint(x != nil)"), "true\n");
 }
 
 // --- If / else / elif ---
@@ -204,22 +214,22 @@ fn if_scope_does_not_escape() {
 
 #[test]
 fn unless_false_runs_body() {
-    assert_eq!(run("unless false { print(1) }"), "1\n");
+    assert_eq!(run("if not false { print(1) }"), "1\n");
 }
 
 #[test]
 fn unless_true_skips_body() {
-    assert_eq!(run("unless true { print(1) }\nprint(2)"), "2\n");
+    assert_eq!(run("if not true { print(1) }\nprint(2)"), "2\n");
 }
 
 #[test]
 fn unless_else_takes_else_when_true() {
-    assert_eq!(run("unless true { print(1) } else { print(2) }"), "2\n");
+    assert_eq!(run("if not true { print(1) } else { print(2) }"), "2\n");
 }
 
 #[test]
 fn unless_else_takes_body_when_false() {
-    assert_eq!(run("unless false { print(1) } else { print(2) }"), "1\n");
+    assert_eq!(run("if not false { print(1) } else { print(2) }"), "1\n");
 }
 
 // --- While loops ---

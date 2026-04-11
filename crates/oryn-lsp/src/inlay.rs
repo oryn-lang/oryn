@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn inlay_hint_for_obj_literal() {
-        let source = "obj Point {\nx: int\ny: int\n}\nlet p = Point { x: 1, y: 2 }";
+        let source = "struct Point {\nx: int\ny: int\n}\nlet p = Point { x: 1, y: 2 }";
         let hints = hints_for(source);
         assert_eq!(hints.len(), 1);
         match &hints[0].label {
@@ -129,7 +129,7 @@ mod tests {
         let hints = hints_for("let names = [\"a\", \"b\"]");
         assert_eq!(hints.len(), 1);
         match &hints[0].label {
-            InlayHintLabel::String(s) => assert_eq!(s, ": [String]"),
+            InlayHintLabel::String(s) => assert_eq!(s, ": [string]"),
             other => panic!("unexpected label: {other:?}"),
         }
     }
@@ -139,7 +139,7 @@ mod tests {
         let hints = hints_for("let stats = {\"hp\": 10}");
         assert_eq!(hints.len(), 1);
         match &hints[0].label {
-            InlayHintLabel::String(s) => assert_eq!(s, ": {String: int}"),
+            InlayHintLabel::String(s) => assert_eq!(s, ": {string: int}"),
             other => panic!("unexpected label: {other:?}"),
         }
     }

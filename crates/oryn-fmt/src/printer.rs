@@ -115,7 +115,7 @@ impl<'a> Formatter<'a> {
                 self.write_block_expression(body);
             }
             Statement::Return(Some(expr)) => {
-                self.out.push_str("rn ");
+                self.out.push_str("return ");
                 self.write_expression(expr, 0);
             }
             Statement::Return(None) => self.out.push_str("rn"),
@@ -129,7 +129,7 @@ impl<'a> Formatter<'a> {
                 if *is_pub {
                     self.out.push_str("pub ");
                 }
-                self.out.push_str("obj ");
+                self.out.push_str("struct ");
                 self.out.push_str(name);
                 self.out.push_str(" {\n");
                 self.indent += 1;
@@ -220,16 +220,6 @@ impl<'a> Formatter<'a> {
                 self.out.push_str(" = ");
                 self.write_expression(value, 0);
             }
-            Statement::If {
-                condition,
-                body,
-                else_body,
-            } => self.write_if_chain(condition, body, else_body.as_ref(), false),
-            Statement::Unless {
-                condition,
-                body,
-                else_body,
-            } => self.write_unless(condition, body, else_body.as_ref()),
             Statement::While { condition, body } => {
                 self.out.push_str("while ");
                 self.write_expression(condition, 0);
@@ -254,24 +244,6 @@ impl<'a> Formatter<'a> {
             Statement::Import { path } => {
                 self.out.push_str("import ");
                 self.out.push_str(&path.join("."));
-            }
-            Statement::IfLet {
-                name,
-                value,
-                body,
-                else_body,
-            } => {
-                self.out.push_str("if let ");
-                self.out.push_str(name);
-                self.out.push_str(" = ");
-                self.write_expression(value, 0);
-                self.out.push(' ');
-                self.write_block_expression(body);
-                if let Some(else_body) = else_body {
-                    self.out.push(' ');
-                    self.out.push_str("else ");
-                    self.write_block_expression(else_body);
-                }
             }
             Statement::Test { name, body } => {
                 self.out.push_str("test \"");
@@ -420,39 +392,21 @@ impl<'a> Formatter<'a> {
         self.write_block_expression(body);
 
         if let Some(else_body) = else_body {
-            if let Some(nested_if) = extract_elif_stmt(else_body) {
-                if let Statement::If {
+            if let Some(nested_if) = extract_elif_expr(else_body) {
+                if let Expression::If {
                     condition,
                     body,
                     else_body,
                 } = &nested_if.node
                 {
                     self.out.push(' ');
-                    self.write_if_chain(condition, body, else_body.as_ref(), true);
+                    self.write_if_chain(condition, body, else_body.as_deref(), true);
                 }
             } else {
                 self.out.push(' ');
                 self.out.push_str("else ");
                 self.write_block_expression(else_body);
             }
-        }
-    }
-
-    fn write_unless(
-        &mut self,
-        condition: &Spanned<Expression>,
-        body: &Spanned<Expression>,
-        else_body: Option<&Spanned<Expression>>,
-    ) {
-        self.out.push_str("unless ");
-        self.write_expression(condition, 0);
-        self.out.push(' ');
-        self.write_block_expression(body);
-
-        if let Some(else_body) = else_body {
-            self.out.push(' ');
-            self.out.push_str("else ");
-            self.write_block_expression(else_body);
         }
     }
 
@@ -654,6 +608,29 @@ impl<'a> Formatter<'a> {
                 self.write_indent();
                 self.out.push('}');
             }
+            Expression::If {
+                condition,
+                body,
+                else_body,
+            } => self.write_if_chain(condition, body, else_body.as_deref(), false),
+            Expression::IfLet {
+                name,
+                value,
+                body,
+                else_body,
+            } => {
+                self.out.push_str("if let ");
+                self.out.push_str(name);
+                self.out.push_str(" = ");
+                self.write_expression(value, 0);
+                self.out.push(' ');
+                self.write_block_expression(body);
+                if let Some(else_body) = else_body {
+                    self.out.push(' ');
+                    self.out.push_str("else ");
+                    self.write_block_expression(else_body);
+                }
+            }
         }
 
         if needs_parens {
@@ -681,11 +658,11 @@ impl<'a> Formatter<'a> {
         match ann {
             TypeAnnotation::Named(path) => self.out.push_str(&path.join(".")),
             TypeAnnotation::Nillable(inner) => {
+                self.out.push_str("maybe ");
                 self.write_type_name(inner);
-                self.out.push('?');
             }
             TypeAnnotation::ErrorUnion(inner) => {
-                self.out.push('!');
+                self.out.push_str("error ");
                 self.write_type_name(inner);
             }
             TypeAnnotation::List(inner) => {
@@ -849,12 +826,25 @@ fn statement_is_declaration(stmt: &Statement) -> bool {
     matches!(stmt, Statement::Function { .. } | Statement::ObjDef { .. })
 }
 
-fn extract_elif_stmt(expr: &Spanned<Expression>) -> Option<&Spanned<Statement>> {
+/// If `expr` is a single-statement block whose statement is an
+/// `if`-as-expression, return a borrow of the inner If expression
+/// so the printer can render it as an `elif` chain. Slice 5 W26
+/// changed `if` to an expression, so the desugared elif form is
+/// `Block([Statement::Expression(Expression::If { ... })])`.
+fn extract_elif_expr(expr: &Spanned<Expression>) -> Option<&Spanned<Expression>> {
     match expr {
         Spanned {
             node: Expression::Block(stmts),
             ..
-        } if stmts.len() == 1 && matches!(stmts[0].node, Statement::If { .. }) => Some(&stmts[0]),
+        } if stmts.len() == 1 => match &stmts[0].node {
+            Statement::Expression(
+                inner @ Spanned {
+                    node: Expression::If { .. },
+                    ..
+                },
+            ) => Some(inner),
+            _ => None,
+        },
         _ => None,
     }
 }

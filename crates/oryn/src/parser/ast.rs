@@ -82,23 +82,6 @@ pub enum Statement {
         name: String,
         value: Spanned<Expression>,
     },
-    If {
-        condition: Spanned<Expression>,
-        body: Spanned<Expression>,
-        else_body: Option<Spanned<Expression>>,
-    },
-    Unless {
-        condition: Spanned<Expression>,
-        body: Spanned<Expression>,
-        else_body: Option<Spanned<Expression>>,
-    },
-    /// `if let x = maybe { ... } else { ... }`
-    IfLet {
-        name: String,
-        value: Spanned<Expression>,
-        body: Spanned<Expression>,
-        else_body: Option<Spanned<Expression>>,
-    },
     While {
         condition: Spanned<Expression>,
         body: Spanned<Expression>,
@@ -200,6 +183,31 @@ pub enum Expression {
         index: Box<Spanned<Expression>>,
     },
     Block(Vec<Spanned<Statement>>),
+    /// `if cond { body } else { else_body }` (or `elif` chains).
+    ///
+    /// Slice 5 W26 lift: `if` is now an expression. In expression
+    /// position both `body` and `else_body` must produce the same
+    /// type and the whole expression's value is the matched
+    /// branch's value. In statement position (wrapped in
+    /// [`Statement::Expression`]), the value is discarded by the
+    /// usual expression-statement Pop. The `else_body` is `None`
+    /// only when used in statement position; the compiler rejects
+    /// the no-else form when the result is bound to a let or
+    /// returned.
+    If {
+        condition: Box<Spanned<Expression>>,
+        body: Box<Spanned<Expression>>,
+        else_body: Option<Box<Spanned<Expression>>>,
+    },
+    /// `if let x = maybe_int { ... } else { ... }` — unwrap a
+    /// nillable into the body branch's local `x`. Same expression /
+    /// statement position rules as `If`.
+    IfLet {
+        name: String,
+        value: Box<Spanned<Expression>>,
+        body: Box<Spanned<Expression>>,
+        else_body: Option<Box<Spanned<Expression>>>,
+    },
     /// `match scrutinee { pattern => body, ... }` — pattern match on
     /// an enum value. The arms are tried in order; the first arm
     /// whose pattern matches the scrutinee fires. Match is *always*

@@ -50,31 +50,7 @@ impl CommentAttachments {
             Statement::Function { body, .. }
             | Statement::Test { body, .. }
             | Statement::While { body, .. }
-            | Statement::For { body, .. }
-            | Statement::Unless { body, .. } => self.walk_expression(body, parsed),
-            Statement::If {
-                condition,
-                body,
-                else_body,
-            } => {
-                self.walk_expression(condition, parsed);
-                self.walk_expression(body, parsed);
-                if let Some(else_body) = else_body {
-                    self.walk_expression(else_body, parsed);
-                }
-            }
-            Statement::IfLet {
-                value,
-                body,
-                else_body,
-                ..
-            } => {
-                self.walk_expression(value, parsed);
-                self.walk_expression(body, parsed);
-                if let Some(else_body) = else_body {
-                    self.walk_expression(else_body, parsed);
-                }
-            }
+            | Statement::For { body, .. } => self.walk_expression(body, parsed),
             Statement::FieldAssignment { object, value, .. } => {
                 self.walk_expression(object, parsed);
                 self.walk_expression(value, parsed);
@@ -171,6 +147,29 @@ impl CommentAttachments {
                 self.walk_expression(scrutinee, parsed);
                 for arm in arms {
                     self.walk_expression(&arm.body, parsed);
+                }
+            }
+            Expression::If {
+                condition,
+                body,
+                else_body,
+            } => {
+                self.walk_expression(condition, parsed);
+                self.walk_expression(body, parsed);
+                if let Some(else_body) = else_body {
+                    self.walk_expression(else_body, parsed);
+                }
+            }
+            Expression::IfLet {
+                value,
+                body,
+                else_body,
+                ..
+            } => {
+                self.walk_expression(value, parsed);
+                self.walk_expression(body, parsed);
+                if let Some(else_body) = else_body {
+                    self.walk_expression(else_body, parsed);
                 }
             }
             Expression::Nil

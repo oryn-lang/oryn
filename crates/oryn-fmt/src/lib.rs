@@ -41,31 +41,31 @@ mod tests {
 
     #[test]
     fn preserves_comments_before_object_members() {
-        let source = "obj Foo {\n    // docs\n    x: int\n\n    // impl\n    fn bar() {}\n}";
+        let source = "struct Foo {\n    // docs\n    x: int\n\n    // impl\n    fn bar() {}\n}";
         let formatted = format_source(source).unwrap();
         assert_eq!(
             formatted,
-            "obj Foo {\n    // docs\n    x: int\n\n    // impl\n    fn bar() {\n    }\n}\n"
+            "struct Foo {\n    // docs\n    x: int\n\n    // impl\n    fn bar() {\n    }\n}\n"
         );
     }
 
     #[test]
     fn formats_function_and_if() {
-        let source = "fn foo(x:int,y:int)->int{if x<y { rn x } else { rn y }}";
+        let source = "fn foo(x:int,y:int)->int{if x<y { return x } else { return y }}";
         let formatted = format_source(source).unwrap();
         assert_eq!(
             formatted,
-            "fn foo(x: int, y: int) -> int {\n    if x < y {\n        rn x\n    } else {\n        rn y\n    }\n}\n"
+            "fn foo(x: int, y: int) -> int {\n    if x < y {\n        return x\n    } else {\n        return y\n    }\n}\n"
         );
     }
 
     #[test]
     fn formats_objects_and_static_methods() {
-        let source = "obj Vec2{x:int y:int fn len()->int{rn x*x+y*y}}\nmath.sqrt(4)";
+        let source = "struct Vec2{x:int y:int fn len()->int{return x*x+y*y}}\nmath.sqrt(4)";
         let formatted = format_source(source).unwrap();
         assert_eq!(
             formatted,
-            "obj Vec2 {\n    x: int\n    y: int\n\n    fn len() -> int {\n        rn x * x + y * y\n    }\n}\n\nmath.sqrt(4)\n"
+            "struct Vec2 {\n    x: int\n    y: int\n\n    fn len() -> int {\n        return x * x + y * y\n    }\n}\n\nmath.sqrt(4)\n"
         );
     }
 
@@ -105,18 +105,18 @@ mod tests {
 
     #[test]
     fn formats_unless() {
-        let source = "unless ready {print(0)}";
+        let source = "if not ready {print(0)}";
         let formatted = format_source(source).unwrap();
-        assert_eq!(formatted, "unless ready {\n    print(0)\n}\n");
+        assert_eq!(formatted, "if not ready {\n    print(0)\n}\n");
     }
 
     #[test]
     fn formats_unless_with_else() {
-        let source = "unless ready {print(0)} else {print(1)}";
+        let source = "if not ready {print(0)} else {print(1)}";
         let formatted = format_source(source).unwrap();
         assert_eq!(
             formatted,
-            "unless ready {\n    print(0)\n} else {\n    print(1)\n}\n"
+            "if not ready {\n    print(0)\n} else {\n    print(1)\n}\n"
         );
     }
 }

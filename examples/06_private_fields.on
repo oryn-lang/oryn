@@ -12,12 +12,12 @@
 // code in another module tries to touch a non-`pub` field. See the
 // `modules/` example for that cross-file story.
 
-obj Color {
+struct Color {
     pub r: int
     pub g: int
     pub b: int
 
-    // `alpha` is private (no `pub`). Code outside this obj definition
+    // `alpha` is private (no `pub`). Code outside this struct definition
     // cannot read or write it directly, nor include it in a Color
     // literal — which means outsiders have to go through a static
     // constructor like `Color.rgb(...)` below to create a Color.
@@ -26,19 +26,19 @@ obj Color {
     // Opaque-ish constructor: callers give r/g/b, we pick a sensible
     // alpha. This is the only way cross-module code can build a Color.
     pub fn rgb(r: int, g: int, b: int) -> Color {
-        rn Color { r: r, g: g, b: b, alpha: 255 }
+        return Color { r: r, g: g, b: b, alpha: 255 }
     }
 
     // Another constructor that exposes alpha explicitly — still the
     // only way to set it, but opt-in.
     pub fn rgba(r: int, g: int, b: int, a: int) -> Color {
-        rn Color { r: r, g: g, b: b, alpha: a }
+        return Color { r: r, g: g, b: b, alpha: a }
     }
 
     // Accessor for the private field. Consumers ask politely instead
     // of reaching into `alpha` directly.
     pub fn opacity(self) -> int {
-        rn self.alpha
+        return self.alpha
     }
 }
 
@@ -49,7 +49,7 @@ print("red = ({red.r}, {red.g}, {red.b}) alpha={red.opacity()}")
 print("translucent alpha = {translucent.opacity()}")
 
 // The `pub` fields can be read and mutated directly. Try changing
-// a private field from outside the obj and the compiler will stop you:
+// a private field from outside the struct and the compiler will stop you:
 //   red.alpha = 0   // error: field `alpha` is private
 red.r = 200
 print("after tweak: r = {red.r}")

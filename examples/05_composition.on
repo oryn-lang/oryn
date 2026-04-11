@@ -2,7 +2,7 @@
 // Composition via `use`
 // ---------------------------------------------------------------------
 // Oryn has no inheritance. `use` pulls every field and method from
-// another `obj` directly into the current one. Instances of the
+// another `struct` directly into the current one. Instances of the
 // composing type carry those fields inline and dispatch those methods
 // on themselves.
 //
@@ -17,18 +17,18 @@
 //   cargo run --bin oryn -- examples/05_composition.on
 
 // A reusable chunk of behaviour. Notice: no `abstract`, no interface —
-// just an ordinary `obj` that happens to be convenient to compose.
-obj Health {
+// just an ordinary `struct` that happens to be convenient to compose.
+struct Health {
     hp: int
     max_hp: int
 
     fn make(max: int) -> Health {
-        rn Health { hp: max, max_hp: max }
+        return Health { hp: max, max_hp: max }
     }
 
     // Plain `self` — only reads. Callable on `val` bindings.
     fn is_alive(self) -> bool {
-        rn self.hp > 0
+        return self.hp > 0
     }
 
     // `mut self` opts the method into mutating its receiver. Methods
@@ -55,18 +55,18 @@ obj Health {
 // `damage(...)` / `is_alive()` on themselves as if they'd been declared
 // here. This is composition, not inheritance: there is no Health
 // instance hiding inside a Guard.
-obj Guard {
+struct Guard {
     use Health
 
-    name: String
+    name: string
     alert: bool
 
     // Static constructor for Guard. We use a different name from
     // Health.make so the parameter list can include `name` —
     // overriding an inherited static would force the same parameter
     // types. (See the notes at the bottom for the rule.)
-    fn spawn(name: String) -> Guard {
-        rn Guard { hp: 100, max_hp: 100, name: name, alert: false }
+    fn spawn(name: string) -> Guard {
+        return Guard { hp: 100, max_hp: 100, name: name, alert: false }
     }
 
     // Writes self.alert, so it takes `mut self`.
@@ -130,7 +130,7 @@ g.take_hit(70)
 //   still call Health.damage internally, not Guard's. Override the
 //   entry point method, not its helpers.
 //
-// • Multi-use: an obj can `use A, use B` from two types at once. If A
+// • Multi-use: a struct can `use A, use B` from two types at once. If A
 //   and B happen to define the same name, that's a compile error —
 //   unless the using type declares its own version with that name, in
 //   which case the own version explicitly resolves the conflict.

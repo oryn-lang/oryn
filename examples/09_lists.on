@@ -5,7 +5,7 @@
 // assignment, and the three builtin methods `len`, `push`, `pop`.
 //
 // Lists are Oryn's only parameterized type. The element type is
-// tracked statically at compile time — `[int]` and `[String]` are
+// tracked statically at compile time — `[int]` and `[string]` are
 // distinct types, mixing them is a compile error — but at runtime
 // the element type is erased, so there's exactly one list
 // representation in the VM regardless of what's inside.
@@ -14,7 +14,7 @@
 //   cargo run --bin oryn -- examples/09_lists.on
 
 // A list of ints. The `[int]` type annotation is what distinguishes
-// this from a list of strings or a list of some obj type.
+// this from a list of strings or a list of some struct type.
 let scores: [int] = [10, 20, 30]
 print("initial scores:")
 print(scores[0])
@@ -46,10 +46,10 @@ if let last = scores.pop() {
     print(last)
 }
 
-// Lists of user-defined obj types work the same way. The VM stores
+// Lists of user-defined struct types work the same way. The VM stores
 // Gc pointers to the object instances, so indexing gives you back
 // a handle to the original — not a copy.
-obj Point {
+struct Point {
     x: int
     y: int
 }

@@ -1,19 +1,19 @@
 // ---------------------------------------------------------------------
 // Control flow
 // ---------------------------------------------------------------------
-// Shows: if / unless / elif / else, while, for-in, ranges, break, continue.
+// Shows: if / if not / elif / else, while, for-in, ranges, break, continue.
 //
 // Run with:
 //   cargo run --bin oryn -- examples/03_control_flow.on
 
 // `if` / `elif` / `else` — braces are required, parentheses are not.
-fn classify(n: int) -> String {
+fn classify(n: int) -> string {
     if n < 0 {
-        rn "negative"
+        return "negative"
     } elif n == 0 {
-        rn "zero"
+        return "zero"
     } else {
-        rn "positive"
+        return "positive"
     }
 }
 
@@ -21,9 +21,9 @@ print(classify(-3))
 print(classify(0))
 print(classify(42))
 
-// `unless` runs when the condition is false.
+// `if not` runs when the condition is false.
 let debug = false
-unless debug {
+if not debug {
     print("debug logging is off")
 } else {
     print("debug logging is on")

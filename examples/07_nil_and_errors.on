@@ -2,7 +2,7 @@
 // Nil handling and error unions
 // ---------------------------------------------------------------------
 // Shows: nillable types (T?), nil literal, nil coalescing (orelse),
-// if-let unwrapping, nil equality, and error unions (!T).
+// if-let unwrapping, nil equality, and error unions (must T).
 //
 // Run with:
 //   cargo run --bin oryn -- examples/07_nil_and_errors.on
@@ -11,21 +11,21 @@
 // A nillable type can hold either a real value *or* `nil`.
 // Use the postfix `?` on any type name to make it nillable.
 
-let name: String? = "Oryn"  // holds a real String
-let missing: String? = nil  // holds nil — no value at all
+let name: maybe string = "Oryn"  // holds a real String
+let missing: maybe string = nil  // holds nil — no value at all
 
 print("name    = {name}")  // → Oryn
 print("missing = {missing}")  // → nil
 
 // Integers work the same way.
-let score: int? = 42
-let no_score: int? = nil
+let score: maybe int = 42
+let no_score: maybe int = nil
 
 print("score    = {score}")  // → 42
 print("no_score = {no_score}")  // → nil
 
 // You can reassign a nillable between a value and nil freely.
-let mood: String? = "happy"
+let mood: maybe string = "happy"
 print("mood before = {mood}")  // → happy
 mood = nil
 print("mood after  = {mood}")  // → nil
@@ -49,14 +49,14 @@ print("points   = {points}")  // → 0
 // Each prior result is still nillable when the next `orelse` sees
 // it; only the rightmost source needs to be plain T (the final
 // fallback).
-let first: int? = nil
-let second: int? = nil
-let third: int? = 7
+let first: maybe int = nil
+let second: maybe int = nil
+let third: maybe int = 7
 let pick = first orelse (second orelse (third orelse 0))
 print("pick = {pick}")  // → 7  (first two are nil)
 
-let all_nil: int? = nil
-let also_nil: int? = nil
+let all_nil: maybe int = nil
+let also_nil: maybe int = nil
 let last_resort = all_nil orelse (also_nil orelse 99)
 print("last_resort = {last_resort}")  // → 99  (everything was nil)
 
@@ -65,7 +65,7 @@ print("last_resort = {last_resort}")  // → 99  (everything was nil)
 // binding the unwrapped value to `x` inside the block.
 // An optional `else` branch handles the nil case.
 
-let temperature: int? = 72
+let temperature: maybe int = 72
 
 if let temp = temperature {
     print("temperature is {temp} degrees")
@@ -74,7 +74,7 @@ if let temp = temperature {
 }
 // → temperature is 72 degrees
 
-let reading: int? = nil
+let reading: maybe int = nil
 
 if let temp = reading {
     print("reading is {temp}")
@@ -84,7 +84,7 @@ if let temp = reading {
 // → sensor returned nil — no data
 
 // `if let` without an else simply skips when nil.
-let maybe_label: String? = nil
+let maybe_label: maybe string = nil
 if let label = maybe_label {
     print("label: {label}")
 }
@@ -93,8 +93,8 @@ print("(continued after if-let)")  // always prints
 // ── 4. Nil equality ─────────────────────────────────────────────────
 // You can compare any nillable value against `nil` with `==` and `!=`.
 
-let present: int? = 10
-let absent: int? = nil
+let present: maybe int = 10
+let absent: maybe int = nil
 
 print("present == nil? {present == nil}")  // → false
 print("present != nil? {present != nil}")  // → true
@@ -114,11 +114,11 @@ if absent == nil {
 // This lets callers pass `nil` explicitly and lets functions signal
 // "no result" without a separate error mechanism.
 
-fn describe(value: int?) -> String {
+fn describe(value: maybe int) -> string {
     if let unwrapped = value {
-        rn "the value is {unwrapped}"
+        return "the value is {unwrapped}"
     } else {
-        rn "no value provided"
+        return "no value provided"
     }
 }
 
@@ -126,11 +126,11 @@ print(describe(5))  // → the value is 5
 print(describe(nil))  // → no value provided
 
 // A function that returns a nillable type.
-fn find_positive(a: int) -> int? {
+fn find_positive(a: int) -> maybe int {
     if a > 0 {
-        rn a
+        return a
     }
-    rn nil
+    return nil
 }
 
 let found = find_positive(42)
@@ -155,13 +155,13 @@ if let result = find_positive(100) {
 // → found positive: 100
 
 // A function that threads nillable values through.
-fn add_maybe(a: int?, b: int?) -> int? {
+fn add_maybe(a: maybe int, b: maybe int) -> maybe int {
     if let x = a {
         if let y = b {
-            rn x + y
+            return x + y
         }
     }
-    rn nil
+    return nil
 }
 
 print("add_maybe(3, 4)     = {add_maybe(3, 4)}")  // → 7
@@ -173,16 +173,16 @@ print("add_maybe(nil, nil) = {add_maybe(nil, nil)}")  // → nil
 let total = add_maybe(nil, 5) orelse 0
 print("total = {total}")  // → 0
 
-// ── 6. Error unions (!T) ────────────────────────────────────────────
+// ── 6. Error unions (must T) ────────────────────────────────────────────
 // A function that might fail can return `!T` — an error union.
 // On success it returns a normal value; on failure it returns
 // `Error("message")` with a description of what went wrong.
 
-fn divide(a: int, b: int) -> !int {
+fn divide(a: int, b: int) -> error int {
     if b == 0 {
-        rn Error("division by zero")
+        return Error("division by zero")
     }
-    rn a / b
+    return a / b
 }
 
 // The result carries either the value or the error.
@@ -193,15 +193,15 @@ print("divide(10, 0) = {bad_result}")  // → error: division by zero
 
 // `!expr` unwraps the success value, or traps if it's an error.
 // Use it when you're confident the call will succeed.
-let five = !divide(10, 2)
+let five = must divide(10, 2)
 print("unwrapped = {five}")  // → 5
 
 // `try` propagates an error out of the enclosing function.
 // The enclosing function must itself return `!T`.
-fn compute(a: int, b: int, c: int) -> !int {
+fn compute(a: int, b: int, c: int) -> error int {
     let ab = try divide(a, b)
     let result = try divide(ab, c)
-    rn result
+    return result
 }
 
 let c1 = compute(100, 5, 2)

@@ -152,8 +152,8 @@ pub(super) fn resolve_type(
                     "int" => Ok(ResolvedType::Int),
                     "float" => Ok(ResolvedType::Float),
                     "bool" => Ok(ResolvedType::Bool),
-                    "String" => Ok(ResolvedType::Str),
-                    "Range" => Ok(ResolvedType::Range),
+                    "string" => Ok(ResolvedType::Str),
+                    "range" => Ok(ResolvedType::Range),
                     other => {
                         if obj_table.resolve(other).is_some() {
                             Ok(ResolvedType::Object {

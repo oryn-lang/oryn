@@ -1,35 +1,35 @@
 // ---------------------------------------------------------------------
 // Objects
 // ---------------------------------------------------------------------
-// Shows: declaring an `obj` type, fields, instance methods, `self`,
+// Shows: declaring an `struct` type, fields, instance methods, `self`,
 // static methods (no `self` parameter), and object literals.
 //
 // Run with:
 //   cargo run --bin oryn -- examples/04_objects.on
 
-// An `obj` is Oryn's struct-with-methods. Fields and methods are
+// An `struct` is Oryn's struct-with-methods. Fields and methods are
 // private by default; `pub` opens them up to importers. Since this
 // example is single-file, visibility doesn't matter yet — see the
 // `modules/` example for cross-file visibility rules.
-obj Vec2 {
+struct Vec2 {
     x: float
     y: float
 
     // Instance method: first parameter is `self`, like Python/Rust.
     // Oryn enforces `self` as the receiver for instance methods.
     fn length_sq(self) -> float {
-        rn self.x * self.x + self.y * self.y
+        return self.x * self.x + self.y * self.y
     }
 
     // Instance method that returns a brand new Vec2 — no mutation.
     fn scaled(self, factor: float) -> Vec2 {
-        rn Vec2 { x: self.x * factor, y: self.y * factor }
+        return Vec2 { x: self.x * factor, y: self.y * factor }
     }
 
     // Static method: no `self` parameter. Call as `Vec2.zero()`.
     // Static methods are typically constructors or pure helpers.
     fn zero() -> Vec2 {
-        rn Vec2 { x: 0.0, y: 0.0 }
+        return Vec2 { x: 0.0, y: 0.0 }
     }
 }
 

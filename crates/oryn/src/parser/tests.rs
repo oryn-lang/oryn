@@ -92,26 +92,18 @@ fn parses_for_statement() {
 // Phase 1: Nil and error handling — surface syntax and type shapes
 // ---------------------------------------------------------------------------
 
-/// Helper: lex + parse source, assert there ARE errors.
-fn parse_err(source: &str) -> Vec<OrynError> {
-    let (tokens, lex_errors) = lex(source);
-    assert!(
-        lex_errors.is_empty(),
-        "unexpected lex errors: {lex_errors:?}"
-    );
-    let (_, parse_errors) = parse(tokens);
-    assert!(
-        !parse_errors.is_empty(),
-        "expected parse errors for: {source}"
-    );
-    parse_errors
-}
+// `parse_err` (lex + parse, assert errors) was removed when the
+// `rejects_ambiguous_bang_t_question` test was deleted in the
+// Slice 5 words-everywhere sweep — the prefix-uniform `maybe T`
+// / `error T` grammar has no ambiguous form to reject. Use
+// `parse_errors` if you need a "lex + parse, return whatever
+// errors came back" helper.
 
 // -- Type annotation parsing --
 
 #[test]
 fn parses_nillable_type_annotation() {
-    let stmts = parse_ok("let x: int? = 5");
+    let stmts = parse_ok("let x: maybe int = 5");
     assert!(matches!(
         &stmts[0].node,
         Statement::Let { type_ann: Some(TypeAnnotation::Nillable(inner)), .. }
@@ -121,7 +113,7 @@ fn parses_nillable_type_annotation() {
 
 #[test]
 fn parses_error_union_type_annotation() {
-    let stmts = parse_ok("let x: !int = 5");
+    let stmts = parse_ok("let x: error int = 5");
     assert!(matches!(
         &stmts[0].node,
         Statement::Let { type_ann: Some(TypeAnnotation::ErrorUnion(inner)), .. }
@@ -152,7 +144,7 @@ fn parses_dotted_named_type_annotation() {
 #[test]
 fn parses_parenthesized_error_union_of_nillable() {
     // !(T?) — error union wrapping a nillable
-    let stmts = parse_ok("let x: !(int?) = 5");
+    let stmts = parse_ok("let x: error (maybe int) = 5");
     match &stmts[0].node {
         Statement::Let {
             type_ann: Some(TypeAnnotation::ErrorUnion(inner)),
@@ -168,7 +160,7 @@ fn parses_parenthesized_error_union_of_nillable() {
 #[test]
 fn parses_parenthesized_nillable_of_error_union() {
     // (!T)? — nillable wrapping an error union
-    let stmts = parse_ok("let x: (!int)? = 5");
+    let stmts = parse_ok("let x: maybe (error int) = 5");
     match &stmts[0].node {
         Statement::Let {
             type_ann: Some(TypeAnnotation::Nillable(inner)),
@@ -182,14 +174,44 @@ fn parses_parenthesized_nillable_of_error_union() {
 }
 
 #[test]
-fn rejects_ambiguous_bang_t_question() {
-    // !T? without parentheses must be rejected
-    parse_err("let x: !int? = 5");
+fn parses_unparenthesized_error_maybe() {
+    // Slice 5 prefix-uniform type grammar: `error maybe int` reads
+    // left-to-right as `error (maybe int)` with no parser
+    // ambiguity. Under the old `!T?` postfix-vs-prefix split this
+    // composition required parentheses; now it doesn't.
+    let stmts = parse_ok("let x: error maybe int = 5");
+    match &stmts[0].node {
+        Statement::Let {
+            type_ann: Some(TypeAnnotation::ErrorUnion(inner)),
+            ..
+        } => {
+            assert!(matches!(inner.as_ref(), TypeAnnotation::Nillable(inner2)
+                if matches!(inner2.as_ref(), TypeAnnotation::Named(s) if s == &["int"])));
+        }
+        other => panic!("expected ErrorUnion(Nillable(Named)), got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_unparenthesized_maybe_error() {
+    // The dual: `maybe error int` reads as `maybe (error int)`,
+    // also unambiguously.
+    let stmts = parse_ok("let x: maybe error int = 5");
+    match &stmts[0].node {
+        Statement::Let {
+            type_ann: Some(TypeAnnotation::Nillable(inner)),
+            ..
+        } => {
+            assert!(matches!(inner.as_ref(), TypeAnnotation::ErrorUnion(inner2)
+                if matches!(inner2.as_ref(), TypeAnnotation::Named(s) if s == &["int"])));
+        }
+        other => panic!("expected Nillable(ErrorUnion(Named)), got {other:?}"),
+    }
 }
 
 #[test]
 fn parses_nillable_return_type() {
-    let stmts = parse_ok("fn foo() -> int? { 5 }");
+    let stmts = parse_ok("fn foo() -> maybe int { 5 }");
     assert!(matches!(
         &stmts[0].node,
         Statement::Function {
@@ -201,7 +223,7 @@ fn parses_nillable_return_type() {
 
 #[test]
 fn parses_error_union_return_type() {
-    let stmts = parse_ok("fn foo() -> !int { 5 }");
+    let stmts = parse_ok("fn foo() -> error int { 5 }");
     assert!(matches!(
         &stmts[0].node,
         Statement::Function {
@@ -213,7 +235,7 @@ fn parses_error_union_return_type() {
 
 #[test]
 fn parses_nillable_param_type() {
-    let stmts = parse_ok("fn foo(x: int?) { x }");
+    let stmts = parse_ok("fn foo(x: maybe int) { x }");
     match &stmts[0].node {
         Statement::Function { params, .. } => {
             assert!(matches!(
@@ -241,7 +263,7 @@ fn parses_nil_literal() {
 
 #[test]
 fn parses_nil_in_let_binding() {
-    let stmts = parse_ok("let x: int? = nil");
+    let stmts = parse_ok("let x: maybe int = nil");
     match &stmts[0].node {
         Statement::Let { value, .. } => {
             assert!(matches!(value.node, Expression::Nil));
@@ -280,11 +302,11 @@ fn parses_nested_try() {
     }
 }
 
-// -- Unwrap error expression (!expr) --
+// -- Unwrap error expression (must expr) --
 
 #[test]
 fn parses_unwrap_error_expression() {
-    let stmts = parse_ok("!foo()");
+    let stmts = parse_ok("must foo()");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::UnwrapError(inner),
@@ -298,7 +320,7 @@ fn parses_unwrap_error_expression() {
 
 #[test]
 fn parses_unwrap_error_on_ident() {
-    let stmts = parse_ok("!x");
+    let stmts = parse_ok("must x");
     assert!(matches!(
         &stmts[0].node,
         Statement::Expression(Spanned {
@@ -410,20 +432,34 @@ fn coalesce_with_arithmetic() {
 
 // -- if let --
 
+// Slice 5 W26: `if` and `if let` are now expressions. In statement
+// position they show up as `Statement::Expression(Expression::If
+// { ... })` / `Statement::Expression(Expression::IfLet { ... })`.
+// The test helper unwraps the Expression to keep the assertions
+// readable.
+fn unwrap_expr_stmt(stmt: &Spanned<Statement>) -> &Spanned<Expression> {
+    match &stmt.node {
+        Statement::Expression(expr) => expr,
+        other => panic!("expected Statement::Expression, got {other:?}"),
+    }
+}
+
 #[test]
 fn parses_if_let_statement() {
-    let stmts = parse_ok("if let x = maybe { print(x) }");
+    let stmts = parse_ok("if let x = opt { print(x) }");
+    let expr = unwrap_expr_stmt(&stmts[0]);
     assert!(matches!(
-        &stmts[0].node,
-        Statement::IfLet { name, else_body: None, .. } if name == "x"
+        &expr.node,
+        Expression::IfLet { name, else_body: None, .. } if name == "x"
     ));
 }
 
 #[test]
 fn parses_if_let_with_else() {
-    let stmts = parse_ok("if let x = maybe { print(x) } else { print(0) }");
-    match &stmts[0].node {
-        Statement::IfLet {
+    let stmts = parse_ok("if let x = opt { print(x) } else { print(0) }");
+    let expr = unwrap_expr_stmt(&stmts[0]);
+    match &expr.node {
+        Expression::IfLet {
             name,
             else_body: Some(_),
             ..
@@ -436,17 +472,20 @@ fn parses_if_let_with_else() {
 
 #[test]
 fn if_let_does_not_break_regular_if() {
-    // Regular `if` should still work as before
+    // Regular `if` should still work as before — now as an
+    // Expression::If wrapped in Statement::Expression.
     let stmts = parse_ok("if x { print(1) }");
-    assert!(matches!(&stmts[0].node, Statement::If { .. }));
+    let expr = unwrap_expr_stmt(&stmts[0]);
+    assert!(matches!(&expr.node, Expression::If { .. }));
 }
 
 #[test]
 fn if_let_does_not_break_if_else() {
     let stmts = parse_ok("if x { print(1) } else { print(2) }");
+    let expr = unwrap_expr_stmt(&stmts[0]);
     assert!(matches!(
-        &stmts[0].node,
-        Statement::If {
+        &expr.node,
+        Expression::If {
             else_body: Some(_),
             ..
         }
@@ -456,31 +495,8 @@ fn if_let_does_not_break_if_else() {
 #[test]
 fn if_let_does_not_break_elif() {
     let stmts = parse_ok("if x { 1 } elif y { 2 } else { 3 }");
-    assert!(matches!(&stmts[0].node, Statement::If { .. }));
-}
-
-#[test]
-fn parses_unless_statement() {
-    let stmts = parse_ok("unless ready { print(0) }");
-    assert!(matches!(
-        &stmts[0].node,
-        Statement::Unless {
-            else_body: None,
-            ..
-        }
-    ));
-}
-
-#[test]
-fn parses_unless_with_else() {
-    let stmts = parse_ok("unless ready { print(0) } else { print(1) }");
-    assert!(matches!(
-        &stmts[0].node,
-        Statement::Unless {
-            else_body: Some(_),
-            ..
-        }
-    ));
+    let expr = unwrap_expr_stmt(&stmts[0]);
+    assert!(matches!(&expr.node, Expression::If { .. }));
 }
 
 // -- Test and Assert --
@@ -545,9 +561,9 @@ fn try_binds_tighter_than_coalesce() {
 }
 
 #[test]
-fn bang_binds_tighter_than_coalesce() {
-    // !a orelse b → Coalesce(UnwrapError(a), b)
-    let stmts = parse_ok("!a orelse b");
+fn must_binds_tighter_than_coalesce() {
+    // `must a orelse b` → Coalesce(UnwrapError(a), b)
+    let stmts = parse_ok("must a orelse b");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::Coalesce { left, .. },
@@ -591,7 +607,7 @@ fn try_on_method_call() {
 
 #[test]
 fn unwrap_error_on_method_call() {
-    let stmts = parse_ok("!o.method()");
+    let stmts = parse_ok("must o.method()");
     match &stmts[0].node {
         Statement::Expression(Spanned {
             node: Expression::UnwrapError(inner),
@@ -606,8 +622,9 @@ fn unwrap_error_on_method_call() {
 #[test]
 fn if_let_with_call_expression() {
     let stmts = parse_ok("if let v = get_thing() { print(v) }");
-    match &stmts[0].node {
-        Statement::IfLet { name, value, .. } => {
+    let expr = unwrap_expr_stmt(&stmts[0]);
+    match &expr.node {
+        Expression::IfLet { name, value, .. } => {
             assert_eq!(name, "v");
             assert!(matches!(value.node, Expression::Call { .. }));
         }
@@ -618,8 +635,9 @@ fn if_let_with_call_expression() {
 #[test]
 fn if_let_with_coalesce_in_value() {
     let stmts = parse_ok("if let x = a orelse b { print(x) }");
-    match &stmts[0].node {
-        Statement::IfLet { value, .. } => {
+    let expr = unwrap_expr_stmt(&stmts[0]);
+    match &expr.node {
+        Expression::IfLet { value, .. } => {
             assert!(matches!(value.node, Expression::Coalesce { .. }));
         }
         other => panic!("expected IfLet with Coalesce value, got {other:?}"),
@@ -660,7 +678,9 @@ fn parses_nested_list_type_annotation() {
 
 #[test]
 fn parses_nillable_list_type() {
-    let stmts = parse_ok("let xs: [int]? = nil");
+    // `maybe [int]` — nillable list. The list itself is the base
+    // type and `maybe` wraps the whole thing.
+    let stmts = parse_ok("let xs: maybe [int] = nil");
     match &stmts[0].node {
         Statement::Let {
             type_ann: Some(TypeAnnotation::Nillable(inner)),
@@ -790,13 +810,13 @@ fn parses_list_method_calls() {
 
 #[test]
 fn parses_map_type_annotation() {
-    let stmts = parse_ok(r#"let stats: {String: int} = {"hp": 10}"#);
+    let stmts = parse_ok(r#"let stats: {string: int} = {"hp": 10}"#);
     match &stmts[0].node {
         Statement::Let {
             type_ann: Some(TypeAnnotation::Map(key, value)),
             ..
         } => {
-            assert!(matches!(key.as_ref(), TypeAnnotation::Named(s) if s == &["String"]));
+            assert!(matches!(key.as_ref(), TypeAnnotation::Named(s) if s == &["string"]));
             assert!(matches!(value.as_ref(), TypeAnnotation::Named(s) if s == &["int"]));
         }
         other => panic!("expected Let with Map type, got {other:?}"),
@@ -817,7 +837,7 @@ fn parses_map_literal_expression() {
 
 #[test]
 fn parses_empty_map_literal() {
-    let stmts = parse_ok("let stats: {String: int} = {}");
+    let stmts = parse_ok("let stats: {string: int} = {}");
     match &stmts[0].node {
         Statement::Let { value, .. } => {
             assert!(matches!(value.node, Expression::MapLiteral(ref v) if v.is_empty()));

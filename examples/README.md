@@ -18,9 +18,9 @@ from the `oryn/` directory (where `Cargo.toml` lives).
 | File                      | What it shows |
 |---------------------------|---------------|
 | [`01_hello.on`](01_hello.on)                   | `let` / `val` bindings, primitive types, string interpolation, `print`, arithmetic, booleans. The smallest useful program. |
-| [`02_functions.on`](02_functions.on)           | `fn` declarations, required parameter type annotations, return types, the `rn` return keyword, recursion (fibonacci). |
-| [`03_control_flow.on`](03_control_flow.on)     | `if` / `unless` / `elif` / `else`, `while`, `for x in <range>`, `..` vs `..=`, `break`, `continue`. |
-| [`04_objects.on`](04_objects.on)               | `obj` declarations, fields, instance methods with `self`, static methods, object literals. The struct-with-methods that replaces Lua tables. |
+| [`02_functions.on`](02_functions.on)           | `fn` declarations, required parameter type annotations, return types, the `return` keyword, recursion (fibonacci). |
+| [`03_control_flow.on`](03_control_flow.on)     | `if` / `if not` / `elif` / `else`, `while`, `for x in <range>`, `..` vs `..=`, `break`, `continue`. |
+| [`04_objects.on`](04_objects.on)               | `struct` declarations, fields, instance methods with `self`, static methods, object literals. The struct-with-methods that replaces Lua tables. |
 | [`05_composition.on`](05_composition.on)       | `use` for field/method composition — Oryn's answer to shared health, inventory, etc. without inheritance trees. |
 | [`06_private_fields.on`](06_private_fields.on) | `pub` visibility on fields and the static-constructor pattern for enforcing invariants. |
 | [`07_nil_and_errors.on`](07_nil_and_errors.on) | `nil`, nillable values, error unions, `try`, `orelse`, and explicit error construction. |

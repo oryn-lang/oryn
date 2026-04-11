@@ -8,7 +8,7 @@
 
 #[test]
 fn nil_assigned_to_nillable_is_ok() {
-    let errors = oryn::Chunk::check("let x: int? = nil");
+    let errors = oryn::Chunk::check("let x: maybe int = nil");
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -21,7 +21,7 @@ fn nil_assigned_to_nillable_is_ok() {
 
 #[test]
 fn int_assigned_to_nillable_int_is_ok() {
-    let errors = oryn::Chunk::check("let x: int? = 5");
+    let errors = oryn::Chunk::check("let x: maybe int = 5");
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -42,7 +42,10 @@ fn nil_assigned_to_non_nillable_is_error() {
 
 #[test]
 fn nillable_return_type_accepts_nil() {
-    let errors = oryn::Chunk::check("fn foo() -> int? {\nrn nil\n}");
+    let errors = oryn::Chunk::check(
+        "fn foo() -> maybe int {
+return nil\n}",
+    );
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -55,7 +58,10 @@ fn nillable_return_type_accepts_nil() {
 
 #[test]
 fn nillable_return_type_accepts_value() {
-    let errors = oryn::Chunk::check("fn foo() -> int? {\nrn 42\n}");
+    let errors = oryn::Chunk::check(
+        "fn foo() -> maybe int {
+return 42\n}",
+    );
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -68,7 +74,7 @@ fn nillable_return_type_accepts_value() {
 
 #[test]
 fn nillable_param_type_accepts_nil() {
-    let errors = oryn::Chunk::check("fn foo(x: int?) {\nprint(1)\n}\nfoo(nil)");
+    let errors = oryn::Chunk::check("fn foo(x: maybe int) {\nprint(1)\n}\nfoo(nil)");
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -81,7 +87,7 @@ fn nillable_param_type_accepts_nil() {
 
 #[test]
 fn nillable_param_type_accepts_value() {
-    let errors = oryn::Chunk::check("fn foo(x: int?) {\nprint(1)\n}\nfoo(5)");
+    let errors = oryn::Chunk::check("fn foo(x: maybe int) {\nprint(1)\n}\nfoo(5)");
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -96,7 +102,7 @@ fn nillable_param_type_accepts_value() {
 
 #[test]
 fn coalesce_on_nillable_is_ok() {
-    let errors = oryn::Chunk::check("let x: int? = nil\nlet y = x orelse 0");
+    let errors = oryn::Chunk::check("let x: maybe int = nil\nlet y = x orelse 0");
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -117,7 +123,7 @@ fn coalesce_on_non_nillable_is_error() {
 
 #[test]
 fn coalesce_fallback_type_mismatch_is_error() {
-    let errors = oryn::Chunk::check("let x: int? = nil\nlet y = x orelse true");
+    let errors = oryn::Chunk::check("let x: maybe int = nil\nlet y = x orelse true");
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("type mismatch"))
     }));
@@ -127,7 +133,10 @@ fn coalesce_fallback_type_mismatch_is_error() {
 
 #[test]
 fn error_union_return_type_resolves() {
-    let errors = oryn::Chunk::check("fn foo() -> !int {\nrn 42\n}");
+    let errors = oryn::Chunk::check(
+        "fn foo() -> error int {
+return 42\n}",
+    );
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -142,7 +151,10 @@ fn error_union_return_type_resolves() {
 
 #[test]
 fn try_on_non_error_union_is_error() {
-    let errors = oryn::Chunk::check("fn foo() -> !int {\nlet x: int = 5\nrn try x\n}");
+    let errors = oryn::Chunk::check(
+        "fn foo() -> error int {\nlet x: int = 5
+return try x\n}",
+    );
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("error union"))
     }));
@@ -150,8 +162,11 @@ fn try_on_non_error_union_is_error() {
 
 #[test]
 fn try_outside_error_union_function_is_error() {
-    let errors =
-        oryn::Chunk::check("fn bar() -> !int {\nrn 1\n}\nfn foo() -> int {\nrn try bar()\n}");
+    let errors = oryn::Chunk::check(
+        "fn bar() -> error int {
+return 1\n}\nfn foo() -> int {
+return try bar()\n}",
+    );
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. }
             if message.contains("enclosing function"))
@@ -162,7 +177,7 @@ fn try_outside_error_union_function_is_error() {
 
 #[test]
 fn unwrap_error_on_non_error_union_is_error() {
-    let errors = oryn::Chunk::check("let x: int = 5\nlet y = !x");
+    let errors = oryn::Chunk::check("let x: int = 5\nlet y = must x");
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. } if message.contains("error union"))
     }));
@@ -172,7 +187,7 @@ fn unwrap_error_on_non_error_union_is_error() {
 
 #[test]
 fn if_let_on_nillable_is_ok() {
-    let errors = oryn::Chunk::check("let x: int? = nil\nif let v = x {\nprint(v)\n}");
+    let errors = oryn::Chunk::check("let x: maybe int = nil\nif let v = x {\nprint(v)\n}");
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -193,8 +208,9 @@ fn if_let_on_non_nillable_is_error() {
 
 #[test]
 fn if_let_with_else_on_nillable_is_ok() {
-    let errors =
-        oryn::Chunk::check("let x: int? = nil\nif let v = x {\nprint(v)\n} else {\nprint(0)\n}");
+    let errors = oryn::Chunk::check(
+        "let x: maybe int = nil\nif let v = x {\nprint(v)\n} else {\nprint(0)\n}",
+    );
     let compiler_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, oryn::OrynError::Compiler { .. }))
@@ -209,19 +225,19 @@ fn if_let_with_else_on_nillable_is_ok() {
 
 #[test]
 fn nillable_type_display_in_error_message() {
-    let errors = oryn::Chunk::check("let x: int? = nil\nlet y: bool = x");
+    let errors = oryn::Chunk::check("let x: maybe int = nil\nlet y: bool = x");
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. }
-            if message.contains("int?"))
+            if message.contains("maybe int"))
     }));
 }
 
 #[test]
 fn error_union_type_display_in_error_message() {
-    let errors = oryn::Chunk::check("let x: !int = 5\nlet y: bool = x");
+    let errors = oryn::Chunk::check("let x: error int = 5\nlet y: bool = x");
     assert!(errors.iter().any(|e| {
         matches!(e, oryn::OrynError::Compiler { message, .. }
-            if message.contains("!int"))
+            if message.contains("error int"))
     }));
 }
 
@@ -309,7 +325,10 @@ fn float_division_by_zero_is_error() {
 
 #[test]
 fn arity_mismatch_is_compile_error() {
-    let result = oryn::Chunk::compile("fn add(a: int, b: int) -> int {\nrn a + b\n}\nadd(1)");
+    let result = oryn::Chunk::compile(
+        "fn add(a: int, b: int) -> int {
+return a + b\n}\nadd(1)",
+    );
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -364,7 +383,8 @@ fn negate_min_int_is_overflow() {
 #[test]
 fn method_wrong_arity_is_compile_error() {
     let result = oryn::Chunk::compile(
-        "obj Foo {\nx: int\nfn add(self, n: int) -> int {\nrn self.x + n\n}\n}\nlet f = Foo { x: 1 }\nf.add()",
+        "struct Foo {\nx: int\nfn add(self, n: int) -> int {
+return self.x + n\n}\n}\nlet f = Foo { x: 1 }\nf.add()",
     );
 
     assert!(result.is_err());
@@ -377,7 +397,8 @@ fn method_wrong_arity_is_compile_error() {
 #[test]
 fn method_too_many_args_is_compile_error() {
     let result = oryn::Chunk::compile(
-        "obj Foo {\nx: int\nfn get(self) -> int {\nrn self.x\n}\n}\nlet f = Foo { x: 1 }\nf.get(1, 2)",
+        "struct Foo {\nx: int\nfn get(self) -> int {
+return self.x\n}\n}\nlet f = Foo { x: 1 }\nf.get(1, 2)",
     );
 
     assert!(result.is_err());
@@ -389,7 +410,7 @@ fn method_too_many_args_is_compile_error() {
 
 #[test]
 fn undefined_static_method_is_compile_error() {
-    let result = oryn::Chunk::compile("obj Foo {\n}\nFoo.nope()");
+    let result = oryn::Chunk::compile("struct Foo {\n}\nFoo.nope()");
     assert!(result.is_err());
 
     let errors = result.unwrap_err();
@@ -401,7 +422,8 @@ fn undefined_static_method_is_compile_error() {
 #[test]
 fn static_method_argument_type_mismatch_is_compile_error() {
     let result = oryn::Chunk::compile(
-        "obj Foo {\nfn make(x: int) -> Foo {\nrn Foo { }\n}\n}\nFoo.make(\"nope\")",
+        "struct Foo {\nfn make(x: int) -> Foo {
+return Foo { }\n}\n}\nFoo.make(\"nope\")",
     );
     assert!(result.is_err());
 

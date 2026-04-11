@@ -274,7 +274,7 @@ fn push_argument_type_checked_against_element_type() {
 
 #[test]
 fn map_literal_emits_make_map() {
-    let chunk = crate::Chunk::compile(r#"let stats: {String: int} = {"hp": 10}"#).unwrap();
+    let chunk = crate::Chunk::compile(r#"let stats: {string: int} = {"hp": 10}"#).unwrap();
     assert!(
         chunk
             .instructions
@@ -288,7 +288,7 @@ fn map_literal_emits_make_map() {
 #[test]
 fn map_index_emits_map_get() {
     let chunk =
-        crate::Chunk::compile("let stats: {String: int} = {\"hp\": 10}\nlet hp = stats[\"hp\"]")
+        crate::Chunk::compile("let stats: {string: int} = {\"hp\": 10}\nlet hp = stats[\"hp\"]")
             .unwrap();
     assert!(
         chunk
@@ -302,7 +302,7 @@ fn map_index_emits_map_get() {
 
 #[test]
 fn map_index_assignment_emits_map_set() {
-    let chunk = crate::Chunk::compile("let stats: {String: int} = {}\nstats[\"hp\"] = 10").unwrap();
+    let chunk = crate::Chunk::compile("let stats: {string: int} = {}\nstats[\"hp\"] = 10").unwrap();
     assert!(
         chunk
             .instructions
@@ -327,7 +327,7 @@ fn empty_map_without_annotation_is_error() {
 #[test]
 fn map_key_type_is_checked() {
     let errors =
-        crate::Chunk::compile("let stats: {String: int} = {\"hp\": 10}\nlet hp = stats[1]")
+        crate::Chunk::compile("let stats: {string: int} = {\"hp\": 10}\nlet hp = stats[1]")
             .unwrap_err();
     assert!(
         errors
@@ -339,7 +339,7 @@ fn map_key_type_is_checked() {
 
 #[test]
 fn map_value_type_is_checked() {
-    let errors = crate::Chunk::compile(r#"let stats: {String: int} = {"hp": "full"}"#).unwrap_err();
+    let errors = crate::Chunk::compile(r#"let stats: {string: int} = {"hp": "full"}"#).unwrap_err();
     assert!(
         errors.iter().any(|e| {
             let s = format!("{e}");
@@ -354,13 +354,13 @@ fn list_type_round_trips_through_display_name() {
     // Compile a function taking [int] and returning [int] — verify
     // the error rendering for a type mismatch shows `[int]` properly.
     let errors = crate::Chunk::compile(
-        "fn head(xs: [int]) -> int { rn xs[0] }\nlet y: [String] = head([1, 2])",
+        "fn head(xs: [int]) -> int { return xs[0] }\nlet y: [string] = head([1, 2])",
     )
     .unwrap_err();
     assert!(
         errors
             .iter()
-            .any(|e| format!("{e}").contains("[int]") || format!("{e}").contains("[String]")),
+            .any(|e| format!("{e}").contains("[int]") || format!("{e}").contains("[string]")),
         "expected list type in error message, got {errors:?}"
     );
 }
@@ -384,12 +384,12 @@ fn list_type_round_trips_through_display_name() {
 #[test]
 fn composition_a1_single_use_inlines_fields() {
     let src = r#"
-obj H {
+struct H {
     hp: int
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
 }
 let g = G { hp: 1, name: "x" }
 assert(g.hp == 1)
@@ -403,15 +403,15 @@ assert(g.name == "x")
 #[test]
 fn composition_a2_single_use_inlines_methods() {
     let src = r#"
-obj H {
+struct H {
     hp: int
     fn is_alive(self) -> bool {
-        rn self.hp > 0
+        return self.hp > 0
     }
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
 }
 let g = G { hp: 5, name: "x" }
 assert(g.is_alive())
@@ -426,13 +426,16 @@ fn composition_a3_own_field_appended_after_inherited() {
     // Invariant check: Guard's flattened `fields` vector must start with
     // Health's fields before Guard's own. This is the layout trick that
     // makes inherited methods see `self.hp` at the same offset.
-    let chunk = crate::Chunk::compile("obj H { hp: int }\nobj G {\n    use H\n    name: String\n}")
-        .unwrap();
+    let chunk = crate::Chunk::compile(
+        "struct H { hp: int }
+struct G {\n    use H\n    name: string\n}",
+    )
+    .unwrap();
     let g = chunk
         .obj_defs
         .iter()
         .find(|d| d.name == "G")
-        .expect("Guard obj def must exist");
+        .expect("Guard struct def must exist");
     assert_eq!(
         g.fields,
         vec!["hp".to_string(), "name".to_string()],
@@ -444,15 +447,15 @@ fn composition_a3_own_field_appended_after_inherited() {
 #[test]
 fn composition_a4_inherited_method_reads_inherited_field_correctly() {
     let src = r#"
-obj H {
+struct H {
     hp: int
     fn read(self) -> int {
-        rn self.hp
+        return self.hp
     }
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
 }
 let g = G { hp: 42, name: "x" }
 assert(g.read() == 42)
@@ -465,15 +468,15 @@ assert(g.read() == 42)
 #[test]
 fn composition_a5_inherited_method_writes_inherited_field() {
     let src = r#"
-obj H {
+struct H {
     hp: int
     fn heal(mut self, n: int) {
         self.hp = self.hp + n
     }
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
 }
 let g = G { hp: 10, name: "x" }
 g.heal(5)
@@ -488,8 +491,11 @@ assert(g.hp == 15)
 
 #[test]
 fn composition_b1_field_conflict_errors() {
-    let errors =
-        crate::Chunk::compile("obj H { hp: int }\nobj G {\n    use H\n    hp: int\n}").unwrap_err();
+    let errors = crate::Chunk::compile(
+        "struct H { hp: int }
+struct G {\n    use H\n    hp: int\n}",
+    )
+    .unwrap_err();
     assert!(
         errors.iter().any(|e| format!("{e}").contains("conflict")),
         "expected 'conflict' in error, got {errors:?}"
@@ -502,13 +508,13 @@ fn composition_b2_instance_method_override_succeeds_with_matching_signature() {
     // signature matches. G's `tick` shadows H's, and `g.tick()` dispatches
     // to G's version.
     let src = r#"
-obj H {
+struct H {
     hp: int
-    fn tick(self) -> int { rn 1 }
+    fn tick(self) -> int { return 1 }
 }
-obj G {
+struct G {
     use H
-    fn tick(self) -> int { rn 2 }
+    fn tick(self) -> int { return 2 }
 }
 let g = G { hp: 0 }
 assert(g.tick() == 2)
@@ -523,14 +529,14 @@ fn composition_b3_static_method_override_with_self_return_covariance() {
     // Static methods can be overridden with the using type as return
     // type even though the inherited signature names the source type.
     let src = r#"
-obj H {
+struct H {
     hp: int
-    fn make() -> H { rn H { hp: 0 } }
+    fn make() -> H { return H { hp: 0 } }
 }
-obj G {
+struct G {
     use H
-    name: String
-    fn make() -> G { rn G { hp: 0, name: "x" } }
+    name: string
+    fn make() -> G { return G { hp: 0, name: "x" } }
 }
 let g = G.make()
 assert(g.hp == 0)
@@ -546,7 +552,8 @@ fn composition_b4_override_with_mismatched_signature_errors() {
     // Override is allowed, but the signature must match. Changing the
     // parameter list or the return type (without Self covariance) errors.
     let errors = crate::Chunk::compile(
-        "obj H {\n    hp: int\n    fn tick(self) -> int { rn 1 }\n}\nobj G {\n    use H\n    fn tick(self) -> bool { rn true }\n}",
+        "struct H {\n    hp: int\n    fn tick(self) -> int { return 1 }\n}
+struct G {\n    use H\n    fn tick(self) -> bool { return true }\n}",
     )
     .unwrap_err();
     assert!(
@@ -560,7 +567,8 @@ fn composition_b4_override_with_mismatched_signature_errors() {
 #[test]
 fn composition_b4b_override_with_mismatched_arity_errors() {
     let errors = crate::Chunk::compile(
-        "obj H {\n    hp: int\n    fn tick(self) -> int { rn 1 }\n}\nobj G {\n    use H\n    fn tick(self, n: int) -> int { rn n }\n}",
+        "struct H {\n    hp: int\n    fn tick(self) -> int { return 1 }\n}
+struct G {\n    use H\n    fn tick(self, n: int) -> int { return n }\n}",
     )
     .unwrap_err();
     assert!(
@@ -578,14 +586,14 @@ fn composition_b4c_override_inherited_call_uses_inherited_version() {
     // the using type overrides `other`, the inherited body still calls
     // the inherited version. This is the no-virtual-dispatch rule.
     let src = r#"
-obj H {
+struct H {
     hp: int
-    fn label(self) -> int { rn 1 }
-    fn outer(self) -> int { rn self.label() }
+    fn label(self) -> int { return 1 }
+    fn outer(self) -> int { return self.label() }
 }
-obj G {
+struct G {
     use H
-    fn label(self) -> int { rn 99 }
+    fn label(self) -> int { return 99 }
 }
 let g = G { hp: 0 }
 assert(g.label() == 99)
@@ -599,7 +607,8 @@ assert(g.outer() == 1)
 #[test]
 fn composition_b5_conflict_error_mentions_use_clause() {
     let errors = crate::Chunk::compile(
-        "obj Health { hp: int }\nobj Guard {\n    use Health\n    hp: int\n}",
+        "struct Health { hp: int }
+struct Guard {\n    use Health\n    hp: int\n}",
     )
     .unwrap_err();
     assert!(
@@ -615,12 +624,12 @@ fn composition_b5_conflict_error_mentions_use_clause() {
 #[test]
 fn composition_c1_multi_use_parses_disjoint() {
     let src = r#"
-obj A { x: int }
-obj B { y: int }
-obj G {
+struct A { x: int }
+struct B { y: int }
+struct G {
     use A
     use B
-    name: String
+    name: string
 }
 let g = G { x: 1, y: 2, name: "z" }
 assert(g.x == 1)
@@ -634,14 +643,16 @@ assert(g.y == 2)
 #[test]
 fn composition_c2_multi_use_order_preserved() {
     let chunk = crate::Chunk::compile(
-        "obj A { x: int }\nobj B { y: int }\nobj G {\n    use A\n    use B\n    name: String\n}",
+        "struct A { x: int }
+struct B { y: int }
+struct G {\n    use A\n    use B\n    name: string\n}",
     )
     .unwrap();
     let g = chunk
         .obj_defs
         .iter()
         .find(|d| d.name == "G")
-        .expect("G obj def must exist");
+        .expect("G struct def must exist");
     assert_eq!(
         g.fields,
         vec!["x".to_string(), "y".to_string(), "name".to_string()],
@@ -653,7 +664,9 @@ fn composition_c2_multi_use_order_preserved() {
 #[test]
 fn composition_c3_multi_use_conflict_across_clauses() {
     let errors = crate::Chunk::compile(
-        "obj A { x: int }\nobj B { x: int }\nobj G {\n    use A\n    use B\n}",
+        "struct A { x: int }
+struct B { x: int }
+struct G {\n    use A\n    use B\n}",
     )
     .unwrap_err();
     assert!(
@@ -669,18 +682,18 @@ fn composition_c5_multi_use_method_collision_resolved_by_own_decl() {
     // type's version replaces both, no sig check (the user is picking
     // neither inherited version).
     let src = r#"
-obj A {
+struct A {
     x: int
-    fn tick(self) -> int { rn 1 }
+    fn tick(self) -> int { return 1 }
 }
-obj B {
+struct B {
     y: int
-    fn tick(self) -> bool { rn true }
+    fn tick(self) -> bool { return true }
 }
-obj G {
+struct G {
     use A
     use B
-    fn tick(self) -> String { rn "g" }
+    fn tick(self) -> string { return "g" }
 }
 let g = G { x: 1, y: 2 }
 assert(g.tick() == "g")
@@ -693,15 +706,15 @@ assert(g.tick() == "g")
 #[test]
 fn composition_c4_multi_use_each_contributes_methods() {
     let src = r#"
-obj A {
+struct A {
     x: int
-    fn get_x(self) -> int { rn self.x }
+    fn get_x(self) -> int { return self.x }
 }
-obj B {
+struct B {
     y: int
-    fn get_y(self) -> int { rn self.y }
+    fn get_y(self) -> int { return self.y }
 }
-obj G {
+struct G {
     use A
     use B
 }
@@ -721,7 +734,10 @@ fn composition_d1_diamond_same_ancestor_errors() {
     // T is the shared ancestor. M and R both use T. E uses both M and R,
     // which tries to add T's `pos` twice.
     let errors = crate::Chunk::compile(
-        "obj T { pos: int }\nobj M {\n    use T\n    vel: int\n}\nobj R {\n    use T\n    sprite: int\n}\nobj E {\n    use M\n    use R\n}",
+        "struct T { pos: int }
+struct M {\n    use T\n    vel: int\n}
+struct R {\n    use T\n    sprite: int\n}
+struct E {\n    use M\n    use R\n}",
     )
     .unwrap_err();
     assert!(
@@ -733,7 +749,10 @@ fn composition_d1_diamond_same_ancestor_errors() {
 #[test]
 fn composition_d2_diamond_methods_also_conflict() {
     let errors = crate::Chunk::compile(
-        "obj T {\n    pos: int\n    fn origin(self) -> int { rn self.pos }\n}\nobj M {\n    use T\n    vel: int\n}\nobj R {\n    use T\n    sprite: int\n}\nobj E {\n    use M\n    use R\n}",
+        "struct T {\n    pos: int\n    fn origin(self) -> int { return self.pos }\n}
+struct M {\n    use T\n    vel: int\n}
+struct R {\n    use T\n    sprite: int\n}
+struct E {\n    use M\n    use R\n}",
     )
     .unwrap_err();
     assert!(
@@ -747,12 +766,12 @@ fn composition_d2_diamond_methods_also_conflict() {
 #[test]
 fn composition_e1_chain_a_b_c_fields() {
     let src = r#"
-obj A { x: int }
-obj B {
+struct A { x: int }
+struct B {
     use A
     y: int
 }
-obj C {
+struct C {
     use B
     z: int
 }
@@ -769,15 +788,15 @@ assert(c.z == 3)
 #[test]
 fn composition_e2_chain_method_from_grandparent() {
     let src = r#"
-obj A {
+struct A {
     x: int
-    fn foo(self) -> int { rn self.x }
+    fn foo(self) -> int { return self.x }
 }
-obj B {
+struct B {
     use A
     y: int
 }
-obj C {
+struct C {
     use B
     z: int
 }
@@ -793,7 +812,9 @@ assert(c.foo() == 10)
 fn composition_e3_chain_depends_on_definition_order() {
     // Using a type before it is defined should error.
     let errors = crate::Chunk::compile(
-        "obj C {\n    use B\n    z: int\n}\nobj B {\n    use A\n    y: int\n}\nobj A { x: int }",
+        "struct C {\n    use B\n    z: int\n}
+struct B {\n    use A\n    y: int\n}
+struct A { x: int }",
     )
     .unwrap_err();
     assert!(
@@ -807,18 +828,18 @@ fn composition_e3_chain_depends_on_definition_order() {
 #[test]
 fn composition_ep1_inherited_method_calls_other_inherited_method() {
     let src = r#"
-obj H {
+struct H {
     hp: int
     fn a(self) -> int {
-        rn self.b() + 1
+        return self.b() + 1
     }
     fn b(self) -> int {
-        rn self.hp
+        return self.hp
     }
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
 }
 let g = G { hp: 5, name: "x" }
 assert(g.a() == 6)
@@ -833,7 +854,8 @@ fn composition_ep2_inherited_method_cannot_reference_using_types_method() {
     // H's method body references `self.guard_only()`. At H's compile time
     // this method doesn't exist, so type-check must reject it.
     let errors = crate::Chunk::compile(
-        "obj H {\n    hp: int\n    fn a(self) -> int { rn self.guard_only() }\n}\nobj G {\n    use H\n    fn guard_only(self) -> int { rn 1 }\n}",
+        "struct H {\n    hp: int\n    fn a(self) -> int { return self.guard_only() }\n}
+struct G {\n    use H\n    fn guard_only(self) -> int { return 1 }\n}",
     )
     .unwrap_err();
     assert!(
@@ -850,11 +872,11 @@ fn composition_f1_inherited_method_self_sees_defining_type() {
     // the method compiles and runs on a Guard instance because the offsets
     // happen to match, but the type annotation inside was H.
     let src = r#"
-obj H {
+struct H {
     hp: int
-    fn is_alive(self) -> bool { rn self.hp > 0 }
+    fn is_alive(self) -> bool { return self.hp > 0 }
 }
-obj G {
+struct G {
     use H
 }
 let g = G { hp: 1 }
@@ -870,7 +892,8 @@ fn composition_f2_inherited_method_cannot_access_using_types_new_field() {
     // H's method references `self.guard_only`. At H's compile time only
     // H's fields exist — this must error.
     let errors = crate::Chunk::compile(
-        "obj H {\n    hp: int\n    fn peek(self) -> int { rn self.guard_only }\n}\nobj G {\n    use H\n    guard_only: int\n}",
+        "struct H {\n    hp: int\n    fn peek(self) -> int { return self.guard_only }\n}
+struct G {\n    use H\n    guard_only: int\n}",
     )
     .unwrap_err();
     assert!(
@@ -883,8 +906,11 @@ fn composition_f2_inherited_method_cannot_access_using_types_new_field() {
 
 #[test]
 fn composition_g2_shadow_field_with_different_type_errors() {
-    let errors = crate::Chunk::compile("obj H { x: int }\nobj G {\n    use H\n    x: String\n}")
-        .unwrap_err();
+    let errors = crate::Chunk::compile(
+        "struct H { x: int }
+struct G {\n    use H\n    x: string\n}",
+    )
+    .unwrap_err();
     assert!(
         errors.iter().any(|e| format!("{e}").contains("conflict")),
         "retype-shadow should error, got {errors:?}"
@@ -894,13 +920,13 @@ fn composition_g2_shadow_field_with_different_type_errors() {
 #[test]
 fn composition_g3_guard_adds_non_conflicting_method() {
     let src = r#"
-obj H {
+struct H {
     hp: int
-    fn a(self) -> int { rn self.hp }
+    fn a(self) -> int { return self.hp }
 }
-obj G {
+struct G {
     use H
-    fn b(self) -> int { rn self.hp + 1 }
+    fn b(self) -> int { return self.hp + 1 }
 }
 let g = G { hp: 10 }
 assert(g.a() == 10)
@@ -915,7 +941,8 @@ assert(g.b() == 11)
 
 #[test]
 fn composition_h1_use_unknown_type_errors() {
-    let errors = crate::Chunk::compile("obj G {\n    use DoesNotExist\n    x: int\n}").unwrap_err();
+    let errors =
+        crate::Chunk::compile("struct G {\n    use DoesNotExist\n    x: int\n}").unwrap_err();
     assert!(
         !errors.is_empty(),
         "use of unknown type should error, got no errors"
@@ -924,7 +951,7 @@ fn composition_h1_use_unknown_type_errors() {
 
 #[test]
 fn composition_h2_use_self_errors() {
-    let errors = crate::Chunk::compile("obj G {\n    use G\n    x: int\n}").unwrap_err();
+    let errors = crate::Chunk::compile("struct G {\n    use G\n    x: int\n}").unwrap_err();
     assert!(!errors.is_empty(), "self-use should error, got no errors");
 }
 
@@ -932,8 +959,10 @@ fn composition_h2_use_self_errors() {
 fn composition_h3_use_after_own_field_in_body() {
     // Does the parser accept `use` after a field? If so, does the
     // compiler still flatten inherited-first?
-    let result =
-        crate::Chunk::compile("obj H { hp: int }\nobj G {\n    name: String\n    use H\n}");
+    let result = crate::Chunk::compile(
+        "struct H { hp: int }
+struct G {\n    name: string\n    use H\n}",
+    );
     match result {
         Ok(chunk) => {
             let g = chunk
@@ -963,9 +992,9 @@ fn composition_h3_use_after_own_field_in_body() {
 #[test]
 fn composition_h4_empty_use_target() {
     let src = r#"
-obj Empty {
+struct Empty {
 }
-obj G {
+struct G {
     use Empty
     x: int
 }
@@ -982,13 +1011,13 @@ fn composition_h6_static_method_inherited_then_called() {
     // H defines a static `make` returning H. Guard uses H. Can you call
     // Guard.make()? And what type does it return — H or G?
     let src = r#"
-obj H {
+struct H {
     hp: int
-    fn make() -> H { rn H { hp: 99 } }
+    fn make() -> H { return H { hp: 99 } }
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
 }
 let h = G.make()
 assert(h.hp == 99)
@@ -1013,15 +1042,15 @@ assert(h.hp == 99)
 #[test]
 fn composition_i1_inherited_damage_mutates_guard_hp() {
     let src = r#"
-obj H {
+struct H {
     hp: int
     fn damage(mut self, n: int) {
         self.hp = self.hp - n
     }
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
 }
 let g = G { hp: 100, name: "x" }
 g.damage(30)
@@ -1039,21 +1068,21 @@ fn composition_i2_guard_method_calls_inherited_method_on_self() {
     // (or call something that mutates) self, so they're declared
     // `mut self`. `is_alive` only reads, so it stays plain `fn`.
     let src = r#"
-obj H {
+struct H {
     hp: int
     fn damage(mut self, n: int) {
         self.hp = self.hp - n
     }
     fn is_alive(self) -> bool {
-        rn self.hp > 0
+        return self.hp > 0
     }
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
     fn take_hit(mut self, n: int) -> bool {
         self.damage(n)
-        rn self.is_alive()
+        return self.is_alive()
     }
 }
 let g = G { hp: 50, name: "x" }
@@ -1069,13 +1098,13 @@ assert(not g.take_hit(100))
 #[test]
 fn composition_i3_two_guards_do_not_share_state() {
     let src = r#"
-obj H {
+struct H {
     hp: int
     fn damage(mut self, n: int) { self.hp = self.hp - n }
 }
-obj G {
+struct G {
     use H
-    name: String
+    name: string
 }
 let a = G { hp: 100, name: "a" }
 let b = G { hp: 100, name: "b" }
@@ -1128,7 +1157,7 @@ fn mut_a2_let_binding_can_be_reassigned() {
 #[test]
 fn mut_a3_val_field_assignment_rejected() {
     let errors =
-        crate::Chunk::compile("obj C { count: int }\nval c: C = C { count: 1 }\nc.count = 2")
+        crate::Chunk::compile("struct C { count: int }\nval c: C = C { count: 1 }\nc.count = 2")
             .unwrap_err();
     assert!(
         errors
@@ -1141,7 +1170,7 @@ fn mut_a3_val_field_assignment_rejected() {
 #[test]
 fn mut_a4_let_field_assignment_allowed() {
     let chunk =
-        crate::Chunk::compile("obj C { count: int }\nlet c: C = C { count: 1 }\nc.count = 2")
+        crate::Chunk::compile("struct C { count: int }\nlet c: C = C { count: 1 }\nc.count = 2")
             .unwrap();
     let mut vm = crate::VM::new();
     vm.run(&chunk).unwrap();
@@ -1204,7 +1233,7 @@ fn mut_c1_val_map_index_assignment_rejected() {
     // The IndexAssignment check at compiler/stmt.rs:242 fires regardless
     // of the receiver type, so this should error today. Pin it to be sure.
     let errors =
-        crate::Chunk::compile("val m: {String: int} = {\"a\": 1}\nm[\"a\"] = 2").unwrap_err();
+        crate::Chunk::compile("val m: {string: int} = {\"a\": 1}\nm[\"a\"] = 2").unwrap_err();
     assert!(
         errors
             .iter()
@@ -1216,7 +1245,7 @@ fn mut_c1_val_map_index_assignment_rejected() {
 #[test]
 fn mut_c2_val_map_read_via_index_allowed() {
     let chunk =
-        crate::Chunk::compile("val m: {String: int} = {\"a\": 1}\nlet v = m[\"a\"]").unwrap();
+        crate::Chunk::compile("val m: {string: int} = {\"a\": 1}\nlet v = m[\"a\"]").unwrap();
     let mut vm = crate::VM::new();
     vm.run(&chunk).unwrap();
 }
@@ -1226,7 +1255,8 @@ fn mut_c2_val_map_read_via_index_allowed() {
 #[test]
 fn mut_d1_val_nested_field_assignment_rejected() {
     let errors = crate::Chunk::compile(
-        "obj Inner { x: int }\nobj Outer { inner: Inner }\nval o: Outer = Outer { inner: Inner { x: 1 } }\no.inner.x = 5",
+        "struct Inner { x: int }
+struct Outer { inner: Inner }\nval o: Outer = Outer { inner: Inner { x: 1 } }\no.inner.x = 5",
     )
     .unwrap_err();
     assert!(
@@ -1241,7 +1271,7 @@ fn mut_d1_val_nested_field_assignment_rejected() {
 fn mut_d2_val_field_then_list_push_rejected() {
     // BUGS.md item 6: bag.xs.push(2) on a val bag.
     let errors = crate::Chunk::compile(
-        "obj Bag { xs: [int] }\nval bag: Bag = Bag { xs: [1] }\nbag.xs.push(2)",
+        "struct Bag { xs: [int] }\nval bag: Bag = Bag { xs: [1] }\nbag.xs.push(2)",
     )
     .unwrap_err();
     assert!(
@@ -1256,7 +1286,7 @@ fn mut_d2_val_field_then_list_push_rejected() {
 fn mut_d3_val_list_index_field_assignment_rejected() {
     // val xs[0].field = ... — index then field on a val root.
     let errors = crate::Chunk::compile(
-        "obj C { count: int }\nval xs: [C] = [C { count: 1 }]\nxs[0].count = 2",
+        "struct C { count: int }\nval xs: [C] = [C { count: 1 }]\nxs[0].count = 2",
     )
     .unwrap_err();
     assert!(
@@ -1271,7 +1301,7 @@ fn mut_d3_val_list_index_field_assignment_rejected() {
 fn mut_d4_val_field_then_index_assignment_rejected() {
     // val o.xs[0] = ... — field then index on a val root.
     let errors = crate::Chunk::compile(
-        "obj Bag { xs: [int] }\nval bag: Bag = Bag { xs: [1] }\nbag.xs[0] = 9",
+        "struct Bag { xs: [int] }\nval bag: Bag = Bag { xs: [1] }\nbag.xs[0] = 9",
     )
     .unwrap_err();
     assert!(
@@ -1291,7 +1321,7 @@ fn mut_d5_val_user_method_mutation_rejected() {
     // is rejected at the method's own definition site, not the call
     // site — different error path, same end result.)
     let errors = crate::Chunk::compile(
-        "obj C { count: int\n    fn bump(mut self) { self.count = self.count + 1 } }\nval c: C = C { count: 1 }\nc.bump()",
+        "struct C { count: int\n    fn bump(mut self) { self.count = self.count + 1 } }\nval c: C = C { count: 1 }\nc.bump()",
     )
     .unwrap_err();
     assert!(
@@ -1308,7 +1338,7 @@ fn mut_d5_val_user_method_mutation_rejected() {
 #[test]
 fn mut_e1_function_param_field_assignment_rejected() {
     let errors = crate::Chunk::compile(
-        "obj C { count: int }\nfn bump(c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)",
+        "struct C { count: int }\nfn bump(c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)",
     )
     .unwrap_err();
     // After W24 fix: the error names the binding kind (parameter)
@@ -1339,7 +1369,8 @@ fn mut_e2_function_param_list_push_rejected() {
 fn mut_e3_method_param_field_assignment_rejected() {
     // Same rule applies inside methods to non-self params.
     let errors = crate::Chunk::compile(
-        "obj C { count: int }\nobj Hub {\n    fn bump(self, c: C) { c.count = c.count + 1 }\n}",
+        "struct C { count: int }
+struct Hub {\n    fn bump(self, c: C) { c.count = c.count + 1 }\n}",
     )
     .unwrap_err();
     assert!(
@@ -1367,7 +1398,7 @@ fn mut_e4_function_param_reassignment_rejected() {
 fn mut_f1_self_field_assignment_allowed_in_mut_fn() {
     // `mut self` is the opt-in for self mutation. Plain `fn` rejects.
     let chunk = crate::Chunk::compile(
-        "obj C { count: int\n    fn bump(mut self) { self.count = self.count + 1 } }\nlet c: C = C { count: 1 }\nc.bump()",
+        "struct C { count: int\n    fn bump(mut self) { self.count = self.count + 1 } }\nlet c: C = C { count: 1 }\nc.bump()",
     )
     .unwrap();
     let mut vm = crate::VM::new();
@@ -1377,7 +1408,7 @@ fn mut_f1_self_field_assignment_allowed_in_mut_fn() {
 #[test]
 fn mut_f1b_self_field_assignment_rejected_in_plain_fn() {
     let errors = crate::Chunk::compile(
-        "obj C { count: int\n    fn bump(self) { self.count = self.count + 1 } }",
+        "struct C { count: int\n    fn bump(self) { self.count = self.count + 1 } }",
     )
     .unwrap_err();
     assert!(
@@ -1392,7 +1423,7 @@ fn mut_f1b_self_field_assignment_rejected_in_plain_fn() {
 #[test]
 fn mut_f2_self_field_read_allowed() {
     let chunk = crate::Chunk::compile(
-        "obj C { count: int\n    fn get(self) -> int { rn self.count } }\nlet c: C = C { count: 5 }\nlet n = c.get()",
+        "struct C { count: int\n    fn get(self) -> int { return self.count } }\nlet c: C = C { count: 5 }\nlet n = c.get()",
     )
     .unwrap();
     let mut vm = crate::VM::new();
@@ -1403,7 +1434,7 @@ fn mut_f2_self_field_read_allowed() {
 fn mut_f3_self_list_field_push_allowed_in_mut_fn() {
     // mut self permits mutating methods on list fields of self.
     let chunk = crate::Chunk::compile(
-        "obj Bag { xs: [int]\n    fn add(mut self, n: int) { self.xs.push(n) } }\nlet b: Bag = Bag { xs: [1] }\nb.add(2)",
+        "struct Bag { xs: [int]\n    fn add(mut self, n: int) { self.xs.push(n) } }\nlet b: Bag = Bag { xs: [1] }\nb.add(2)",
     )
     .unwrap();
     let mut vm = crate::VM::new();
@@ -1413,7 +1444,7 @@ fn mut_f3_self_list_field_push_allowed_in_mut_fn() {
 #[test]
 fn mut_f3b_self_list_field_push_rejected_in_plain_fn() {
     let errors = crate::Chunk::compile(
-        "obj Bag { xs: [int]\n    fn add(self, n: int) { self.xs.push(n) } }",
+        "struct Bag { xs: [int]\n    fn add(self, n: int) { self.xs.push(n) } }",
     )
     .unwrap_err();
     assert!(
@@ -1432,7 +1463,7 @@ fn mut_f4_self_reassignment_rejected() {
     // receiver borrow; rebinding it would silently no-op for the
     // caller.
     let errors = crate::Chunk::compile(
-        "obj C { count: int\n    fn replace(self) { self = C { count: 99 } } }",
+        "struct C { count: int\n    fn replace(self) { self = C { count: 99 } } }",
     )
     .unwrap_err();
     assert!(
@@ -1450,7 +1481,7 @@ fn mut_f5_plain_fn_cannot_call_mut_fn_on_self() {
     // "I don't mutate"; calling out to a mutating sibling would
     // break it for any val caller relying on the contract.
     let errors = crate::Chunk::compile(
-        "obj C {\n    count: int\n    fn bump(mut self) { self.count = self.count + 1 }\n    fn outer(self) { self.bump() }\n}",
+        "struct C {\n    count: int\n    fn bump(mut self) { self.count = self.count + 1 }\n    fn outer(self) { self.bump() }\n}",
     )
     .unwrap_err();
     assert!(
@@ -1468,7 +1499,7 @@ fn mut_f6_mut_fn_can_call_mut_fn_on_self() {
     // methods on `self`. This is what makes the override-extends-
     // inherited-behavior pattern work in examples/05_composition.on.
     let chunk = crate::Chunk::compile(
-        "obj C {\n    count: int\n    fn bump(mut self) { self.count = self.count + 1 }\n    fn outer(mut self) { self.bump() }\n}\nlet c: C = C { count: 1 }\nc.outer()\nassert(c.count == 2)",
+        "struct C {\n    count: int\n    fn bump(mut self) { self.count = self.count + 1 }\n    fn outer(mut self) { self.bump() }\n}\nlet c: C = C { count: 1 }\nc.outer()\nassert(c.count == 2)",
     )
     .unwrap();
     let mut vm = crate::VM::new();
@@ -1483,7 +1514,7 @@ fn mut_g1_mut_param_allows_field_assignment() {
     // fields. The caller may pass a `let` binding (rejected for `val`
     // bindings, see g3).
     let chunk = crate::Chunk::compile(
-        "obj C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)\nassert(x.count == 2)",
+        "struct C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)\nassert(x.count == 2)",
     )
     .unwrap();
     let mut vm = crate::VM::new();
@@ -1503,7 +1534,7 @@ fn mut_g2_mut_param_allows_list_push() {
 #[test]
 fn mut_g3_val_arg_to_mut_param_rejected() {
     let errors = crate::Chunk::compile(
-        "obj C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nval x: C = C { count: 1 }\nbump(x)",
+        "struct C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nval x: C = C { count: 1 }\nbump(x)",
     )
     .unwrap_err();
     assert!(
@@ -1519,7 +1550,7 @@ fn mut_g3_val_arg_to_mut_param_rejected() {
 fn mut_g4_let_arg_to_mut_param_allowed() {
     // The positive complement of g3.
     let chunk = crate::Chunk::compile(
-        "obj C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)",
+        "struct C { count: int }\nfn bump(mut c: C) { c.count = c.count + 1 }\nlet x: C = C { count: 1 }\nbump(x)",
     )
     .unwrap();
     let mut vm = crate::VM::new();
@@ -1534,7 +1565,8 @@ fn mut_h1_override_mut_fn_with_plain_fn_allowed() {
     // override doesn't. Val callers benefit — they couldn't call the
     // inherited mut self, but they CAN call the plain override.
     let chunk = crate::Chunk::compile(
-        "obj Parent {\n    n: int\n    fn touch(mut self) { self.n = self.n + 1 }\n}\nobj Child {\n    use Parent\n    fn touch(self) {}\n}\nval c: Child = Child { n: 0 }\nc.touch()",
+        "struct Parent {\n    n: int\n    fn touch(mut self) { self.n = self.n + 1 }\n}
+struct Child {\n    use Parent\n    fn touch(self) {}\n}\nval c: Child = Child { n: 0 }\nc.touch()",
     )
     .unwrap();
     let mut vm = crate::VM::new();
@@ -1547,7 +1579,8 @@ fn mut_h2_override_plain_fn_with_mut_fn_rejected() {
     // override would let it happen. Val callers relying on the parent
     // contract would be silently lied to.
     let errors = crate::Chunk::compile(
-        "obj Parent {\n    n: int\n    fn touch(self) {}\n}\nobj Child {\n    use Parent\n    fn touch(mut self) { self.n = self.n + 1 }\n}",
+        "struct Parent {\n    n: int\n    fn touch(self) {}\n}
+struct Child {\n    use Parent\n    fn touch(mut self) { self.n = self.n + 1 }\n}",
     )
     .unwrap_err();
     assert!(
@@ -1565,7 +1598,9 @@ fn mut_h3_signature_mut_must_match_implementation() {
     // signature is rejected — the mutability contract is part of
     // the type.
     let errors = crate::Chunk::compile(
-        "obj Healable {\n    fn heal(mut self, n: int)\n}\nobj Health {\n    hp: int\n    fn heal(self, n: int) {}\n}\nobj Player {\n    use Healable\n    use Health\n}",
+        "struct Healable {\n    fn heal(mut self, n: int)\n}
+struct Health {\n    hp: int\n    fn heal(self, n: int) {}\n}
+struct Player {\n    use Healable\n    use Health\n}",
     )
     .unwrap_err();
     assert!(
@@ -1594,9 +1629,9 @@ fn orelse_chain_three_elements_compiles_and_runs() {
     // produce the last value (3). Under the old left-associative
     // rule this would not even compile.
     let chunk = crate::Chunk::compile(
-        "fn first() -> int? { rn nil }\n\
-         fn second() -> int? { rn nil }\n\
-         fn third() -> int { rn 3 }\n\
+        "fn first() -> maybe int { return nil }\n\
+         fn second() -> maybe int { return nil }\n\
+         fn third() -> int { return 3 }\n\
          let x: int = first() orelse second() orelse third()\n\
          assert(x == 3)",
     )
@@ -1611,9 +1646,9 @@ fn orelse_chain_short_circuits_at_first_non_nil() {
     // returning a real value, `second` and `third` should not be
     // observable in the result.
     let chunk = crate::Chunk::compile(
-        "fn first() -> int? { rn 1 }\n\
-         fn second() -> int? { rn 2 }\n\
-         fn third() -> int { rn 3 }\n\
+        "fn first() -> maybe int { return 1 }\n\
+         fn second() -> maybe int { return 2 }\n\
+         fn third() -> int { return 3 }\n\
          let x: int = first() orelse second() orelse third()\n\
          assert(x == 1)",
     )
@@ -1629,10 +1664,10 @@ fn orelse_chain_four_elements() {
     // grouping `a orelse (b orelse (c orelse d))` short-circuits at
     // the first non-nil reachable from the right.
     let chunk = crate::Chunk::compile(
-        "fn a() -> int? { rn nil }\n\
-         fn b() -> int? { rn nil }\n\
-         fn c() -> int? { rn 7 }\n\
-         fn d() -> int { rn 99 }\n\
+        "fn a() -> maybe int { return nil }\n\
+         fn b() -> maybe int { return nil }\n\
+         fn c() -> maybe int { return 7 }\n\
+         fn d() -> int { return 99 }\n\
          let x: int = a() orelse b() orelse c() orelse d()\n\
          assert(x == 7)",
     )
@@ -1704,7 +1739,7 @@ fn enum_decl_duplicate_variant_rejected() {
 #[test]
 fn enum_decl_duplicate_field_in_variant_rejected() {
     // Duplicate field names within a single variant payload — same
-    // rule as obj fields.
+    // rule as struct fields.
     let errors = crate::Chunk::compile("enum Foo { Bar { x: int, x: int } }").unwrap_err();
     assert!(
         errors
@@ -1904,8 +1939,8 @@ fn enum_eq_different_payload_unequal() {
 fn enum_match_dispatches_to_correct_arm() {
     let chunk = crate::Chunk::compile(
         "enum Color { Red\n Green\n Blue }\n\
-         fn name(c: Color) -> String {\n\
-             rn match c {\n\
+         fn name(c: Color) -> string {\n\
+             return match c {\n\
                  Color.Red => \"red\"\n\
                  Color.Green => \"green\"\n\
                  Color.Blue => \"blue\"\n\
@@ -1926,7 +1961,7 @@ fn enum_match_with_wildcard_catches_remaining() {
     let chunk = crate::Chunk::compile(
         "enum Color { Red\n Green\n Blue }\n\
          fn is_red(c: Color) -> bool {\n\
-             rn match c {\n\
+             return match c {\n\
                  Color.Red => true\n\
                  _ => false\n\
              }\n\
@@ -1964,11 +1999,11 @@ fn enum_match_payload_variant_dispatches_correctly() {
     // but isn't bound here. Slice 3 will add bindings.
     let chunk = crate::Chunk::compile(
         "enum FsResult {\n\
-             Ok { content: String }\n\
+             Ok { content: string }\n\
              NotFound\n\
          }\n\
          let r = FsResult.Ok { content: \"hi\" }\n\
-         let label: String = match r {\n\
+         let label: string = match r {\n\
              FsResult.Ok => \"got\"\n\
              FsResult.NotFound => \"missing\"\n\
          }\n\
@@ -2079,7 +2114,7 @@ fn enum_match_pattern_type_mismatch_rejected() {
 #[test]
 fn enum_match_non_enum_scrutinee_rejected() {
     let errors =
-        crate::Chunk::compile("let n = 1\nlet s: String = match n { _ => \"x\" }").unwrap_err();
+        crate::Chunk::compile("let n = 1\nlet s: string = match n { _ => \"x\" }").unwrap_err();
     assert!(
         errors
             .iter()
@@ -2141,8 +2176,8 @@ fn enum_type_in_function_return_resolves() {
     // resolves correctly.
     let chunk = crate::Chunk::compile(
         "enum R { Ok\n Err }\n\
-         fn pick(b: bool) -> R { if b { rn R.Ok }\n rn R.Err }\n\
-         let label: String = match pick(true) {\n\
+         fn pick(b: bool) -> R { if b { return R.Ok }\n return R.Err }\n\
+         let label: string = match pick(true) {\n\
              R.Ok => \"yes\"\n\
              R.Err => \"no\"\n\
          }\n\
@@ -2166,7 +2201,7 @@ fn enum_type_in_function_parameter_resolves() {
     let chunk = crate::Chunk::compile(
         "enum Color { Red\n Green }\n\
          fn is_red(c: Color) -> bool {\n\
-             rn match c { Color.Red => true\n _ => false }\n\
+             return match c { Color.Red => true\n _ => false }\n\
          }\n\
          assert(is_red(Color.Red))",
     )
@@ -2226,7 +2261,7 @@ fn enum_print_payload_string_field_quoted() {
     // Strings inside enum payloads print quoted, mirroring Debug
     // output for debuggability.
     let chunk = crate::Chunk::compile(
-        "enum FsResult { Ok { content: String } }\nprint(FsResult.Ok { content: \"hi\" })",
+        "enum FsResult { Ok { content: string } }\nprint(FsResult.Ok { content: \"hi\" })",
     )
     .unwrap();
     let mut buf: Vec<u8> = Vec::new();
@@ -2324,7 +2359,7 @@ fn enum_bind_tag_only_on_payload_variant_still_works() {
     let chunk = crate::Chunk::compile(
         "enum Move { Step { dx: int, dy: int } }\n\
          let m = Move.Step { dx: 1, dy: 2 }\n\
-         let s: String = match m { Move.Step => \"moved\" }\n\
+         let s: string = match m { Move.Step => \"moved\" }\n\
          assert(s == \"moved\")",
     )
     .unwrap();
@@ -2334,9 +2369,9 @@ fn enum_bind_tag_only_on_payload_variant_still_works() {
 #[test]
 fn enum_bind_mixed_arms_some_with_bindings_some_without() {
     let chunk = crate::Chunk::compile(
-        "enum FsResult { Ok { content: String } NotFound }\n\
+        "enum FsResult { Ok { content: string } NotFound }\n\
          let r = FsResult.Ok { content: \"hi\" }\n\
-         let label: String = match r {\n\
+         let label: string = match r {\n\
              FsResult.Ok { content } => content\n\
              FsResult.NotFound => \"missing\"\n\
          }\n\
@@ -2352,9 +2387,9 @@ fn enum_bind_string_payload_typed_correctly() {
     // field type. Verify by using a String binding in a context
     // that requires a String.
     let chunk = crate::Chunk::compile(
-        "enum E { Msg { text: String } }\n\
+        "enum E { Msg { text: string } }\n\
          let e = E.Msg { text: \"hello\" }\n\
-         let upper: String = match e { E.Msg { text } => text }\n\
+         let upper: string = match e { E.Msg { text } => text }\n\
          assert(upper == \"hello\")",
     )
     .unwrap();
@@ -2422,7 +2457,7 @@ fn enum_bind_nullary_with_braces_rejected() {
     let errors = crate::Chunk::compile(
         "enum Color { Red\n Green }\n\
          let c = Color.Red\n\
-         let s: String = match c { Color.Red { } => \"r\"\n Color.Green => \"g\" }",
+         let s: string = match c { Color.Red { } => \"r\"\n Color.Green => \"g\" }",
     )
     .unwrap_err();
     assert!(
@@ -2436,7 +2471,7 @@ fn enum_bind_type_mismatch_in_arm_body_rejected() {
     // Bindings carry the variant's declared field type. Using a
     // String binding where an int is required is a type error.
     let errors = crate::Chunk::compile(
-        "enum E { Msg { text: String } }\n\
+        "enum E { Msg { text: string } }\n\
          let e = E.Msg { text: \"hi\" }\n\
          let n: int = match e { E.Msg { text } => text }",
     )
@@ -2477,7 +2512,7 @@ fn enum_exhaust_missing_vars_fully_qualified() {
     let errors = crate::Chunk::compile(
         "enum Color { Red\n Green\n Blue }\n\
          let c = Color.Red\n\
-         let s: String = match c { Color.Red => \"r\" }",
+         let s: string = match c { Color.Red => \"r\" }",
     )
     .unwrap_err();
     let msg = errors
@@ -2498,7 +2533,7 @@ fn enum_exhaust_dead_wildcard_after_total_coverage_rejected() {
     let errors = crate::Chunk::compile(
         "enum Color { Red\n Green\n Blue }\n\
          let c = Color.Red\n\
-         let s: String = match c {\n\
+         let s: string = match c {\n\
              Color.Red => \"r\"\n\
              Color.Green => \"g\"\n\
              Color.Blue => \"b\"\n\
@@ -2522,7 +2557,7 @@ fn enum_exhaust_wildcard_first_position_still_unreachable_for_later_arms() {
     let errors = crate::Chunk::compile(
         "enum Color { Red\n Green }\n\
          let c = Color.Red\n\
-         let s: String = match c { _ => \"a\"\n _ => \"b\" }",
+         let s: string = match c { _ => \"a\"\n _ => \"b\" }",
     )
     .unwrap_err();
     assert!(
@@ -2544,7 +2579,89 @@ fn enum_exhaust_variant_after_wildcard_currently_compiles() {
     crate::Chunk::compile(
         "enum Color { Red\n Green\n Blue }\n\
          let c = Color.Red\n\
-         let s: String = match c { Color.Red => \"r\"\n _ => \"x\"\n Color.Green => \"g\" }",
+         let s: string = match c { Color.Red => \"r\"\n _ => \"x\"\n Color.Green => \"g\" }",
     )
     .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Slice 5 W26: `if` and `if let` lifted to expressions. These tests
+// pin the new behaviour: a non-block `if`/`if let` produces a value
+// that flows into a let binding or function return, and statement-
+// position bare `if` keeps working.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn if_expression_in_let_binding() {
+    let chunk = crate::Chunk::compile(
+        "let n = 7\n\
+         let label: string = if n > 5 { \"big\" } else { \"small\" }\n\
+         assert(label == \"big\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn if_expression_in_function_return() {
+    let chunk = crate::Chunk::compile(
+        "fn classify(x: int) -> string {\n\
+             return if x < 0 { \"neg\" } elif x == 0 { \"zero\" } else { \"pos\" }\n\
+         }\n\
+         assert(classify(-3) == \"neg\")\n\
+         assert(classify(0) == \"zero\")\n\
+         assert(classify(42) == \"pos\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn if_let_expression_in_function_return() {
+    let chunk = crate::Chunk::compile(
+        "fn describe(m: maybe int) -> string {\n\
+             return if let v = m { \"got {v}\" } else { \"nothing\" }\n\
+         }\n\
+         assert(describe(10) == \"got 10\")\n\
+         assert(describe(nil) == \"nothing\")",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn if_branches_must_produce_same_type() {
+    let errors = crate::Chunk::compile("let x = if true { 1 } else { \"two\" }").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("must produce the same type")),
+        "expected branch type mismatch, got {errors:?}"
+    );
+}
+
+#[test]
+fn bare_if_in_statement_position_still_works() {
+    // No else branch — the value is implicitly nil and discarded
+    // by the wrapping expression-statement.
+    let chunk = crate::Chunk::compile("let n = 5\nif n > 0 { print(\"positive\") }").unwrap();
+    crate::VM::new().run(&chunk).unwrap();
+}
+
+#[test]
+fn if_expression_value_block_takes_last_statement() {
+    // The body block has let-bindings followed by an expression;
+    // the block's value is the trailing expression.
+    let chunk = crate::Chunk::compile(
+        "let n = if true {\n\
+             let a = 3\n\
+             let b = 4\n\
+             a + b\n\
+         } else {\n\
+             0\n\
+         }\n\
+         assert(n == 7)",
+    )
+    .unwrap();
+    crate::VM::new().run(&chunk).unwrap();
 }

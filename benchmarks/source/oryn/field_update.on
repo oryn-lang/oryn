@@ -1,4 +1,4 @@
-obj Counter {
+struct Counter {
     value: int
 }
 

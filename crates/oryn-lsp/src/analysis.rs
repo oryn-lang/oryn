@@ -417,7 +417,10 @@ mod tests {
 
     #[test]
     fn function_creates_definition_and_params() {
-        let table = analyze("fn add(a, b) {\nrn a + b\n}");
+        let table = analyze(
+            "fn add(a, b) {
+return a + b\n}",
+        );
 
         // 3 definitions: add (Function), a (Parameter), b (Parameter)
         assert_eq!(table.definitions.len(), 3);
@@ -470,7 +473,7 @@ mod tests {
 
     #[test]
     fn obj_def_creates_definition() {
-        let table = analyze("obj Vec2 {\nx: int\ny: int\n}");
+        let table = analyze("struct Vec2 {\nx: int\ny: int\n}");
 
         let obj_defs: Vec<&SymbolInfo> = table
             .definitions
@@ -483,7 +486,7 @@ mod tests {
 
     #[test]
     fn obj_method_creates_definition() {
-        let table = analyze("obj Foo {\nfn bar(self) {\nprint(1)\n}\n}");
+        let table = analyze("struct Foo {\nfn bar(self) {\nprint(1)\n}\n}");
 
         assert!(
             table
@@ -507,8 +510,10 @@ mod tests {
 
     #[test]
     fn obj_use_creates_reference() {
-        let table =
-            analyze("obj Base {\nfn hello(self) {\nprint(1)\n}\n}\nobj Child {\nuse Base\n}");
+        let table = analyze(
+            "struct Base {\nfn hello(self) {\nprint(1)\n}\n}
+struct Child {\nuse Base\n}",
+        );
 
         let base_refs: Vec<&SymbolRef> = table
             .references
@@ -521,7 +526,10 @@ mod tests {
 
     #[test]
     fn obj_method_body_walks_expressions() {
-        let table = analyze("let x = 5\nobj Foo {\nfn bar(self) {\nprint(x)\n}\n}");
+        let table = analyze(
+            "let x = 5
+struct Foo {\nfn bar(self) {\nprint(x)\n}\n}",
+        );
 
         let x_refs: Vec<&SymbolRef> = table.references.iter().filter(|r| r.name == "x").collect();
         assert_eq!(x_refs.len(), 1);
@@ -530,7 +538,7 @@ mod tests {
 
     #[test]
     fn obj_fields_are_registered() {
-        let source = "obj Vec2 {\nx: int\ny: int\n}";
+        let source = "struct Vec2 {\nx: int\ny: int\n}";
         let table = analyze(source);
 
         let fields: Vec<&SymbolInfo> = table
@@ -546,7 +554,7 @@ mod tests {
 
     #[test]
     fn obj_field_full_span_covers_only_the_field_line() {
-        let source = "obj Vec2 {\nx: int\ny: int\n}";
+        let source = "struct Vec2 {\nx: int\ny: int\n}";
         let table = analyze(source);
 
         let field = table
@@ -561,7 +569,8 @@ mod tests {
 
     #[test]
     fn obj_method_full_span_is_method_only_not_whole_obj() {
-        let source = "obj Foo {\nfn bar(self) {\nrn 1\n}\n}";
+        let source = "struct Foo {\nfn bar(self) {
+return 1\n}\n}";
         let table = analyze(source);
 
         let method = table
@@ -572,6 +581,6 @@ mod tests {
         // The method's full_span must start at `fn`, not at `obj`.
         let snippet = &source[method.full_span.clone()];
         assert!(snippet.starts_with("fn bar"), "got: {snippet:?}");
-        assert!(!snippet.contains("obj Foo"), "got: {snippet:?}");
+        assert!(!snippet.contains("struct Foo"), "got: {snippet:?}");
     }
 }

@@ -27,7 +27,7 @@ fn string_equality() {
 #[test]
 fn string_as_function_param() {
     assert_eq!(
-        run("fn greet(name: String) {\nprint(name)\n}\ngreet(\"alice\")"),
+        run("fn greet(name: string) {\nprint(name)\n}\ngreet(\"alice\")"),
         "alice\n",
     );
 }
@@ -77,7 +77,8 @@ fn float_comparison() {
 #[test]
 fn float_in_function() {
     assert_eq!(
-        run("fn half(x: float) -> float {\nrn x / 2.0\n}\nprint(half(5.0))"),
+        run("fn half(x: float) -> float {
+return x / 2.0\n}\nprint(half(5.0))"),
         "2.5\n",
     );
 }
@@ -129,7 +130,8 @@ fn let_reassignment_still_works() {
 #[test]
 fn val_in_function() {
     assert_eq!(
-        run("fn double(n: int) -> int {\nval result = n * 2\nrn result\n}\nprint(double(5))"),
+        run("fn double(n: int) -> int {\nval result = n * 2
+return result\n}\nprint(double(5))"),
         "10\n",
     );
 }
@@ -188,7 +190,7 @@ fn val_list_pop_is_compile_error() {
 #[test]
 fn val_root_nested_list_push_is_compile_error() {
     let result =
-        oryn::Chunk::compile("obj Bag { xs: [int] }\nval bag = Bag { xs: [1] }\nbag.xs.push(2)");
+        oryn::Chunk::compile("struct Bag { xs: [int] }\nval bag = Bag { xs: [1] }\nbag.xs.push(2)");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -200,7 +202,7 @@ fn val_root_nested_list_push_is_compile_error() {
 #[test]
 fn field_list_index_assignment_works() {
     assert_eq!(
-        run("obj Box { xs: [int] }\nlet box = Box { xs: [1] }\nbox.xs[0] = 9\nprint(box.xs[0])"),
+        run("struct Box { xs: [int] }\nlet box = Box { xs: [1] }\nbox.xs[0] = 9\nprint(box.xs[0])"),
         "9\n",
     );
 }
@@ -208,7 +210,7 @@ fn field_list_index_assignment_works() {
 #[test]
 fn val_root_nested_list_index_assignment_is_compile_error() {
     let result =
-        oryn::Chunk::compile("obj Bag { xs: [int] }\nval bag = Bag { xs: [1] }\nbag.xs[0] = 2");
+        oryn::Chunk::compile("struct Bag { xs: [int] }\nval bag = Bag { xs: [1] }\nbag.xs[0] = 2");
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -232,7 +234,8 @@ fn val_with_type_annotation() {
 #[test]
 fn function_with_param_types() {
     assert_eq!(
-        run("fn add(a: int, b: int) -> int {\nrn a + b\n}\nprint(add(2, 3))"),
+        run("fn add(a: int, b: int) -> int {
+return a + b\n}\nprint(add(2, 3))"),
         "5\n",
     );
 }
@@ -240,7 +243,8 @@ fn function_with_param_types() {
 #[test]
 fn function_with_return_type() {
     assert_eq!(
-        run("fn double(x: int) -> int {\nrn x * 2\n}\nprint(double(5))"),
+        run("fn double(x: int) -> int {
+return x * 2\n}\nprint(double(5))"),
         "10\n",
     );
 }
@@ -252,7 +256,10 @@ fn mixed_annotated_and_unannotated() {
 
 #[test]
 fn function_missing_param_type_is_compile_error() {
-    let result = oryn::Chunk::compile("fn add(a: int, b) -> int {\nrn a + b\n}");
+    let result = oryn::Chunk::compile(
+        "fn add(a: int, b) -> int {
+return a + b\n}",
+    );
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -311,7 +318,7 @@ fn assignment_type_mismatch_is_compile_error() {
 fn void_function_no_return_type_needed() {
     // Functions without -> ReturnType are void.
     assert_eq!(
-        run("fn greet(name: String) {\nprint(name)\n}\ngreet(\"world\")"),
+        run("fn greet(name: string) {\nprint(name)\n}\ngreet(\"world\")"),
         "world\n",
     );
 }
@@ -321,7 +328,7 @@ fn correct_type_annotations_pass() {
     assert_eq!(run("let x: int = 5\nprint(x)"), "5\n");
     assert_eq!(run("let x: float = 3.14\nprint(x)"), "3.14\n");
     assert_eq!(run("let x: bool = true\nprint(x)"), "true\n");
-    assert_eq!(run("let x: String = \"hi\"\nprint(x)"), "hi\n");
+    assert_eq!(run("let x: string = \"hi\"\nprint(x)"), "hi\n");
 }
 
 #[test]
@@ -343,7 +350,7 @@ fn inclusive_range_value_prints() {
 
 #[test]
 fn range_type_annotation_works() {
-    assert_eq!(run("let values: Range = 1..3\nprint(values)"), "1..3\n");
+    assert_eq!(run("let values: range = 1..3\nprint(values)"), "1..3\n");
 }
 
 // --- Unary minus ---

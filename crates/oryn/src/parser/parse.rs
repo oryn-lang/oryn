@@ -2,6 +2,7 @@ use chumsky::IterParser as _;
 use chumsky::Parser;
 use chumsky::input::{Input as _, MappedInput};
 use chumsky::prelude::{Rich, SimpleSpan, choice, extra, just, recursive, select};
+use chumsky::recursive::Recursive;
 
 use crate::errors::OrynError;
 use crate::lexer::{self, Token};
@@ -85,13 +86,27 @@ pub fn parse(
 
 // Atoms are the smallest, indivisible expressions: literals, identifiers,
 // function calls, object literals, and parenthesized sub-expressions.
+//
+// `block` is the statement-block parser (`{ stmt; stmt; ... }`),
+// passed in so this function can build `if`-as-expression and
+// `if let`-as-expression primaries that take block bodies. The
+// block parser depends on `stmt` which depends on `expr`, so the
+// caller breaks the mutual recursion via `Recursive::declare()`.
 fn atom<'src>(
     expr: impl Parser<
         'src,
         TokenInput<'src>,
         Spanned<Expression>,
         extra::Err<Rich<'src, Token, SimpleSpan>>,
-    > + Clone,
+    > + Clone
+    + 'src,
+    block: impl Parser<
+        'src,
+        TokenInput<'src>,
+        Spanned<Expression>,
+        extra::Err<Rich<'src, Token, SimpleSpan>>,
+    > + Clone
+    + 'src,
 ) -> impl Parser<'src, TokenInput<'src>, Spanned<Expression>, extra::Err<Rich<'src, Token, SimpleSpan>>>
 + Clone {
     let bool_lit = select! { Token::True => Expression::True, Token::False => Expression::False };
@@ -289,12 +304,83 @@ fn atom<'src>(
             arms,
         });
 
+    // `if cond { body }` / `if cond { body } else { else_body }` /
+    // `if cond { body } elif cond2 { body2 } else { ... }` —
+    // Slice 5 W26: `if` is now an expression. Used in expression
+    // position, both branches must produce the same type and the
+    // whole expression's value is the matched branch's value. In
+    // statement position the value is discarded by the wrapping
+    // `Statement::Expression` Pop.
+    //
+    // The recursive inner closure handles `elif` chains by
+    // desugaring each `elif` into an `else` block containing a
+    // single nested `if` expression statement.
+    let if_expr = just(Token::If)
+        .ignore_then(recursive(|if_body| {
+            let else_branch = just(Token::Else)
+                .ignore_then(block.clone())
+                .or(just(Token::Elif).ignore_then(if_body).map_with(
+                    |elif_expr: Spanned<Expression>, extra| {
+                        // Wrap the elif's `if` expression in a single-
+                        // statement block so it slots into the else
+                        // position uniformly.
+                        Spanned::new(
+                            Expression::Block(vec![Spanned::new(
+                                Statement::Expression(elif_expr),
+                                extra.span(),
+                            )]),
+                            extra.span(),
+                        )
+                    },
+                ));
+
+            expr.clone()
+                .then(block.clone())
+                .then(else_branch.or_not())
+                .map_with(|((condition, body), else_body), extra| {
+                    Spanned::new(
+                        Expression::If {
+                            condition: Box::new(condition),
+                            body: Box::new(body),
+                            else_body: else_body.map(Box::new),
+                        },
+                        extra.span(),
+                    )
+                })
+        }))
+        .map(|spanned| spanned.node)
+        .boxed();
+
+    // `if let x = expr { body } else { else_body }` — same expression
+    // shape as `if`, but the body branch is entered only when
+    // `expr` is non-nil and binds the unwrapped value to `x`.
+    let if_let_expr = just(Token::If)
+        .ignore_then(just(Token::Let))
+        .ignore_then(select! { Token::Ident(name) => name })
+        .then_ignore(just(Token::Equals))
+        .then(expr.clone())
+        .then(block.clone())
+        .then(just(Token::Else).ignore_then(block.clone()).or_not())
+        .map(|(((name, value), body), else_body)| Expression::IfLet {
+            name,
+            value: Box::new(value),
+            body: Box::new(body),
+            else_body: else_body.map(Box::new),
+        })
+        .boxed();
+
     bool_lit
         .or(nil_lit)
         .or(float)
         .or(int)
         .or(string)
         .or(match_expr)
+        // Try `if let` BEFORE `if`: both start with `Token::If` so
+        // a bare `if let ...` would otherwise fall into the
+        // condition-expression slot of the plain `if` parser and
+        // produce a confusing error.
+        .or(if_let_expr)
+        .or(if_expr)
         .or(ident_or_call)
         .or(paren)
         .or(list_literal)
@@ -315,8 +401,19 @@ fn program<'src>() -> impl Parser<
     //   atom -> postfix (.field, .method()) -> negate (-) -> product (* /)
     //   -> sum (+ -) -> comparison (== != < > <= >=) -> not
     //   -> and -> or
+    //
+    // Slice 5 W26 lift: `if`/`if let` are now expressions, so the
+    // primary expression chain has to be able to parse a block
+    // (`{ stmt; stmt; ... }`) for their body. Blocks contain
+    // statements which contain expressions, so we have a mutual
+    // recursion: expr ⇄ stmt ⇄ block. We break it via
+    // `Recursive::declare()` for the block parser, build `expr`
+    // using the declared block, then build `stmt` (which uses
+    // `expr.clone()`), then define `block` from `stmt`.
+    let mut block = Recursive::declare();
+
     let expr = recursive(|expr| {
-        let atom = atom(expr.clone());
+        let atom = atom(expr.clone(), block.clone());
 
         // Field-value pair used inside object literal braces. Same shape
         // as the one in `atom()`, but redefined here for postfix scope.
@@ -529,7 +626,7 @@ fn program<'src>() -> impl Parser<
         let prefix_unary = choice((
             just(Token::Not).to(PrefixOp::Not),
             just(Token::Try).to(PrefixOp::Try),
-            just(Token::Bang).to(PrefixOp::UnwrapError),
+            just(Token::Must).to(PrefixOp::UnwrapError),
         ))
         .repeated()
         .foldr(comparison.boxed(), |op, expr| {
@@ -603,7 +700,14 @@ fn program<'src>() -> impl Parser<
 
     let newlines = just(Token::Newline).repeated();
 
-    let stmt = recursive(|stmt| {
+    // The stmt parser used to be `recursive(|stmt| ...)` because the
+    // inner `block` parser referenced it. After the Slice 5 W26 lift,
+    // `block` lives outside `stmt` and is defined post-hoc via the
+    // outer `Recursive::declare()`, so the closure parameter is no
+    // longer used inside. We keep the `recursive` shape to preserve
+    // boxed-parser identity (and the chumsky `Recursive` lifetime
+    // story); the parameter is intentionally unused.
+    let stmt = recursive(|_stmt| {
         // import <ident> or import <ident>.<ident>.<ident>...
         let import_stmt = just(Token::Import)
             .ignore_then(
@@ -624,6 +728,21 @@ fn program<'src>() -> impl Parser<
         //   {K: V}          → TypeAnnotation::Map
         //   !(T?), (!T)?    → allowed with parentheses
         //   !T?             → rejected (ambiguous without parentheses)
+        // Type grammar (Slice 5 — words-everywhere policy):
+        //
+        //   maybe T          → nillable
+        //   error T          → error union
+        //   maybe error T    → nillable error union (composition reads
+        //                       left-to-right as prefix operators)
+        //   error maybe T    → error union of nillable
+        //   [T]              → list
+        //   {K: V}           → map
+        //   (T)              → parens
+        //   T                → bare named type / dotted path
+        //
+        // Both `maybe` and `error` are prefix keywords; they compose
+        // freely without parentheses because there's no parser
+        // ambiguity between two prefix forms.
         let type_ann_parser = recursive(|type_ann_rec| {
             let dotted_name = select! { Token::Ident(name) => name }
                 .separated_by(just(Token::Dot))
@@ -649,36 +768,29 @@ fn program<'src>() -> impl Parser<
 
             let base_type = paren_type.or(list_type).or(map_type).or(dotted_name);
 
-            // T? — nillable (base + postfix ?)
-            let nillable = base_type
-                .clone()
-                .then_ignore(just(Token::Question))
+            // `maybe T` — prefix nillable.
+            let nillable = just(Token::Maybe)
+                .ignore_then(type_ann_rec.clone())
                 .map(|inner| TypeAnnotation::Nillable(Box::new(inner)));
 
-            // !T — error union (prefix ! + base, no trailing ? allowed at this level)
-            let error_union = just(Token::Bang)
-                .ignore_then(base_type.clone())
+            // `error T` — prefix error union.
+            let error_union = just(Token::Error)
+                .ignore_then(type_ann_rec.clone())
                 .map(|inner| TypeAnnotation::ErrorUnion(Box::new(inner)));
 
-            // Try nillable first (so T? is parsed before bare T),
-            // then error_union, then bare base_type.
-            // !T? will parse !T as ErrorUnion, leaving ? unconsumed → parse error.
+            // Try the prefix forms first so `maybe`/`error` are
+            // recognized as type modifiers, not consumed as
+            // identifiers by the bare-type fallthrough.
             choice((nillable, error_union, base_type))
         });
 
         let type_annotation = just(Token::Colon).ignore_then(type_ann_parser.clone());
 
-        // { stmt \n stmt \n ... }
-        let block = stmt
-            .clone()
-            .separated_by(newlines.clone())
-            .allow_trailing()
-            .collect::<Vec<Spanned<Statement>>>()
-            .delimited_by(
-                just(Token::LeftCurly).then(newlines.clone()),
-                newlines.clone().or_not().then(just(Token::RightCurly)),
-            )
-            .map_with(|stmts, extra| Spanned::new(Expression::Block(stmts), extra.span()));
+        // The block parser is the outer `Recursive::declare()`-d one
+        // (see the top of `program()` for the rationale). It's
+        // captured by reference here so we can call `.clone()` to
+        // use it in nested parsers, and it gets its body filled in
+        // by `block.define(...)` after `stmt` is built.
 
         // -- Bindings --
 
@@ -951,7 +1063,7 @@ fn program<'src>() -> impl Parser<
         let obj_stmt = just(Token::Pub)
             .or_not()
             .map(|t| t.is_some())
-            .then_ignore(just(Token::Obj))
+            .then_ignore(just(Token::Struct))
             .then(select! { Token::Ident(name) => name })
             .then(
                 obj_item
@@ -1073,76 +1185,17 @@ fn program<'src>() -> impl Parser<
             .labelled("function")
             .boxed();
 
-        let return_stmt = just(Token::Rn)
+        let return_stmt = just(Token::Return)
             .ignore_then(expr.clone().or_not())
             .map_with(|value, extra| Spanned::new(Statement::Return(value), extra.span()))
             .labelled("return");
 
         // -- Control flow --
-
-        let if_let_stmt = just(Token::If)
-            .ignore_then(just(Token::Let))
-            .ignore_then(select! { Token::Ident(name) => name })
-            .then_ignore(just(Token::Equals))
-            .then(expr.clone())
-            .then(block.clone())
-            .then(just(Token::Else).ignore_then(block.clone()).or_not())
-            .map_with(|(((name, value), body), else_body), extra| {
-                Spanned::new(
-                    Statement::IfLet {
-                        name,
-                        value,
-                        body,
-                        else_body,
-                    },
-                    extra.span(),
-                )
-            })
-            .boxed();
-
-        let if_stmt = just(Token::If)
-            .ignore_then(recursive(|if_body| {
-                let else_branch =
-                    just(Token::Else)
-                        .ignore_then(block.clone())
-                        .or(just(Token::Elif).ignore_then(if_body).map_with(
-                            |elif_stmt: Spanned<Statement>, extra| {
-                                // Desugar `elif` into an else-block containing a single if statement.
-                                Spanned::new(Expression::Block(vec![elif_stmt]), extra.span())
-                            },
-                        ));
-
-                expr.clone()
-                    .then(block.clone())
-                    .then(else_branch.or_not())
-                    .map_with(|((condition, body), else_body), extra| {
-                        Spanned::new(
-                            Statement::If {
-                                condition,
-                                body,
-                                else_body,
-                            },
-                            extra.span(),
-                        )
-                    })
-            }))
-            .boxed();
-
-        let unless_stmt = just(Token::Unless)
-            .ignore_then(expr.clone())
-            .then(block.clone())
-            .then(just(Token::Else).ignore_then(block.clone()).or_not())
-            .map_with(|((condition, body), else_body), extra| {
-                Spanned::new(
-                    Statement::Unless {
-                        condition,
-                        body,
-                        else_body,
-                    },
-                    extra.span(),
-                )
-            })
-            .boxed();
+        //
+        // Slice 5 W26: `if` and `if let` are now expressions, parsed
+        // by `atom()`. A bare `if cond { body }` line at statement
+        // position parses as an expression and gets wrapped in
+        // `Statement::Expression` by the `expr_stmt` fallthrough.
 
         // `test "name" { ... }` — module-level test block. The name is a
         // required string literal; identifier names are rejected by the
@@ -1225,9 +1278,6 @@ fn program<'src>() -> impl Parser<
             .or(test_stmt)
             .or(assert_stmt)
             .or(return_stmt)
-            .or(if_let_stmt)
-            .or(if_stmt)
-            .or(unless_stmt)
             .or(while_stmt)
             .or(for_stmt)
             .or(break_stmt)
@@ -1236,6 +1286,24 @@ fn program<'src>() -> impl Parser<
             .or(expr_stmt)
     })
     .labelled("statement");
+
+    // Define the block parser now that `stmt` is built. This closes
+    // the mutual recursion: `block` was declared upfront so the
+    // expression parser could reference it for `if`/`if let` bodies.
+    {
+        let block_newlines = just(Token::Newline).repeated();
+        block.define(
+            stmt.clone()
+                .separated_by(block_newlines.clone())
+                .allow_trailing()
+                .collect::<Vec<Spanned<Statement>>>()
+                .delimited_by(
+                    just(Token::LeftCurly).then(block_newlines.clone()),
+                    block_newlines.or_not().then(just(Token::RightCurly)),
+                )
+                .map_with(|stmts, extra| Spanned::new(Expression::Block(stmts), extra.span())),
+        );
+    }
 
     // Top level: newline-separated statements.
     let newlines = just(Token::Newline).repeated().at_least(1);

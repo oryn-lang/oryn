@@ -20,10 +20,10 @@ pub enum Token {
     Val,
     #[token("fn")]
     Fn,
-    #[token("rn")]
-    Rn,
-    #[token("obj")]
-    Obj,
+    #[token("return")]
+    Return,
+    #[token("struct")]
+    Struct,
     #[token("enum")]
     Enum,
     #[token("match")]
@@ -42,6 +42,12 @@ pub enum Token {
     Import,
     #[token("try")]
     Try,
+    #[token("must")]
+    Must,
+    #[token("maybe")]
+    Maybe,
+    #[token("error")]
+    Error,
     #[token("nil")]
     Nil,
     #[token("test")]
@@ -83,10 +89,6 @@ pub enum Token {
     NotEquals,
     #[token("orelse")]
     Orelse,
-    #[token("?")]
-    Question,
-    #[token("!")]
-    Bang,
     #[token("<")]
     LessThan,
     #[token(">")]
@@ -105,8 +107,6 @@ pub enum Token {
     // Control flow.
     #[token("if")]
     If,
-    #[token("unless")]
-    Unless,
     #[token("elif")]
     Elif,
     #[token("else")]
@@ -168,8 +168,8 @@ impl Display for Token {
             Token::Let => write!(f, "let"),
             Token::Val => write!(f, "val"),
             Token::Fn => write!(f, "fn"),
-            Token::Rn => write!(f, "rn"),
-            Token::Obj => write!(f, "obj"),
+            Token::Return => write!(f, "return"),
+            Token::Struct => write!(f, "struct"),
             Token::Enum => write!(f, "enum"),
             Token::Match => write!(f, "match"),
             Token::Use => write!(f, "use"),
@@ -179,6 +179,9 @@ impl Display for Token {
             Token::Mut => write!(f, "mut"),
             Token::Import => write!(f, "import"),
             Token::Try => write!(f, "try"),
+            Token::Must => write!(f, "must"),
+            Token::Maybe => write!(f, "maybe"),
+            Token::Error => write!(f, "error"),
             Token::Nil => write!(f, "nil"),
             Token::Test => write!(f, "test"),
             Token::Assert => write!(f, "assert"),
@@ -195,8 +198,6 @@ impl Display for Token {
             Token::EqualsEquals => write!(f, "=="),
             Token::NotEquals => write!(f, "!="),
             Token::Orelse => write!(f, "orelse"),
-            Token::Question => write!(f, "?"),
-            Token::Bang => write!(f, "!"),
             Token::LessThan => write!(f, "<"),
             Token::GreaterThan => write!(f, ">"),
             Token::LessThanEquals => write!(f, "<="),
@@ -205,7 +206,6 @@ impl Display for Token {
             Token::Or => write!(f, "or"),
             Token::Not => write!(f, "not"),
             Token::If => write!(f, "if"),
-            Token::Unless => write!(f, "unless"),
             Token::Else => write!(f, "else"),
             Token::Elif => write!(f, "elif"),
             Token::While => write!(f, "while"),
@@ -372,8 +372,8 @@ mod tests {
 
     #[test]
     fn tokenizes_nil_and_error_tokens() {
-        // nullable type + nil literal
-        let (tokens, errors) = lex("let x: int? = nil");
+        // `maybe T` — prefix nillable type modifier (Slice 5).
+        let (tokens, errors) = lex("let x: maybe int = nil");
         let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
         assert!(errors.is_empty());
         assert_eq!(
@@ -382,8 +382,8 @@ mod tests {
                 Token::Let,
                 Token::Ident("x".into()),
                 Token::Colon,
+                Token::Maybe,
                 Token::Ident("int".into()),
-                Token::Question,
                 Token::Equals,
                 Token::Nil,
             ]
@@ -416,15 +416,87 @@ mod tests {
             ]
         );
 
-        // bang (error unwrap)
-        let (tokens, errors) = lex("!expr");
+        // `must` — error unwrap operator (Slice 5; replaces `!expr`).
+        let (tokens, errors) = lex("must foo()");
         let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
         assert!(errors.is_empty());
-        assert_eq!(kinds, vec![Token::Bang, Token::Ident("expr".into()),]);
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Must,
+                Token::Ident("foo".into()),
+                Token::LeftParen,
+                Token::RightParen,
+            ]
+        );
     }
 
     #[test]
-    fn tokenizes_unless_keyword() {
+    fn bare_question_and_bang_are_lex_errors_after_rename() {
+        // After Slice 5: `?` and bare `!` are no longer language
+        // tokens. They produce lex errors so users get a clear
+        // signal that they're using removed syntax.
+        let (_, errors) = lex("let x: int?");
+        assert!(!errors.is_empty(), "expected lex error for bare `?`");
+
+        let (_, errors) = lex("!y");
+        assert!(!errors.is_empty(), "expected lex error for bare `!`");
+
+        // `!=` still lexes as the not-equals operator (logos
+        // longest-match keeps the digraph intact).
+        let (tokens, _) = lex("a != b");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+        assert!(kinds.contains(&Token::NotEquals));
+    }
+
+    #[test]
+    fn return_and_struct_are_keywords_not_idents() {
+        // Pin the rename: `return` and `struct` lex as their own
+        // tokens, not as identifiers. The previous abbreviated
+        // forms `rn` and `obj` no longer exist.
+        let (tokens, errors) = lex("return\nstruct Foo");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Return,
+                Token::Newline,
+                Token::Struct,
+                Token::Ident("Foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn rn_and_obj_lex_as_identifiers_after_rename() {
+        // After the W2/W3 rename, the old keywords `rn` and `obj`
+        // are just identifiers. They're free to be used as variable
+        // names by user code.
+        let (tokens, errors) = lex("let rn = 1\nlet obj = 2");
+        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            kinds,
+            vec![
+                Token::Let,
+                Token::Ident("rn".into()),
+                Token::Equals,
+                Token::Int(1),
+                Token::Newline,
+                Token::Let,
+                Token::Ident("obj".into()),
+                Token::Equals,
+                Token::Int(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn unless_lexes_as_identifier_after_removal() {
+        // W6: `unless` was removed; it's now a regular ident.
         let (tokens, errors) = lex("unless ready { print(0) }");
         let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
 
@@ -432,7 +504,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                Token::Unless,
+                Token::Ident("unless".into()),
                 Token::Ident("ready".into()),
                 Token::LeftCurly,
                 Token::Ident("print".into()),
@@ -515,11 +587,5 @@ mod tests {
         let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
         assert!(errors.is_empty());
         assert_eq!(kinds, vec![Token::Ident("orelseb".into())]);
-
-        // single ? still lexes as Question (used for nullable types)
-        let (tokens, errors) = lex("x?");
-        let kinds: Vec<_> = tokens.into_iter().map(|(t, _)| t).collect();
-        assert!(errors.is_empty());
-        assert_eq!(kinds, vec![Token::Ident("x".into()), Token::Question,]);
     }
 }

@@ -1,8 +1,8 @@
 fn fib(n: int) -> int {
     if n <= 1 {
-        rn n
+        return n
     }
-    rn fib(n - 1) + fib(n - 2)
+    return fib(n - 1) + fib(n - 2)
 }
 
 print(fib(28))

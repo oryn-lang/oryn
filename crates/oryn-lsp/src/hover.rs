@@ -44,21 +44,18 @@ pub fn hover(
         }
         oryn::Token::Int(n) => Some(format!("`{n}` - int literal")),
         oryn::Token::Float(n) => Some(format!("`{n}` - float literal")),
-        oryn::Token::String(s) => Some(format!("`\"{s}\"` - String literal")),
+        oryn::Token::String(s) => Some(format!("`\"{s}\"` - string literal")),
         oryn::Token::True => Some("`true` - bool literal".to_string()),
         oryn::Token::False => Some("`false` - bool literal".to_string()),
         oryn::Token::Let => Some("`let` - declare a mutable variable".to_string()),
         oryn::Token::Val => Some("`val` - declare an immutable variable".to_string()),
-        oryn::Token::Obj => Some("`obj` - declare an object type".to_string()),
+        oryn::Token::Struct => Some("`struct` - declare a record type".to_string()),
         oryn::Token::Use => {
             Some("`use` - compose fields and methods from another type".to_string())
         }
         oryn::Token::Fn => Some("`fn` - declare a function".to_string()),
-        oryn::Token::Rn => Some("`rn` - return a value from a function".to_string()),
+        oryn::Token::Return => Some("`return` - return a value from a function".to_string()),
         oryn::Token::If => Some("`if` - conditional branch".to_string()),
-        oryn::Token::Unless => {
-            Some("`unless` - conditional branch when the condition is false".to_string())
-        }
         oryn::Token::Elif => Some("`elif` - else-if branch".to_string()),
         oryn::Token::Else => Some("`else` - fallback branch".to_string()),
         oryn::Token::While => Some("`while` - loop while condition is true".to_string()),
@@ -241,7 +238,7 @@ fn format_list_method(method: oryn::ListMethod) -> String {
             "Append `value` to the end of the list. The argument must match the list's element type `T`.",
         ),
         oryn::ListMethod::Pop => (
-            "fn pop(self) -> T?",
+            "fn pop(self) -> maybe T",
             "Remove and return the last element, or `nil` if the list is empty. `T` is the list's element type.",
         ),
     };
@@ -304,7 +301,11 @@ fn format_signature(def: &crate::analysis::SymbolInfo, types: &oryn::TypeMap) ->
             format!("`{}{}`  - parameter", def.name, type_str)
         }
         SymbolKind::Object => {
-            format!("```oryn\nobj {}\n```", def.name)
+            format!(
+                "```oryn
+struct {}\n```",
+                def.name
+            )
         }
         SymbolKind::Field => {
             let type_str = match &def.type_name {
@@ -341,7 +342,8 @@ mod tests {
 
     #[test]
     fn doc_comment_above_top_level_function_is_shown() {
-        let source = "// adds two ints\nfn add(a, b) {\nrn a + b\n}";
+        let source = "// adds two ints\nfn add(a, b) {
+return a + b\n}";
         let out = hover_at(source, "add(");
         assert!(out.contains("adds two ints"), "got: {out}");
         assert!(out.contains("fn add(a, b)"), "got: {out}");
@@ -356,15 +358,16 @@ mod tests {
 
     #[test]
     fn doc_comment_above_obj_is_shown() {
-        let source = "// 2D vector\nobj Vec2 {\nx: int\ny: int\n}";
+        let source = "// 2D vector
+struct Vec2 {\nx: int\ny: int\n}";
         let out = hover_at(source, "Vec2");
         assert!(out.contains("2D vector"), "got: {out}");
-        assert!(out.contains("obj Vec2"), "got: {out}");
+        assert!(out.contains("struct Vec2"), "got: {out}");
     }
 
     #[test]
     fn doc_comment_above_obj_field_is_shown() {
-        let source = "obj Vec2 {\n// horizontal coordinate\nx: int\ny: int\n}";
+        let source = "struct Vec2 {\n// horizontal coordinate\nx: int\ny: int\n}";
         let out = hover_at(source, "x: int");
         assert!(out.contains("horizontal coordinate"), "got: {out}");
         assert!(out.contains("- field"), "got: {out}");
@@ -372,8 +375,8 @@ mod tests {
 
     #[test]
     fn doc_comment_above_obj_method_is_shown() {
-        let source =
-            "obj Foo {\nx: int\n// returns the value\nfn get(self) -> int {\nrn self.x\n}\n}";
+        let source = "struct Foo {\nx: int\n// returns the value\nfn get(self) -> int {
+return self.x\n}\n}";
         let out = hover_at(source, "get");
         assert!(out.contains("returns the value"), "got: {out}");
         assert!(out.contains("fn get"), "got: {out}");
@@ -381,7 +384,8 @@ mod tests {
 
     #[test]
     fn declaration_without_doc_comment_is_unchanged() {
-        let source = "fn add(a, b) {\nrn a + b\n}";
+        let source = "fn add(a, b) {
+return a + b\n}";
         let out = hover_at(source, "add");
         // No doc comment, output is just the signature.
         assert!(!out.contains("\n\n"), "got: {out}");
@@ -404,7 +408,7 @@ mod tests {
 
     #[test]
     fn inferred_type_from_obj_literal() {
-        let source = "obj Vec2 {\nx: int\ny: int\n}\nlet v = Vec2 { x: 1, y: 2 }";
+        let source = "struct Vec2 {\nx: int\ny: int\n}\nlet v = Vec2 { x: 1, y: 2 }";
         let out = hover_at(source, "v =");
         assert!(out.contains("let v: Vec2"), "got: {out}");
     }
@@ -494,7 +498,7 @@ mod tests {
     fn list_method_pop_shows_nillable_return() {
         let source = "let xs: [int] = [1, 2]\nlet last = xs.pop()";
         let out = hover_at(source, "pop()");
-        assert!(out.contains("fn pop(self) -> T?"), "got: {out}");
+        assert!(out.contains("fn pop(self) -> maybe T"), "got: {out}");
         assert!(out.contains("list is empty"), "got: {out}");
     }
 
@@ -515,16 +519,16 @@ mod tests {
 
     #[test]
     fn map_typed_let_shows_map_type() {
-        let source = "let stats: {String: int} = {\"hp\": 10}";
+        let source = "let stats: {string: int} = {\"hp\": 10}";
         let out = hover_at(source, "stats:");
-        assert!(out.contains("let stats: {String: int}"), "got: {out}");
+        assert!(out.contains("let stats: {string: int}"), "got: {out}");
     }
 
     #[test]
     fn inferred_map_type_is_shown() {
         let source = "let stats = {\"hp\": 10}";
         let out = hover_at(source, "stats =");
-        assert!(out.contains("let stats: {String: int}"), "got: {out}");
+        assert!(out.contains("let stats: {string: int}"), "got: {out}");
     }
 
     /// Hovering on a static method call that crosses module boundaries

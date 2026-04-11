@@ -1524,7 +1524,7 @@ mod tests {
     fn run_function_rejects_arity_mismatch() {
         // Compile a one-arg function and ensure run_function refuses
         // to invoke it without arguments.
-        let c = crate::Chunk::compile("fn id(x: int) -> int { rn x }").unwrap();
+        let c = crate::Chunk::compile("fn id(x: int) -> int { return x }").unwrap();
         let mut vm = VM::new();
         let err = vm
             .run_function(&c, 0)
@@ -1600,7 +1600,7 @@ mod tests {
     #[test]
     fn map_literal_and_index_round_trip() {
         let out = run_source(
-            "let stats: {String: int} = {\"hp\": 10, \"mp\": 4}\nprint(stats[\"hp\"] orelse 0)\nprint(stats[\"mp\"] orelse 0)",
+            "let stats: {string: int} = {\"hp\": 10, \"mp\": 4}\nprint(stats[\"hp\"] orelse 0)\nprint(stats[\"mp\"] orelse 0)",
         );
         assert_eq!(String::from_utf8(out).unwrap(), "10\n4\n");
     }
@@ -1608,14 +1608,14 @@ mod tests {
     #[test]
     fn missing_map_key_returns_nil() {
         let out =
-            run_source("let stats: {String: int} = {\"hp\": 10}\nprint(stats[\"xp\"] orelse 99)");
+            run_source("let stats: {string: int} = {\"hp\": 10}\nprint(stats[\"xp\"] orelse 99)");
         assert_eq!(String::from_utf8(out).unwrap(), "99\n");
     }
 
     #[test]
     fn map_index_assignment_inserts_and_replaces() {
         let out = run_source(
-            "let stats: {String: int} = {}\nstats[\"hp\"] = 10\nstats[\"hp\"] = 12\nprint(stats[\"hp\"] orelse 0)",
+            "let stats: {string: int} = {}\nstats[\"hp\"] = 10\nstats[\"hp\"] = 12\nprint(stats[\"hp\"] orelse 0)",
         );
         assert_eq!(String::from_utf8(out).unwrap(), "12\n");
     }
@@ -1653,7 +1653,7 @@ mod tests {
     #[test]
     fn list_of_obj_instances_stores_and_reads_fields() {
         let out = run_source(
-            r#"obj Pt { x: int, y: int }
+            r#"struct Pt { x: int, y: int }
 let ps: [Pt] = [Pt { x: 1, y: 2 }, Pt { x: 3, y: 4 }]
 print(ps[0].x)
 print(ps[1].y)"#,
@@ -1664,7 +1664,7 @@ print(ps[1].y)"#,
     #[test]
     fn list_of_strings_round_trip() {
         let out = run_source(
-            r#"let names: [String] = ["alice", "bob"]
+            r#"let names: [string] = ["alice", "bob"]
 print(names[0])
 print(names[1])"#,
         );
@@ -1684,7 +1684,7 @@ print(names[1])"#,
     #[test]
     fn for_loop_over_string_list() {
         let out =
-            run_source("let names: [String] = [\"alice\", \"bob\"]\nfor n in names {\nprint(n)\n}");
+            run_source("let names: [string] = [\"alice\", \"bob\"]\nfor n in names {\nprint(n)\n}");
         assert_eq!(String::from_utf8(out).unwrap(), "alice\nbob\n");
     }
 
@@ -1697,7 +1697,7 @@ print(names[1])"#,
     #[test]
     fn for_loop_over_list_of_obj_instances_accesses_fields() {
         let out = run_source(
-            "obj Pt { x: int, y: int }\nlet ps: [Pt] = [Pt { x: 1, y: 2 }, Pt { x: 3, y: 4 }]\nfor p in ps {\nprint(p.x)\nprint(p.y)\n}",
+            "struct Pt { x: int, y: int }\nlet ps: [Pt] = [Pt { x: 1, y: 2 }, Pt { x: 3, y: 4 }]\nfor p in ps {\nprint(p.x)\nprint(p.y)\n}",
         );
         assert_eq!(String::from_utf8(out).unwrap(), "1\n2\n3\n4\n");
     }
